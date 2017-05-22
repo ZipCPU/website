@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>A Vision for Controlling FPGA Logic</title>
+  <meta name="description" content="I’d like to spend some time on this forum discussing how to debug an FPGA.Indeed, I might wish to spend a lot of time discussing how to debug an FPGA.I’ve do...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/05/22/a-vision-for-controlling-fpgas.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/about/"><picture>
+    <img height=120 src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">A Vision for Controlling FPGA Logic</h1>
+    <p class="post-meta"><time datetime="2017-05-22T00:00:00-04:00" itemprop="datePublished">May 22, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>I’d like to spend some time on this forum discussing how to debug an FPGA.
+Indeed, I might wish to spend a lot of time discussing how to debug an FPGA.
+I’ve done it several ways, but for this post I’d like to discuss a vision
+for how I like to debug FPGA’s.</p>
+
+<h3 id="memory-mapped-io">Memory Mapped I/O</h3>
+
+<p>We’ll start with the concept of
+<a href="https://en.wikipedia.org/wiki/Memory-mapped_I/O">Memory Mapped I/O</a>.
+The idea is simply this: peripherals can be connected to a bus, together with
+whatever memory is on that bus, so that they can be accessed like memory.
+Like memory, the peripheral will have an address.  Like memory, the bus
+controller, whether it be a CPU or <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v">DMA
+peripheral</a>,
+can write to the peripheral
+and read from it.  Unlike memory, however, reading or writing to a peripheral
+can have side effects.</p>
+
+<p>We’ll use the term “register” to describe a single address within a peripheral.</p>
+
+<p>Register’s can be read only, write only, or read/write.  Further, peripherals
+may have many addresses.  Finally, peripherals may take different amounts of
+time to access.  For example, a
+<a href="https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/memdev.v">block RAM</a>
+peripheral can typically be accessed in a single cycle, whereas an
+<a href="https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbsdram.v">SDRAM</a>
+peripheral may take longer, and a
+<a href="https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbspiflash.v">flash</a>
+peripheral may take much longer.</p>
+
+<p>Perhaps a perfect example of this concept is that of a serial port, such as
+the <a href="https://github.com/ZipCPU/wbuart32">wbuart32</a> serial port the
+<a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a> uses.  Reading from the receiver
+address of this serial port returns the next character from the receiver
+queue, advancing the queue to the next character.  Writing to the transmit
+register queue’s a character for sending over the port.  A third register
+controls the speed and configuration of the port, whereas a fourth register
+is used when the serial port has a queue to indicate how much of the queue
+is used.</p>
+
+<p>But how does this apply to controlling an FPGA?  Simple!  We’ll implement
+our logic as peripherals on an FPGA bus, and then control those peripherals
+by simply reading from or writing to that bus.  By having a common standard
+for accessing peripherals, we only have to build our peripherals to meet that
+standard once.</p>
+
+<h3 id="pcie-card">PCIe card</h3>
+
+<p>Perhaps the vision I’m about to share will make more sense if I explain that
+I first came up with it while trying to figure out how to control an
+FPGA on a
+<a href="https://en.wikipedia.org/wiki/PCI_Express">PCIe</a>
+card.  Indeed, I was trying to figure out how I would control
+a <a href="https://www.xilinx.com/products/boards-and-kits/ek-v7-vc707-g.html">VC707</a>
+card made by <a href="https://www.xilinx.com/">Xilinx</a>.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/PCI_Express">PCIe</a>
+bus allows for several different areas or sections of address space
+which get assigned to each card.  These can include both memory address space,
+and peripheral address space, but every thing is still accessed on a bus.
+You can read from any given addresses on that bus, or write to a given
+addresses, as with any other bus.</p>
+
+<p>Since I wanted to build an FPGA capability that could eventually be used on
+an FPGA over a <a href="https://en.wikipedia.org/wiki/PCI_Express">PCIe</a>
+interface, I wanted to create something that would work on a
+<a href="https://en.wikipedia.org/wiki/PCI_Express">PCIe</a>
+bus eventually, but that could be used over some other transport
+prior to that point.  Further, when plugging the FPGA into the
+<a href="https://en.wikipedia.org/wiki/PCI_Express">PCIe</a> bus, I already knew that
+I would need to use some sort of alternative transport in order to debug
+whatever was going on.</p>
+
+<p>So, here was my vision: I would use the serial port on the
+<a href="https://www.xilinx.com/products/boards-and-kits/ek-v7-vc707-g.html">VC707</a>
+to command the
+<a href="https://www.xilinx.com/products/boards-and-kits/ek-v7-vc707-g.html">VC707</a>
+as though it were connected via
+<a href="https://en.wikipedia.org/wiki/PCI_Express">PCIe</a>.  Then, over this same
+serial port, I could get the debugging information I needed to know if the
+<a href="https://en.wikipedia.org/wiki/PCI_Express">PCIe</a> bus were working, or
+if not … why not?</p>
+
+<h3 id="required-interactions">Required Interactions</h3>
+
+<p>If you are going to create a memory mapped bus, that you are then going to
+work with, you need to know what operations you want to do on this bus.
+I captured the interface for, what I called a device bus, in a C++ header file,
+<a href="https://github.com/ZipCPU/openarty/blob/master/sw/host/devbus.cpp">devbus.h</a>.
+Operations on this interface include:</p>
+
+<ul>
+  <li>
+    <p><strong>readio()</strong>:  Reads a 32-bit value from any individual register</p>
+  </li>
+  <li>
+    <p><strong>readz()</strong>: Reading multiple 32-bit values from the same register.  While
+most memories have one address per memory location, peripherals aren’t
+necessarily like that.  This mode captures some of that difference.  Some
+examples where this would be useful include reading from a FIFO, such as the
+serial port input FIFO, and reading from my debugging scope, where
+multiple reads from the data register read subsequent values from the scope’s
+memory.</p>
+  </li>
+  <li>
+    <p><strong>readi()</strong>: Reading a series of 32-bit values from consecutive registers.
+This is akin to a memcpy command, where one end is coming from the device.</p>
+  </li>
+  <li>
+    <p>The same operations are then mirrored for writing to registers.</p>
+  </li>
+</ul>
+
+<p>This <a href="https://github.com/ZipCPU/openarty/blob/master/sw/host/devbus.cpp">bus interface</a>
+also allows for some minimal interrupt capability.  For example, you
+can <strong>wait()</strong> for an interrupt to be created within the device, or <strong>poll()</strong>
+to see if an interrupt has taken place.  How these interactions take place is
+… up to whatever transport implements the interface.</p>
+
+<p>Back when I started working on computers decades ago, you could
+<a href="https://en.wikipedia.org/wiki/PEEK_and_POKE">Peek or Poke</a> an addresses within
+your <a href="https://en.wikipedia.org/wiki/Apple_IIe">Apple IIe</a> computer, and so
+control the hardware.  While I thought of repeating this approach with FPGA’s,
+I also like the thought of being able to name the peripheral register, rather
+than trying to remembering <a href="http://apple2.org.za/gswv/USA2WUG/FOUNDING.MEMBERS/HOME.PAGES/EDHEL/texts/pokes.html">all the register numbers</a> (OUCH!).
+This would allow an FPGA to be reconfigured so the addresses might be moved
+around, and yet you could still read and write the same peripherals via the
+same names.  I like this idea so much,
+that all of my projects have a
+<a href="https://github.com/ZipCPU/openarty/blob/master/sw/host/wbregs.cpp">wbregs</a>
+program within them to control peripherals over some command line.</p>
+
+<h3 id="tcpip-bridge">TCP/IP bridge</h3>
+
+<p>Rather than getting into details regarding how such an interface might be built
+(yet),
+I’d like to add one more component to the vision: I want to be able to control
+my FPGA devices from anywhere on my local network.  If I’m working on my
+laptop, I’d like to be able to control them from my laptop.  If I’m working on
+my desktop, I’d like to be able to control them from my desktop.  If I have the
+device located next to an antenna in the attic, I still want to be able to
+control it.</p>
+
+<p>For this purpose, I like to forward all of my transport connections over a
+TCP/IP link.  While this would probably never be appropriate for an FPGA
+with a PCIe connection, it has worked for all of my FPGA’s with slower
+transport connections.</p>
+
+<p>Lest you be confused, this is different from having an FPGA with an Ethernet
+port that can be accessed from your network.  We want to use our network
+interface to command, control, and debug our FPGA before the network controller
+connected to the FPGA works.</p>
+
+<h3 id="conclusion">Conclusion</h3>
+
+<p>This vision for FPGA control leads nicely into a vision for building and
+debugging an FPGA.  We’ll get more into that idea as this blog progresses,
+but for now … we’ll just use this idea to keep things simple.</p>
+
+  </div>
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Where there is no vision, the people perish: but he that keepeth the law, happy is he. (Prov 29:18)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
