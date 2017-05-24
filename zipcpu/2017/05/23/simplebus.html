@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a simple bus</title>
+  <meta name="description" content="Busses consist of both bus masters, and bus slaves.  Masters command whichaddresses need to be read from or written to, while slaves respond to therequests o...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/zipcpu/2017/05/23/simplebus.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/about/"><picture>
+    <img height=120 src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+<li><a HREF="/about/">About Us</a>
+<li><a HREF="/projects">Some Projects</a>
+<li><a HREF="/topics.html">Coming Topics</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a simple bus</h1>
+    <p class="post-meta"><time datetime="2017-05-23T00:00:00-04:00" itemprop="datePublished">May 23, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Busses consist of both bus masters, and bus slaves.  Masters command which
+addresses need to be read from or written to, while slaves respond to the
+requests of the bus master(s).  For this article, we’ll discuss the logic
+necessary to implement a very simple bus slave.  Why?  Because at the core of
+every memory mapped peripheral is just a touch of simple bus logic.</p>
+
+<p>To understand this concept, let’s consider a very simple bus.  Three things
+can only ever happen on this bus on any given clock cycle.  1) The vast majority
+of the time, the bus will be idle.  2) You might write to the bus.  Or 3),
+you might read from the bus.  On a simple bus, this type of interaction can
+easily be understood with just a few simple wires:</p>
+
+<ul>
+  <li>
+    <p><strong>i_wr</strong>: True any time a write is requested.  If true for two clocks in a row, then two writes should take place in a row.</p>
+  </li>
+  <li>
+    <p><strong>i_rd</strong>: True any time a read is requested</p>
+  </li>
+  <li>
+    <p><strong>i_addr</strong>: The address of the value to read/write</p>
+  </li>
+  <li>
+    <p><strong>i_data</strong>: The data to be written on any write access</p>
+  </li>
+  <li>
+    <p><strong>o_data</strong>: The data to be returned on any read access</p>
+  </li>
+</ul>
+
+<h1 id="a-simple-write-cycle">A Simple Write Cycle</h1>
+
+<p>Using these values, writing to a memory might be as simple as:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_wr)
+		memory[i_addr] &lt;= i_data;</code></pre></figure>
+
+<p>Writing to an arbitrary peripheral has much the same logic, but what it does
+is a little bit different:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_wr) case(i_addr)
+	4'h0: config &lt;= i_data;
+	4'h1: begin end // A read only address
+	4'h2: begin end // A read only address
+	4'h3: begin
+		transmitter_data &lt;= i_data;
+		transmitter_stb  &lt;= 1'b1;
+	default: begin end
+	endcase else
+		transmitter_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>Specifically, writes to a peripheral specify some logic to be done for each
+possible address you might write to.</p>
+
+<p>In this example, writing to address zero simply sets a configuration register.
+Writes to
+addresses one and two are ignored: these addresses reference read only
+registers.  Finally, address three sets a strobe value indicating that
+some action is to take place, together with the data necessary for that
+action.</p>
+
+<p>Indeed, from this perspective, the write cycle is pretty simple.</p>
+
+<h1 id="a-simple-read-cycle">A Simple Read Cycle</h1>
+
+<p>The read cycle isn’t really that much more complicated either.  For a simple
+memory, it would look like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	o_data &lt;= memory[i_addr];</code></pre></figure>
+
+<p>Within a more generic peripheral, where reads might have side-effects, the
+read logic might look instead like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	case(i_addr)
+	4'h0: o_data &lt;= config;
+	4'h1: begin o_data &lt;= w_internal_values; advance_data_stb &lt;= i_rd; end
+	4'h2: o_data &lt;= w_other_internal_values;
+	// 4'h3: // A write only address
+	defautl: o_data &lt;= 0;
+	endcase else
+		advance_data_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>You may notice that o_data gets set any time the address changes.
+What if nothing is being read?  In this case, it’s not a problem.  The right
+answer is being placed on the bus either way.  However, if you have an input
+queue, such as in a read FIFO, you might wish to advance that queue on reads
+only.  This is the idea behind the advance_data_stb logic above.</p>
+
+<h2 id="shared-data-lines">Shared data lines</h2>
+
+<p>Having separate input data lines, i_data, and output data lines, o_data,
+makes a lot of sense within an FPGA.</p>
+
+<p>However, between components on a circuit board, cost may be measured in both
+area and the number of wires routed from one place to another.</p>
+
+<p>For this reason, when communicating over an external bus, the simple bus we
+have been describing has one more step:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign io_data (i_rd) ? 32'bzzzz_..._zzzz : o_data;</code></pre></figure>
+
+<p>This last step determines which of multiple digital pieces of logic drives
+the bus.</p>
+
+<h2 id="thats-it">That’s it!</h2>
+
+<p>That’s all there is to working with a bus.  You need to read the address,
+check if you are being read or written to, and return a value and act
+appropriately.  At some level, every bus acts in this fashion.  Hence,
+if you can understand how to interact with a bus like this, you’ve gone
+through the first step of ever interacting with any bus.</p>
+
+  </div>
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Now if any man build upon this foundation gold, silver, precious stones, wood, hay, stubble; every man's work shall be made manifest: for the day shall declare it, because it shall be revealed by fire; and the fire shall try every man's work of what sort it is. (1Cor 3:12-13)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
