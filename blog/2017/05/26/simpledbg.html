@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Debugging an FPGA through the serial port--first steps</title>
+  <meta name="description" content="Now that you have a working serial portwhich you can use to interact with your CPU, and now again that you know how torespond to simple bus requests,let’s ex...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/05/26/simpledbg.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/about/"><picture>
+    <img height=120 src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+<li><a HREF="/about/">About Us</a>
+<li><a HREF="/projects">Some Projects</a>
+<li><a HREF="/topics.html">Coming Topics</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Debugging an FPGA through the serial port--first steps</h1>
+    <p class="post-meta"><time datetime="2017-05-26T00:00:00-04:00" itemprop="datePublished">May 26, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Now that you have a working <a href="https://github.com/ZipCPU/wbuart32">serial port</a>
+which you can use to interact with your CPU, and now again that you know how to
+<a href="zipcpu/2017/05/23/simplebus.html">respond to simple bus requests</a>,
+let’s examine whether these two be put together to create a simple means of
+debugging your FPGA.</p>
+
+<p>In this post, we’ll build a generic means for both reading registers
+internal to an FPGA using a serial port, and then using that approach to
+debug your design.</p>
+
+<h2 id="an-generic-serial-port-communication-interface">An generic serial port communication interface</h2>
+
+<p>For the purpose of this discussion, let’s assume your serial port receiver
+produces two outputs:</p>
+
+<ul>
+  <li>
+    <p><strong>rx_stb</strong> – a logic value that is true any time a value has been received
+across the receive port.  It is to be true for one clock cycle, and one clock
+cycle only, any time something is received.</p>
+  </li>
+  <li>
+    <p><strong>rx_data</strong> – Eight bits of logic representing the most recently received
+data value from the received serial port.  This value has meaning anytime
+<strong>rx_data</strong> is true, and ignored at all other times.</p>
+  </li>
+</ul>
+
+<p>Likewise, we’ll assume that your serial port transmitter has two inputs,
+<strong>tx_stb</strong> and <strong>tx_data</strong>.  Their meaning will be analogous to that of the
+receivers ports.</p>
+
+<p>The advanced student may notice this interface protocol isn’t complete.
+In particular, the transmitter may be busy some time <strong>tx_stb</strong> is true, and
+nothing above allows us to capture that reality.  To be complete, then, you
+will need a third wire, this one coming from your transmit interface:
+<strong>tx_busy</strong>.  This wire is true any time the transmitter is busy.  When put
+together with the rest of the interface, a character will be accepted into
+the transmit interface any time <strong>tx_stb</strong> is true <em>and</em> <strong>tx_busy</strong> is
+false.  We’ll ignore this wire for now.  As long as you don’t press this
+interface too hard, the approach below will work.</p>
+
+<p>With that out of the way, we can move on to building our basic debug protocol,
+based upon this interface to a serial port.</p>
+
+<h2 id="using-a-clock-enable-as-part-of-a-debug-process">Using a Clock Enable as part of a debug process</h2>
+
+<p>The first step is a clock enable line.  I’ll call this <strong>logic_ce</strong> for now,
+but you may see me call it <strong>i_ce</strong> later.
+We’ll use this clock enable line to gate all of your logic, such as:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (logic_ce)
+	begin
+		//
+		// Your debuggable FPGA logic goes here.
+		//
+
+		// You could even stuff a full blown CPU in here, if you
+		// wanted to debug it this way.
+
+		// Anything that doesn't fit in this always block, will
+		// still need to have it's logic gated by the ce line above.
+	end</code></pre></figure>
+
+<p>The goal here is to keep <em>any</em> logic from changing unless the <strong>logic_ce</strong>
+line is true.</p>
+
+<p>Why are we doing this?  We’re doing this to slow down your logic to the point
+where it can be inspected.</p>
+
+<p>What … how shall this ce line be controlled?<br />
+You can use the serial port to control this clock enable.   For this
+example, we’ll set the serial port up so that any time you send an
+8’h00 across the serial port channel, you also step all the logic by one clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	logic_ce &lt;= (rx_stb)&amp;&amp;(rx_data == 8'h00);</code></pre></figure>
+
+<p>Sure, this will <em>really</em> slow down your logic, but … you’ll still be running
+<em>your</em> logic on the FPGA.  Where this gets useful is in the next step, reading
+data back ouf of the FPGA.</p>
+
+<h2 id="reading-data-back-from-within-your-fpga">Reading data back from within your FPGA</h2>
+
+<p>What really makes this idea flow work, is that now, because of the <em>ce</em> line
+above, we can step any logic within the FPGA.  We can then read values back
+out of the FPGA while everything is stopped.  Using that UART to control your
+bus, you can read out any of your data points with code something like this:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (rx_stb)
+	begin
+		tx_stb &lt;= 1'b1;
+		case(rx_data)
+		8'h00: tx_data &lt;= 8'h00;
+		8'h01: tx_data &lt;= one_of_my_registers;
+		8'h02: tx_data &lt;= another_of_my_registers;
+		8'h03: tx_data &lt;= a_third_set_of_internal_variables;
+		...
+		8'hff: tx_data &lt;= the_last_result_i_might_return;
+		default: tx_data &lt;= 8'h00;
+		endcase
+	end else
+		tx_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>Using this simple approach, you can now read the results of any logic within
+your design.  You could also do something similar in the other direction
+to set any values within your design if you so wished, but I’ll leave that last
+change up to you.</p>
+
+<h2 id="this-really-needs-a-software-controller">This really needs a software controller</h2>
+
+<p>While reading from addresses ‘0’-‘9’ (i.e. 8’d48 to 8’d57) may be pretty
+simple, and may be done within a
+simple terminal program, chances are that if you wish to make this work you’ll
+want to connect a computer program to that terminal program.   That computer
+program will need to send the full set of characters from 8’d0 to 8’d255.</p>
+
+<p>You can see how I drive my serial port in the
+<a href="https://github.com/ZipCPU/openarty/blob/master/sw/host/netuart.cpp">netuart</a>
+program I use to
+bounce the serial port to a TCP/IP port, but there’s no reason why you couldn’t
+use this as an example of how to interact with a serial port.  The commands
+would be similar, only the network stuff would need to come out.</p>
+
+<h2 id="multi-stepping">Multi-Stepping</h2>
+
+<p>There’s no reason why you cannot step several steps at a time using this
+approach.  You could also set-up multi-cycle instructions that will start
+whenever you write a NULL to the port, and whose data may be read after a
+programmable number of clocks.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">reg	counter;
+always @(posedge i_clk)
+	if ((rx_stb)&amp;&amp;(rx_data == 8'h00))
+		counter &lt;= 0;
+		logic_ce &lt;= 1'b1;
+	else if (counter &lt; NCLOCKS-1)
+		counter &lt;= counter + 1'b1;
+	else
+		logic_ce &lt;= 1'b0;</code></pre></figure>
+
+<p>Indeed, the possibilities of using this approach for debugging are nearly
+endless.</p>
+
+<h2 id="output-formats">Output Formats</h2>
+
+<p>If you’d like, you can take the outputs you get from this debugging interface
+and build a
+<a href="https://en.wikipedia.org/wiki/Value_change_dump">VCD</a> file for viewing in
+<a href="gtkwave.sourceforge.net">GTKwave</a>.  If your not sure how to build a 
+<a href="https://en.wikipedia.org/wiki/Value_change_dump">VCD</a> file, then just dump
+the results into a pseudo-human readable text file and you can then wait
+for a later discussion on how to create
+<a href="https://en.wikipedia.org/wiki/Value_change_dump">VCD</a> files.</p>
+
+<p>Me?  Back when I last used this approach (yes, it was some time ago), I just
+created a file that I could view using
+<a href="https://www.gnu.org/software/octave">octave</a>.<br />
+<a href="https://www.gnu.org/software/octave">Octave</a> allowed me to not only read in
+a set of binary data, but it aso allowed me to create
+<a href="gtkwave.sourceforge.net">GTKwave</a> types of graphs of the signals within my
+design.  Then again, that was a personal choice and you might wish to view
+the results in another fashion..</p>
+
+<p>Am I still using this approach?  Not really.  I’ve built something better
+since.  Stick around, and you’ll hear about it.  For now, …</p>
+
+<p>Go ahead, take this opportunity to surprise me with your ingenuity.</p>
+
+
+  </div>
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>I was eyes to the blind, and feet was I to the lame. (Job 29:15)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

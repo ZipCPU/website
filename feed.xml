@@ -6,9 +6,192 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 24 May 2017 22:46:51 -0400</pubDate>
-    <lastBuildDate>Wed, 24 May 2017 22:46:51 -0400</lastBuildDate>
+    <pubDate>Fri, 26 May 2017 23:21:38 -0400</pubDate>
+    <lastBuildDate>Fri, 26 May 2017 23:21:38 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Debugging an FPGA through the serial port--first steps</title>
+        <description>&lt;p&gt;Now that you have a working &lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;serial port&lt;/a&gt;
+which you can use to interact with your CPU, and now again that you know how to
+&lt;a href=&quot;zipcpu/2017/05/23/simplebus.html&quot;&gt;respond to simple bus requests&lt;/a&gt;,
+let’s examine whether these two be put together to create a simple means of
+debugging your FPGA.&lt;/p&gt;
+
+&lt;p&gt;In this post, we’ll build a generic means for both reading registers
+internal to an FPGA using a serial port, and then using that approach to
+debug your design.&lt;/p&gt;
+
+&lt;h2 id=&quot;an-generic-serial-port-communication-interface&quot;&gt;An generic serial port communication interface&lt;/h2&gt;
+
+&lt;p&gt;For the purpose of this discussion, let’s assume your serial port receiver
+produces two outputs:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;rx_stb&lt;/strong&gt; – a logic value that is true any time a value has been received
+across the receive port.  It is to be true for one clock cycle, and one clock
+cycle only, any time something is received.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;rx_data&lt;/strong&gt; – Eight bits of logic representing the most recently received
+data value from the received serial port.  This value has meaning anytime
+&lt;strong&gt;rx_data&lt;/strong&gt; is true, and ignored at all other times.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Likewise, we’ll assume that your serial port transmitter has two inputs,
+&lt;strong&gt;tx_stb&lt;/strong&gt; and &lt;strong&gt;tx_data&lt;/strong&gt;.  Their meaning will be analogous to that of the
+receivers ports.&lt;/p&gt;
+
+&lt;p&gt;The advanced student may notice this interface protocol isn’t complete.
+In particular, the transmitter may be busy some time &lt;strong&gt;tx_stb&lt;/strong&gt; is true, and
+nothing above allows us to capture that reality.  To be complete, then, you
+will need a third wire, this one coming from your transmit interface:
+&lt;strong&gt;tx_busy&lt;/strong&gt;.  This wire is true any time the transmitter is busy.  When put
+together with the rest of the interface, a character will be accepted into
+the transmit interface any time &lt;strong&gt;tx_stb&lt;/strong&gt; is true &lt;em&gt;and&lt;/em&gt; &lt;strong&gt;tx_busy&lt;/strong&gt; is
+false.  We’ll ignore this wire for now.  As long as you don’t press this
+interface too hard, the approach below will work.&lt;/p&gt;
+
+&lt;p&gt;With that out of the way, we can move on to building our basic debug protocol,
+based upon this interface to a serial port.&lt;/p&gt;
+
+&lt;h2 id=&quot;using-a-clock-enable-as-part-of-a-debug-process&quot;&gt;Using a Clock Enable as part of a debug process&lt;/h2&gt;
+
+&lt;p&gt;The first step is a clock enable line.  I’ll call this &lt;strong&gt;logic_ce&lt;/strong&gt; for now,
+but you may see me call it &lt;strong&gt;i_ce&lt;/strong&gt; later.
+We’ll use this clock enable line to gate all of your logic, such as:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (logic_ce)
+	begin
+		//
+		// Your debuggable FPGA logic goes here.
+		//
+
+		// You could even stuff a full blown CPU in here, if you
+		// wanted to debug it this way.
+
+		// Anything that doesn&#39;t fit in this always block, will
+		// still need to have it&#39;s logic gated by the ce line above.
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The goal here is to keep &lt;em&gt;any&lt;/em&gt; logic from changing unless the &lt;strong&gt;logic_ce&lt;/strong&gt;
+line is true.&lt;/p&gt;
+
+&lt;p&gt;Why are we doing this?  We’re doing this to slow down your logic to the point
+where it can be inspected.&lt;/p&gt;
+
+&lt;p&gt;What … how shall this ce line be controlled?&lt;br /&gt;
+You can use the serial port to control this clock enable.   For this
+example, we’ll set the serial port up so that any time you send an
+8’h00 across the serial port channel, you also step all the logic by one clock.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	logic_ce &amp;lt;= (rx_stb)&amp;amp;&amp;amp;(rx_data == 8&#39;h00);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Sure, this will &lt;em&gt;really&lt;/em&gt; slow down your logic, but … you’ll still be running
+&lt;em&gt;your&lt;/em&gt; logic on the FPGA.  Where this gets useful is in the next step, reading
+data back ouf of the FPGA.&lt;/p&gt;
+
+&lt;h2 id=&quot;reading-data-back-from-within-your-fpga&quot;&gt;Reading data back from within your FPGA&lt;/h2&gt;
+
+&lt;p&gt;What really makes this idea flow work, is that now, because of the &lt;em&gt;ce&lt;/em&gt; line
+above, we can step any logic within the FPGA.  We can then read values back
+out of the FPGA while everything is stopped.  Using that UART to control your
+bus, you can read out any of your data points with code something like this:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (rx_stb)
+	begin
+		tx_stb &amp;lt;= 1&#39;b1;
+		case(rx_data)
+		8&#39;h00: tx_data &amp;lt;= 8&#39;h00;
+		8&#39;h01: tx_data &amp;lt;= one_of_my_registers;
+		8&#39;h02: tx_data &amp;lt;= another_of_my_registers;
+		8&#39;h03: tx_data &amp;lt;= a_third_set_of_internal_variables;
+		...
+		8&#39;hff: tx_data &amp;lt;= the_last_result_i_might_return;
+		default: tx_data &amp;lt;= 8&#39;h00;
+		endcase
+	end else
+		tx_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Using this simple approach, you can now read the results of any logic within
+your design.  You could also do something similar in the other direction
+to set any values within your design if you so wished, but I’ll leave that last
+change up to you.&lt;/p&gt;
+
+&lt;h2 id=&quot;this-really-needs-a-software-controller&quot;&gt;This really needs a software controller&lt;/h2&gt;
+
+&lt;p&gt;While reading from addresses ‘0’-‘9’ (i.e. 8’d48 to 8’d57) may be pretty
+simple, and may be done within a
+simple terminal program, chances are that if you wish to make this work you’ll
+want to connect a computer program to that terminal program.   That computer
+program will need to send the full set of characters from 8’d0 to 8’d255.&lt;/p&gt;
+
+&lt;p&gt;You can see how I drive my serial port in the
+&lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/sw/host/netuart.cpp&quot;&gt;netuart&lt;/a&gt;
+program I use to
+bounce the serial port to a TCP/IP port, but there’s no reason why you couldn’t
+use this as an example of how to interact with a serial port.  The commands
+would be similar, only the network stuff would need to come out.&lt;/p&gt;
+
+&lt;h2 id=&quot;multi-stepping&quot;&gt;Multi-Stepping&lt;/h2&gt;
+
+&lt;p&gt;There’s no reason why you cannot step several steps at a time using this
+approach.  You could also set-up multi-cycle instructions that will start
+whenever you write a NULL to the port, and whose data may be read after a
+programmable number of clocks.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	counter;
+always @(posedge i_clk)
+	if ((rx_stb)&amp;amp;&amp;amp;(rx_data == 8&#39;h00))
+		counter &amp;lt;= 0;
+		logic_ce &amp;lt;= 1&#39;b1;
+	else if (counter &amp;lt; NCLOCKS-1)
+		counter &amp;lt;= counter + 1&#39;b1;
+	else
+		logic_ce &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Indeed, the possibilities of using this approach for debugging are nearly
+endless.&lt;/p&gt;
+
+&lt;h2 id=&quot;output-formats&quot;&gt;Output Formats&lt;/h2&gt;
+
+&lt;p&gt;If you’d like, you can take the outputs you get from this debugging interface
+and build a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD&lt;/a&gt; file for viewing in
+&lt;a href=&quot;gtkwave.sourceforge.net&quot;&gt;GTKwave&lt;/a&gt;.  If your not sure how to build a 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD&lt;/a&gt; file, then just dump
+the results into a pseudo-human readable text file and you can then wait
+for a later discussion on how to create
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD&lt;/a&gt; files.&lt;/p&gt;
+
+&lt;p&gt;Me?  Back when I last used this approach (yes, it was some time ago), I just
+created a file that I could view using
+&lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;octave&lt;/a&gt;.&lt;br /&gt;
+&lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;Octave&lt;/a&gt; allowed me to not only read in
+a set of binary data, but it aso allowed me to create
+&lt;a href=&quot;gtkwave.sourceforge.net&quot;&gt;GTKwave&lt;/a&gt; types of graphs of the signals within my
+design.  Then again, that was a personal choice and you might wish to view
+the results in another fashion..&lt;/p&gt;
+
+&lt;p&gt;Am I still using this approach?  Not really.  I’ve built something better
+since.  Stick around, and you’ll hear about it.  For now, …&lt;/p&gt;
+
+&lt;p&gt;Go ahead, take this opportunity to surprise me with your ingenuity.&lt;/p&gt;
+
+</description>
+        <pubDate>Fri, 26 May 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/05/26/simpledbg.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/05/26/simpledbg.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>That first serial port: Debugging when you are blind</title>
@@ -1391,56 +1574,6 @@ of Digilent Forum posts that illustrate my points here.&lt;/p&gt;
         <pubDate>Thu, 18 May 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/digilent/2017/05/18/most-common-digilent-support-requests.html</link>
         <guid isPermaLink="true">http://zipcpu.com/digilent/2017/05/18/most-common-digilent-support-requests.html</guid>
-        
-        
-        <category>digilent</category>
-        
-      </item>
-    
-      <item>
-        <title>Cannot be done</title>
-        <description>&lt;p&gt;One common request on Digilent is the, “Can I do XYZ on board ABC”?&lt;/p&gt;
-
-&lt;p&gt;I really dislike answering questions of this type.  I’ve been surprised too many
-times by someone doing what I thought was impossible.  Indeed, I’ve also had my
-own opportunities to surprise others by doing things they thought were
-impossible.&lt;/p&gt;
-
-&lt;p&gt;A couple examples should illustrate this point:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;I gave up early on the idea of building a Video game on a &lt;a href=&quot;https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/&quot;&gt;Basys-3
- board&lt;/a&gt;.
- I figured the task was just plain impossible: although you can make
- a 128kB of block RAM on the board, there wasn’t enough memory on
- the board for a 640x480 piece of video memory, with a bare minimum of four
- bits per pixel (256kB required) and the Basys-3 &lt;em&gt;only&lt;/em&gt; has the
- block RAM on board.&lt;/p&gt;
-
-    &lt;p&gt;Since giving up, I discovered some individuals had done it.  Digging
- into those who were willing to share, I learned how they had done it. 
- They took the video stream, and wrote characters directly on the stream
- using FPGA hardware.  That way, there was no storage requirement.  I
- had already done something similar to place a mouse on the screen, so
- I shouldn’t have been as surprised as I was.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;When presenting at &lt;a href=&quot;https://orconf.org/2016/&quot;&gt;ORCONF&lt;/a&gt; some time ago, I had
- the opportunity to meet my first Digilent employee.  When I shared with him
- what &lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;I had done&lt;/a&gt; with their
- &lt;a href=&quot;https://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module&quot;&gt;CMod S6&lt;/a&gt;, and specifically how I had managed
- to place a multi-tasking O/S (as I called it) on the board, he was
- exceptionally impressed.  Particularly since he had written off the board as
- being unfit for this type of task.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;The only question left, therefore, is where the next surprise is coming from.&lt;/p&gt;
-</description>
-        <pubDate>Thu, 18 May 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/digilent/2017/05/18/cannot-be-done.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/digilent/2017/05/18/cannot-be-done.html</guid>
         
         
         <category>digilent</category>
