@@ -6,15 +6,227 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 26 May 2017 23:21:38 -0400</pubDate>
-    <lastBuildDate>Fri, 26 May 2017 23:21:38 -0400</lastBuildDate>
+    <pubDate>Mon, 29 May 2017 07:54:48 -0400</pubDate>
+    <lastBuildDate>Mon, 29 May 2017 07:54:48 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Building a simple wishbone slave</title>
+        <description>&lt;p&gt;If you’ve never written bus logic before, the
+&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt; is a good place to
+start.  Although other busses have more features to them, 
+the &lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt; can be simplified
+into an extremely easy bus to work with.&lt;/p&gt;
+
+&lt;p&gt;For our purpose, we’ll be using the
+&lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;B4 version of the specification&lt;/a&gt;,
+and specifically the pipelined mode within it.&lt;/p&gt;
+
+&lt;h2 id=&quot;wishbone-bus-components&quot;&gt;Wishbone bus components&lt;/h2&gt;
+
+&lt;p&gt;The first step, though, is to simplify the wishbone bus for our discussion.
+As with the other logic I have presented, I prefix ports with &lt;strong&gt;i_&lt;/strong&gt; if they
+are inputs, and &lt;strong&gt;o_&lt;/strong&gt; if they are outputs.  Further, because these inputs
+and outputs to our bus slave are wishbone connected, I’ll adjust their
+prefixes to read &lt;strong&gt;i_wb_&lt;/strong&gt; for inputs and &lt;strong&gt;o_wb_&lt;/strong&gt; for outputs.&lt;/p&gt;
+
+&lt;p&gt;Using this notation, the
+&lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;wishbone specification&lt;/a&gt;
+defines the following wires from the perspective of a slave:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;i_wb_cyc&lt;/strong&gt; is true any time a wishbone transaction is taking place.  It
+ needs to become true on (or before) the first &lt;strong&gt;i_wb_stb&lt;/strong&gt; clock,
+ and generally stays true until the last &lt;strong&gt;o_wb_ack&lt;/strong&gt;.&lt;/p&gt;
+
+    &lt;p&gt;We’re going to assume that the &lt;strong&gt;i_wb_cyc&lt;/strong&gt; line is high during our
+ transaction, and that the logic necessary to insure this has already been
+ taken care of within the bus master.  Therefore, we’ll ignore this wire.&lt;/p&gt;
+
+    &lt;p&gt;Incidentally, the &lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;specification&lt;/a&gt;
+ isn’t clear regarding whether or not this signal can be ignored by the slave.
+ (It cannot be ignored by the interconnect …)  If you
+ are dealing with a master you aren’t certain of, you can &lt;em&gt;and&lt;/em&gt; your
+ &lt;strong&gt;i_wb_stb&lt;/strong&gt; line with your &lt;strong&gt;i_wb_cyc&lt;/strong&gt; signal and do just as well.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;i_wb_stb&lt;/strong&gt; is true for any bus transaction request.  While &lt;strong&gt;i_wb_stb&lt;/strong&gt;
+ is true, the other wishbone slave inputs (&lt;strong&gt;i_wb_we&lt;/strong&gt;, &lt;strong&gt;i_wb_addr&lt;/strong&gt;,
+ &lt;strong&gt;i_wb_data&lt;/strong&gt;, and &lt;strong&gt;i_wb_sel&lt;/strong&gt;) are valid and reference the same
+ transaction.  The transaction is accepted by the slave any time
+ &lt;strong&gt;i_wb_stb&lt;/strong&gt; is true at the same time as &lt;strong&gt;o_wb_stall&lt;/strong&gt; is false.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;i_wb_we&lt;/strong&gt; is true for any write requests&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;i_wb_addr&lt;/strong&gt; contains the address of the request&lt;/p&gt;
+
+    &lt;p&gt;From the perspective of
+ the wishbone slave that we are working with, this address contains only the
+ address lines of relevance to the slave.  Hence, while the bus may have 32
+ address lines, the slave might only be interested in might have anywhere
+ between no address lines and all 32 address lines.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;i_wb_data&lt;/strong&gt; contains the data we wish to write.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;o_wb_ack&lt;/strong&gt; is a response from the slave, indicating that the request has
+ been completed.  For every request given to the slave, there must be one
+ and only one clock cycle with &lt;strong&gt;o_wb_ack&lt;/strong&gt; high&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;o_wb_stall&lt;/strong&gt; is used to control the flow of data into the slave.  It will
+ be true on any cycle when the master &lt;em&gt;cannot&lt;/em&gt; accept data from the slave,
+ and false any time data can be accepted.  This allows the slave to control
+ the flow of requests being given to it.&lt;/p&gt;
+
+    &lt;p&gt;For our simple example, we’ll just set this line to zero.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;o_wb_data&lt;/strong&gt; is the data returned by the slave to the bus master as a 
+ result of any read request.  It is valid whenever &lt;strong&gt;o_wb_ack&lt;/strong&gt; is true,
+ and it’s value may be ignored any time &lt;strong&gt;o_wb_ack&lt;/strong&gt; is false.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;While &lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;the spec&lt;/a&gt;,
+defines other wires that may be a part of this interface, we’ll ignore these
+and instead focus on the minimum required logic
+necessary to get a simplified demonstration up and running.&lt;/p&gt;
+
+&lt;h2 id=&quot;writes-to-the-slave&quot;&gt;Writes to the slave&lt;/h2&gt;
+
+&lt;p&gt;You may remember from our discussion on how to write to a 
+&lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;very simple bus&lt;/a&gt; that we based all of
+our logic off of an &lt;strong&gt;i_wr&lt;/strong&gt; line.  Whenever this line was true, we would
+read from the bus.  As a review,
+the &lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;simple bus&lt;/a&gt; write logic was written as,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_wr)
+		memory[i_addr] &amp;lt;= i_data;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Moving from this simple example to the wishbone is quite easy.  In particular,
+&lt;em&gt;all&lt;/em&gt; we need to do is to adjust the &lt;strong&gt;i_wr&lt;/strong&gt; logic for the wishbone bus.
+Once done, the interaction should look identical:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if ((i_wb_stb)&amp;amp;&amp;amp;(i_wb_we)&amp;amp;&amp;amp;(!o_wb_stall))
+	begin
+		// Your write logic here, such as
+		// memory[i_addr] &amp;lt;= i_data;
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Simple, huh?&lt;/p&gt;
+
+&lt;h2 id=&quot;reads-from-the-slave&quot;&gt;Reads from the slave&lt;/h2&gt;
+
+&lt;p&gt;Reading from the port is fairly easy as well.  The first step is to create a
+response for every address given to us, as we did before.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	//
+	// Basically o_wb_data &amp;lt;= memory[i_wb_addr];
+	//
+	// If you aren&#39;t implementing a memory, your
+	// result will instead look like ...
+	case(i_wb_addr)
+	4&#39;h0: o_wb_data &amp;lt;= some_register;
+	// ...
+	default: o_wb_data &amp;lt;= some_default response;
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;One more step is required for both reading and writing: we need to return an
+acknowledgement back to the bus that this transaction has been completed, and
+that the data on the bus is now valid.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	o_wb_ack &amp;lt;= ((i_wb_stb)&amp;amp;&amp;amp;(!o_wb_stall));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;For some peripherals, the answer is known before you request it.  In that
+case, you might just &lt;em&gt;assign&lt;/em&gt; the &lt;strong&gt;o_wb_ack&lt;/strong&gt; signal instead of waiting for
+the positive edge of the clock.&lt;/p&gt;
+
+&lt;p&gt;Other peripherals may need to delay the acknowledgement by another clock.  Two examples of this would be the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; and the &lt;a href=&quot;https://github.com/ZipCPU/wbuart/blob/master/wbuart.v&quot;&gt;wbuart serial port&lt;/a&gt; controller.  Both of these examples require one clock to calculate an output,
+and then another clock to select between possible outputs.&lt;/p&gt;
+
+&lt;p&gt;The other key piece to any wishbone interaction is the stall line.  For our
+simple interaction, we’ll just hold this line zero.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	o_wb_stall = 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;What that means is that we are able to accept a wishbone request on every
+clock cycle, and that our transaction rate will be as fast as the clock rate.
+This works well for many peripherals, although some peripherals such as
+&lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash&lt;/a&gt;
+or &lt;a href=&quot;http://github.com/ZipCPU/xulalx25/blob/master/rtl/wbsdram.v&quot;&gt;SDRAM&lt;/a&gt; may
+need to adjust this line if they cannot accept a new request every
+clock cycle.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-if-you-can-only-accept-requests--sometimes&quot;&gt;What if you can only accept requests … sometimes?&lt;/h2&gt;
+
+&lt;p&gt;So … what if your peripheral cannot accept requests on every clock cycle?&lt;/p&gt;
+
+&lt;p&gt;Here’s an example set of logic where the peripheral starts a state machine
+upon any request, and only returns a result once the state machine becomes
+idle.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	busy;
+
+always @(posedge i_clk)
+	if ((i_wb_stb)&amp;amp;&amp;amp;(!o_wb_stall))
+	begin
+		state &amp;lt;= SOME_NEW_STATE;
+		local_data &amp;lt;= i_wb_data;
+		busy &amp;lt;= 1&#39;b1;
+	end else case(state)
+	SOME_NEW_STATE: begin
+		// Your logic here ...
+		if (some_condition)
+			state &amp;lt;= SOME_NEXT_STATE;
+		end
+	...
+	SOME_FINAL_STATE: begin
+		state &amp;lt;= IDLE_STATE;
+		busy &amp;lt;= 1&#39;b0;
+		ack  &amp;lt;= 1&#39;b1;
+		o_data &amp;lt;= any_read_data_response;
+	enddcase
+
+assign	o_wb_stall &amp;lt;= busy;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Examples of this in practice include the
+&lt;a href=&quot;https://github.com/ZipCPU/wbicapetwo&quot;&gt;wishbone ICAPE2 controller&lt;/a&gt;,
+and a &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;QSPI flash controller&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-can-you-use-this-interface-for&quot;&gt;What can you use this interface for?&lt;/h2&gt;
+
+&lt;p&gt;What can you use this for?  Anything!  Feel free to look over our
+&lt;a href=&quot;/projects.html&quot;&gt;projects page&lt;/a&gt; for some example peripheral components that
+use this simple interaction.&lt;/p&gt;
+
+&lt;p&gt;In particular, I intend to follow up this article with the idea of using a
+wishbone interface to create an interface whereby
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;a scope&lt;/a&gt; may be read for improved
+debugging purposes.&lt;/p&gt;
+</description>
+        <pubDate>Mon, 29 May 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/zipcpu/2017/05/29/simple-wishbone.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/zipcpu/2017/05/29/simple-wishbone.html</guid>
+        
+        
+        <category>zipcpu</category>
+        
+      </item>
     
       <item>
         <title>Debugging an FPGA through the serial port--first steps</title>
         <description>&lt;p&gt;Now that you have a working &lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;serial port&lt;/a&gt;
 which you can use to interact with your CPU, and now again that you know how to
-&lt;a href=&quot;zipcpu/2017/05/23/simplebus.html&quot;&gt;respond to simple bus requests&lt;/a&gt;,
+&lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;respond to simple bus requests&lt;/a&gt;,
 let’s examine whether these two be put together to create a simple means of
 debugging your FPGA.&lt;/p&gt;
 
@@ -170,10 +382,7 @@ for a later discussion on how to create
 &lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD&lt;/a&gt; files.&lt;/p&gt;
 
 &lt;p&gt;Me?  Back when I last used this approach (yes, it was some time ago), I just
-created a file that I could view using
-&lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;octave&lt;/a&gt;.&lt;br /&gt;
-&lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;Octave&lt;/a&gt; allowed me to not only read in
-a set of binary data, but it aso allowed me to create
+created a file that I could view using &lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;octave&lt;/a&gt;.  &lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;Octave&lt;/a&gt; allowed me to not only read in a set of binary data, but it aso allowed me to create
 &lt;a href=&quot;gtkwave.sourceforge.net&quot;&gt;GTKwave&lt;/a&gt; types of graphs of the signals within my
 design.  Then again, that was a personal choice and you might wish to view
 the results in another fashion..&lt;/p&gt;
@@ -199,8 +408,8 @@ since.  Stick around, and you’ll hear about it.  For now, …&lt;/p&gt;
 challenge.  After you get your serial port up and running, you can then use it
 to get the next item up and running–since a serial port can provide a lot of 
 feedback.  But until you can read that feedback, how can you avoid
-&lt;a href=&quot;/2017-05-19-fpga-hell.md&quot;&gt;FPGA hell&lt;/a&gt; long enough to get that first port up
-and running?&lt;/p&gt;
+&lt;a href=&quot;/blog/2017/05/19/fpga-hell.html&quot;&gt;FPGA hell&lt;/a&gt; long enough to
+get that first port up and running?&lt;/p&gt;
 
 &lt;h2 id=&quot;the-easy-way&quot;&gt;The easy way&lt;/h2&gt;
 
@@ -1160,7 +1369,7 @@ looking at,
 &lt;a href=&quot;https://github.com/ZipCPU/wbscope/tree/master/doc/examples/hdmi-eddc&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;If you cannot use a scope, modify &lt;a href=&quot;blinky.html&quot;&gt;blinky&lt;/a&gt; to get the
+    &lt;p&gt;If you cannot use a scope, modify &lt;a href=&quot;/blog/2017/05/19/blinky.html&quot;&gt;blinky&lt;/a&gt; to get the
 information you need.&lt;/p&gt;
   &lt;/li&gt;
 &lt;/ol&gt;
@@ -1344,239 +1553,6 @@ to fit a &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;better debu
         
         
         <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Most common Digilent FPGA support requests</title>
-        <description>&lt;p&gt;I’ve been watching the &lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;Digilent Forum’s&lt;/a&gt;, and
-I’ve now seen some very common requests for FPGA help that keep coming back
-over and over again.  I’ll separate these into three groups, and share them
-here with you.  They are actual hardware problems, beginner problems, and
-Vivado problems.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;Actual Hardware Problems&lt;/p&gt;
-
-    &lt;ul&gt;
-      &lt;li&gt;
-        &lt;p&gt;Device not found.
-&lt;a href=&quot;https://forum.digilentinc.com/topic/4095-cmod-a7-comms-problem/&quot;&gt;[1]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3564-problem-with-detecting-arty-on-linux/&quot;&gt;[2]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3749-programming-flash-cmod-a7/&quot;&gt;[3]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;User’s seem to have a problem getting their tools set up properly.  I
-certainly did.  One particular problem is basically, “I just plugged in
-my device and my computer doesn’t recognize it.”  This is commonly caused
-by an invalid or incomplete tool-suite setup.  However, it can be caused
-by a bad USB cable.  So, usually, if the device &lt;em&gt;was&lt;/em&gt; working, it tends to
-be instead a bad USB cable.  Strangely enough, bad USB cables a rather
-common occurrence on the forums.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: It depends on the problem&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;There’s the FTDI request. 
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3658-digilent-nexys-video-ft2232-eeprom/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;Many individuals have tried, either by accident or on purpose, reflashing
-the FTDI interface chip on their board and, as a result, have broken their
-board so badly that it no longer responds to configuration commands.  The
-solution to this problem is that the Digilent staff will send this user a
-private message with the correct software to reload onto their device.&lt;/p&gt;
-
-        &lt;p&gt;The strange part of this request is that I am aware of one user who
-has successfully reprogrammed the FT2232 chip on his board, and
-achieved much higher data throughput as a result.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: The Digilent staff provides a private message containing
-instructions and/or data to fix this problem.&lt;/p&gt;
-      &lt;/li&gt;
-    &lt;/ul&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Beginner problems&lt;/p&gt;
-
-    &lt;ul&gt;
-      &lt;li&gt;
-        &lt;p&gt;I need to build (some instructor’s problem statement).  Please help me.
-&lt;a href=&quot;https://forum.digilentinc.com/topic/4110-ise-design-suite/&quot;&gt;[1]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/4104-basys-3/&quot;&gt;[2]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;This request gets the least help from members on the forum.  The response
-is usually a kind pointer to where the user documentation is at and
-nothing more.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;:  The student needs to do his own homework.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;Help me, my design doesn’t work.
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3991-usb-keyboard-on-basys3/&quot;&gt;[1]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3731-nexys-4-to-pc-uart-communication/&quot;&gt;[2]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3706-not-receiving-packets-in-echo-server-example-in-nexys-4-ddr-getting-started-with-microblaze-servers/&quot;&gt;[3]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3666-artix-nexys-4-and-keyboard/&quot;&gt;[4]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3675-arty-display-uart-data-on-leds/&quot;&gt;[5]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;I’ll come back to this in a moment, but many students think that
-an experienced engineer can just deskcheck their work and find the bug.
-While I enjoy the challenge, and while I can often do this, it
-certainly wasn’t how I became an &lt;em&gt;experienced&lt;/em&gt; engineer when working
-with FPGAs.  I got there through simulation to make sure my logic
-worked, and using a scope (or scopes) to make sure my simulation
-matched the device.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: The solution is to simulate the design together with a
-simulated peripheral.  This is often how I find bugs in students serial
-port designs, for example.  I’ll connect their design to a &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/master/bench/cpp/uartsim.cpp&quot;&gt;serial port
-simulator&lt;/a&gt;,
-create a &lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;.vcd file&lt;/a&gt; for
-viewing in &lt;a href=&quot;http://gtkwave.sourceforge.net&quot;&gt;gtkwave&lt;/a&gt;, and write back about
-what I found.  There’s no reason why the student couldn’t have done this.&lt;/p&gt;
-
-        &lt;p&gt;Perhaps I’ll post these results for the next student I help?&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;Asynchronous Reset
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3702-pc-to-basys3-via-uart-not-working-correctly/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;While Xilinx devices support an asynchronous reset to the logic, it’s so
-unreliable that &lt;a href=&quot;https://forums.xilinx.com/t5/PLD-Blog/That-Dangerous-Asynchronous-Reset/ba-p/12856&quot;&gt;they recommend users not use it&lt;/a&gt;.  This is usually a
-student’s first project on an actual FPGA, and a beginner’s mistake.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: Get rid of the &lt;em&gt;negedge&lt;/em&gt; &lt;em&gt;reset&lt;/em&gt; from any always block
-dependencies.  Replace these with a combination of &lt;em&gt;initial&lt;/em&gt; statements and
-(if necessary) synchronous resets.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;The logic Clock
-&lt;a href=&quot;https://forum.digilentinc.com/topic/681-creating-a-25-mhz-clock-on-the-basys-3/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;Many new FPGA users aren’t quite aware the clocks are special things.
-They then create logic wires internal to their design which they wish
-to use to divide this clock rate.  While not a problem, such logic
-wires don’t have the reliability of a clock, and transitioning on their
-edges doesn’t produce the result you will want.  Where the problem comes
-into play is when the student wants their logic to transition on the
-positive (or worse negative) edge of this clock.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: &lt;a href=&quot;https://www.quora.com/What-is-the-function-of-a-strobe-function-in-digital-system&quot;&gt;a logic strobe&lt;/a&gt;.&lt;/p&gt;
-
-        &lt;p&gt;This solution finds a lot of application in 1. beginning FPGA student
-designs, and then again in 2. signal processing designs, where the
-device’s clock speed is not synchronized to the FPGA’s clock, and hence
-the data comes in from the sensor at a slower speed than the devices
-clock speed.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;The student who hasn’t simulated their design&lt;/p&gt;
-
-        &lt;p&gt;In this case, someone new to FPGA design has created some design and it
-doesn’t work.  They don’t know why.  This one is similar to the Vivado
-library component problem: they have no idea what’s going on internal
-to the FPGA to answer the “why won’t my program work” question.&lt;/p&gt;
-
-        &lt;p&gt;The solution they want to this problem is not the industry solution.
-What these students want is for some kind soul on the forum to look at
-their code and tell them what they are doing wrong.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The industry solution&lt;/strong&gt; to this problem is to simulate the code and any
-peripherals it might be working with, and then as part of that to verify
-that the logic works as intended.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;They don’t know how to simulate their problem
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3992-something-simple-is-apparently-impossible-incrdec-number/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;Sometimes the user is trying to work with a piece of hardware they’ve
-never worked with before.  As a result, they have no simulation for this
-hardware because they just aren’t all that familiar with how it works.
-(A user button is a good example of this, since bouncing isn’t something
-most people place into simulators.) In this case, their design doesn’t work
-on the real hardware and, again, they don’t know why.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt; to this problem is twofold.  First, build a simulator that
-encapsulates your understaning of the hardware from the diagrams and
-specifications you have.  Second, when that first part fails, use some
-form of a  scope to measure what is actually going on across the wires
-to/from the hardware.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;Crossing clock domains&lt;/p&gt;
-
-        &lt;p&gt;Few students have ever heard of &lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastability
-problems&lt;/a&gt;.  As
-a result, they write code that crosses clock domains realizing that there
-might be a problem associated with doing so.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: The simple solution is to clock every input at the new
-clock twice before using it.  This works for some things, though not all.
-A more complete discussion of how to deal with crossing from one clock
-can be found in &lt;a href=&quot;http://www.sunburst-design.com/papers/CummingsSNUG2008Boston_CDC.pdf&quot;&gt;this
-article&lt;/a&gt;.&lt;/p&gt;
-      &lt;/li&gt;
-    &lt;/ul&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Vivado problems&lt;/p&gt;
-
-    &lt;ul&gt;
-      &lt;li&gt;
-        &lt;p&gt;The demo doesn’t build
-&lt;a href=&quot;https://forum.digilentinc.com/topic/4090-error-with-pmod-oledrgb-demo/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;Typically this is caused by the user trying to build the demo design
-using one version of Vivado, while the demo was instead built with
-another version of Vivado.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: The Digilent staff share what version of Vivado was used
-to build the demo.  Sometimes the demo has gotten old, and the Digilent
-staff need to update it.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;They’ve integrated some component from the Vivado library into their design
-and “it’s not working”
-&lt;a href=&quot;https://forum.digilentinc.com/topic/4011-how-to-easily-implement-a-basic-low-pass-filter-using-fir-compiler-on-nexys-4-ddr/&quot;&gt;[1]&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3735-dds-compiler-60-ip-core-for-audible-sinewave/&quot;&gt;[2]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;Of all the times I’ve seen this problem, it has yet to be that the
-Xilinx provided IP component doesn’t work.  It’s more often that the
-user isn’t feeding the component properly, or using the results from
-the component properly.  Making the problem worse, rarely has the user
-taken the time to instrument what is going on, so they have no clue
-where their problem lies.&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: a good internal scope, such as the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; or the &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/axi4lscope.v&quot;&gt;AXI-Lite
-scope&lt;/a&gt;&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;The user can’t figure out how to add custom IP to the Vivado flow
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3961-how-to-add-own-logic-to-arty-board-flow/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
-
-        &lt;p&gt;&lt;strong&gt;The solution&lt;/strong&gt;: Well, I might be biased here, but … my solution to
-this problem has been not to use the broken Vivado design flow.
-I’m sure I’ll discuss more of my problems with there processing flow
-as time goes on.&lt;/p&gt;
-
-        &lt;p&gt;One of the pleasant things about the &lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;Digilent
-forums&lt;/a&gt; is that these common requests
-are dealt with in a friendly manner–even though I’m certain someone
-must be rolling their eyes at seeing the same request &lt;em&gt;again&lt;/em&gt;.&lt;/p&gt;
-      &lt;/li&gt;
-    &lt;/ul&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;I think I’ll come back to this over time, adding references to this this post
-of Digilent Forum posts that illustrate my points here.&lt;/p&gt;
-</description>
-        <pubDate>Thu, 18 May 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/digilent/2017/05/18/most-common-digilent-support-requests.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/digilent/2017/05/18/most-common-digilent-support-requests.html</guid>
-        
-        
-        <category>digilent</category>
         
       </item>
     

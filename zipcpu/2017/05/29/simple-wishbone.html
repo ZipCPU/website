@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a simple wishbone slave</title>
+  <meta name="description" content="If you’ve never written bus logic before, thewishbone bus is a good place tostart.  Although other busses have more features to them, the wishbone bus can be...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/zipcpu/2017/05/29/simple-wishbone.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/about/"><picture>
+    <img height=120 src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+<li><a HREF="/about/">About Us</a>
+<li><a HREF="/projects.html">Some Projects</a>
+<li><a HREF="/topics.html">Coming Topics</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a simple wishbone slave</h1>
+    <p class="post-meta"><time datetime="2017-05-29T00:00:00-04:00" itemprop="datePublished">May 29, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>If you’ve never written bus logic before, the
+<a href="http://opencores.org/opencores,wishbone">wishbone bus</a> is a good place to
+start.  Although other busses have more features to them, 
+the <a href="http://opencores.org/opencores,wishbone">wishbone bus</a> can be simplified
+into an extremely easy bus to work with.</p>
+
+<p>For our purpose, we’ll be using the
+<a href="http://opencores.org/cdn/downloads/wbspec_b4.pdf">B4 version of the specification</a>,
+and specifically the pipelined mode within it.</p>
+
+<h2 id="wishbone-bus-components">Wishbone bus components</h2>
+
+<p>The first step, though, is to simplify the wishbone bus for our discussion.
+As with the other logic I have presented, I prefix ports with <strong>i_</strong> if they
+are inputs, and <strong>o_</strong> if they are outputs.  Further, because these inputs
+and outputs to our bus slave are wishbone connected, I’ll adjust their
+prefixes to read <strong>i_wb_</strong> for inputs and <strong>o_wb_</strong> for outputs.</p>
+
+<p>Using this notation, the
+<a href="http://opencores.org/cdn/downloads/wbspec_b4.pdf">wishbone specification</a>
+defines the following wires from the perspective of a slave:</p>
+
+<ul>
+  <li>
+    <p><strong>i_wb_cyc</strong> is true any time a wishbone transaction is taking place.  It
+ needs to become true on (or before) the first <strong>i_wb_stb</strong> clock,
+ and generally stays true until the last <strong>o_wb_ack</strong>.</p>
+
+    <p>We’re going to assume that the <strong>i_wb_cyc</strong> line is high during our
+ transaction, and that the logic necessary to insure this has already been
+ taken care of within the bus master.  Therefore, we’ll ignore this wire.</p>
+
+    <p>Incidentally, the <a href="http://opencores.org/cdn/downloads/wbspec_b4.pdf">specification</a>
+ isn’t clear regarding whether or not this signal can be ignored by the slave.
+ (It cannot be ignored by the interconnect …)  If you
+ are dealing with a master you aren’t certain of, you can <em>and</em> your
+ <strong>i_wb_stb</strong> line with your <strong>i_wb_cyc</strong> signal and do just as well.</p>
+  </li>
+  <li>
+    <p><strong>i_wb_stb</strong> is true for any bus transaction request.  While <strong>i_wb_stb</strong>
+ is true, the other wishbone slave inputs (<strong>i_wb_we</strong>, <strong>i_wb_addr</strong>,
+ <strong>i_wb_data</strong>, and <strong>i_wb_sel</strong>) are valid and reference the same
+ transaction.  The transaction is accepted by the slave any time
+ <strong>i_wb_stb</strong> is true at the same time as <strong>o_wb_stall</strong> is false.</p>
+  </li>
+  <li>
+    <p><strong>i_wb_we</strong> is true for any write requests</p>
+  </li>
+  <li>
+    <p><strong>i_wb_addr</strong> contains the address of the request</p>
+
+    <p>From the perspective of
+ the wishbone slave that we are working with, this address contains only the
+ address lines of relevance to the slave.  Hence, while the bus may have 32
+ address lines, the slave might only be interested in might have anywhere
+ between no address lines and all 32 address lines.</p>
+  </li>
+  <li>
+    <p><strong>i_wb_data</strong> contains the data we wish to write.</p>
+  </li>
+  <li>
+    <p><strong>o_wb_ack</strong> is a response from the slave, indicating that the request has
+ been completed.  For every request given to the slave, there must be one
+ and only one clock cycle with <strong>o_wb_ack</strong> high</p>
+  </li>
+  <li>
+    <p><strong>o_wb_stall</strong> is used to control the flow of data into the slave.  It will
+ be true on any cycle when the master <em>cannot</em> accept data from the slave,
+ and false any time data can be accepted.  This allows the slave to control
+ the flow of requests being given to it.</p>
+
+    <p>For our simple example, we’ll just set this line to zero.</p>
+  </li>
+  <li>
+    <p><strong>o_wb_data</strong> is the data returned by the slave to the bus master as a 
+ result of any read request.  It is valid whenever <strong>o_wb_ack</strong> is true,
+ and it’s value may be ignored any time <strong>o_wb_ack</strong> is false.</p>
+  </li>
+</ul>
+
+<p>While <a href="http://opencores.org/cdn/downloads/wbspec_b4.pdf">the spec</a>,
+defines other wires that may be a part of this interface, we’ll ignore these
+and instead focus on the minimum required logic
+necessary to get a simplified demonstration up and running.</p>
+
+<h2 id="writes-to-the-slave">Writes to the slave</h2>
+
+<p>You may remember from our discussion on how to write to a 
+<a href="/zipcpu/2017/05/23/simplebus.html">very simple bus</a> that we based all of
+our logic off of an <strong>i_wr</strong> line.  Whenever this line was true, we would
+read from the bus.  As a review,
+the <a href="/zipcpu/2017/05/23/simplebus.html">simple bus</a> write logic was written as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_wr)
+		memory[i_addr] &lt;= i_data;</code></pre></figure>
+
+<p>Moving from this simple example to the wishbone is quite easy.  In particular,
+<em>all</em> we need to do is to adjust the <strong>i_wr</strong> logic for the wishbone bus.
+Once done, the interaction should look identical:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if ((i_wb_stb)&amp;&amp;(i_wb_we)&amp;&amp;(!o_wb_stall))
+	begin
+		// Your write logic here, such as
+		// memory[i_addr] &lt;= i_data;
+	end</code></pre></figure>
+
+<p>Simple, huh?</p>
+
+<h2 id="reads-from-the-slave">Reads from the slave</h2>
+
+<p>Reading from the port is fairly easy as well.  The first step is to create a
+response for every address given to us, as we did before.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	//
+	// Basically o_wb_data &lt;= memory[i_wb_addr];
+	//
+	// If you aren't implementing a memory, your
+	// result will instead look like ...
+	case(i_wb_addr)
+	4'h0: o_wb_data &lt;= some_register;
+	// ...
+	default: o_wb_data &lt;= some_default response;
+	end</code></pre></figure>
+
+<p>One more step is required for both reading and writing: we need to return an
+acknowledgement back to the bus that this transaction has been completed, and
+that the data on the bus is now valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	o_wb_ack &lt;= ((i_wb_stb)&amp;&amp;(!o_wb_stall));</code></pre></figure>
+
+<p>For some peripherals, the answer is known before you request it.  In that
+case, you might just <em>assign</em> the <strong>o_wb_ack</strong> signal instead of waiting for
+the positive edge of the clock.</p>
+
+<p>Other peripherals may need to delay the acknowledgement by another clock.  Two examples of this would be the <a href="https://github.com/ZipCPU/wbscope">wishbone scope</a> and the <a href="https://github.com/ZipCPU/wbuart/blob/master/wbuart.v">wbuart serial port</a> controller.  Both of these examples require one clock to calculate an output,
+and then another clock to select between possible outputs.</p>
+
+<p>The other key piece to any wishbone interaction is the stall line.  For our
+simple interaction, we’ll just hold this line zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	o_wb_stall = 1'b0;</code></pre></figure>
+
+<p>What that means is that we are able to accept a wishbone request on every
+clock cycle, and that our transaction rate will be as fast as the clock rate.
+This works well for many peripherals, although some peripherals such as
+<a href="http://opencores.org/project,qspiflash">flash</a>
+or <a href="http://github.com/ZipCPU/xulalx25/blob/master/rtl/wbsdram.v">SDRAM</a> may
+need to adjust this line if they cannot accept a new request every
+clock cycle.</p>
+
+<h2 id="what-if-you-can-only-accept-requests--sometimes">What if you can only accept requests … sometimes?</h2>
+
+<p>So … what if your peripheral cannot accept requests on every clock cycle?</p>
+
+<p>Here’s an example set of logic where the peripheral starts a state machine
+upon any request, and only returns a result once the state machine becomes
+idle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">reg	busy;
+
+always @(posedge i_clk)
+	if ((i_wb_stb)&amp;&amp;(!o_wb_stall))
+	begin
+		state &lt;= SOME_NEW_STATE;
+		local_data &lt;= i_wb_data;
+		busy &lt;= 1'b1;
+	end else case(state)
+	SOME_NEW_STATE: begin
+		// Your logic here ...
+		if (some_condition)
+			state &lt;= SOME_NEXT_STATE;
+		end
+	...
+	SOME_FINAL_STATE: begin
+		state &lt;= IDLE_STATE;
+		busy &lt;= 1'b0;
+		ack  &lt;= 1'b1;
+		o_data &lt;= any_read_data_response;
+	enddcase
+
+assign	o_wb_stall &lt;= busy;</code></pre></figure>
+
+<p>Examples of this in practice include the
+<a href="https://github.com/ZipCPU/wbicapetwo">wishbone ICAPE2 controller</a>,
+and a <a href="http://opencores.org/project,qspiflash">QSPI flash controller</a>.</p>
+
+<h2 id="what-can-you-use-this-interface-for">What can you use this interface for?</h2>
+
+<p>What can you use this for?  Anything!  Feel free to look over our
+<a href="/projects.html">projects page</a> for some example peripheral components that
+use this simple interaction.</p>
+
+<p>In particular, I intend to follow up this article with the idea of using a
+wishbone interface to create an interface whereby
+<a href="https://github.com/ZipCPU/wbscope">a scope</a> may be read for improved
+debugging purposes.</p>
+
+  </div>
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Jesus said to them, "Truly, truly, I say to you, before Abraham was, I am." (John 8:58)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
