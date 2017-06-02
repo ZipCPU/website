@@ -6,9 +6,419 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 29 May 2017 11:03:34 -0400</pubDate>
-    <lastBuildDate>Mon, 29 May 2017 11:03:34 -0400</lastBuildDate>
+    <pubDate>Fri, 02 Jun 2017 17:38:52 -0400</pubDate>
+    <lastBuildDate>Fri, 02 Jun 2017 17:38:52 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Controlling Timing within an FPGA</title>
+        <description>&lt;p&gt;Within an FPGA, everything is based upon event based timing.  SPI controllers
+require a logic generated clock, I2C controllers have some maximum limit they
+can communicate at, UART controllers run at some user defined baud rate …
+everything wants to communicate at a carefully controlled speed.&lt;/p&gt;
+
+&lt;p&gt;Here we’ll discuss a couple ways to create the timing you need.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-power-of-two-clock-divider&quot;&gt;The Power of Two Clock Divider&lt;/h2&gt;
+
+&lt;p&gt;The first approach I will use to timing events is usually a clock divider.
+It’s just too simple and too easy to build to ignore.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	counter;
+always @(posedge i_clk)
+	counter &amp;lt;= counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Using this approach, your clock will be nicely divided by an even 2^N.
+Hence, if you attach an LED to &lt;strong&gt;counter[(N-1)]&lt;/strong&gt; you’ll have the slower clock
+you need.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-simple-clock-divider&quot;&gt;The Simple Clock Divider&lt;/h2&gt;
+
+&lt;p&gt;A very common beginners task is to create a 1kHz, 100Hz, or even a 10 Hz clock
+from your input clock.  Since these are not the result of dividing your clock
+by 2^N, a different approach is necessary.&lt;/p&gt;
+
+&lt;p&gt;Suppose for example that your system clock were at 100MHz.  You’d then need to
+divide it by 10M if you wanted to get a 10Hz clock.  This is easily done with
+a more generic clock divider circuit.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	counter;
+always @(posedge i_clk)
+	if (counter &amp;lt; THRESHOLD-1&#39;b1)
+		counter &amp;lt;= counter + 1&#39;b1;
+	else
+		counter &amp;lt;= 0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As before, you can then use &lt;strong&gt;counter[N-1]&lt;/strong&gt; as an LED driver, and you will
+have divided your clock by whatever value you set THRESHOLD to be.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-strobe-signal&quot;&gt;The Strobe Signal&lt;/h2&gt;
+
+&lt;p&gt;The problem with the simple clock dividers above is that the clock signal is N
+bits wide, and the top bit may be one for many clocks and zero for many clocks.
+How shall you make your logic work only once in all those clocks?&lt;/p&gt;
+
+&lt;p&gt;As a first rule, &lt;em&gt;do not drive your logic like this&lt;/em&gt;:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge counter[N-1])
+	begin
+		// DON&#39;T DO THIS
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This will cause you all kinds of grief, either leading you to an unreliable
+design, or forcing you to deal with multiple clock domains, clock domain
+transfers, and worse.  Unless you really know what you are doing … don’t
+use this approach.&lt;/p&gt;
+
+&lt;p&gt;When I first started building FPGA designs, I would check for zero within
+whatever state machine logic I had that was going to rely upon my new clock.
+As a result, I tended to use something like this instead:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (counter == 0)
+	begin
+		// Don&#39;t do this
+	end else if (some_other_condition)
+	begin
+		// Other logic goes here
+	end else if ...&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;My problem was that I then needed to come back later and rebuild all this
+logic.  While it worked, it required more LUTs than was actually necessary, and
+it couldn’t be clocked at any high speed.&lt;/p&gt;
+
+&lt;p&gt;So … don’t do it this way either.&lt;/p&gt;
+
+&lt;p&gt;One way to understand the problem with this approach is to count the cost of
+your logic.  This cost may be estimated by
+the number of inputs necessary to create any of your logic registers. 
+The larger the number of inputs, the more LUTs will be required to implement
+it, the slower the logic will take.  Having
+an N-bit wide clock driving a lot of logic just adds N-1 unnecessary bits to
+complicate things.  As a result, while this approach will work (and did for me
+for many years), it’ll only work for FPGA logic with a slow &lt;strong&gt;i_clk&lt;/strong&gt;
+frequency.&lt;/p&gt;
+
+&lt;p&gt;The better alternative is even simpler, and there’s no reason not to use it.&lt;/p&gt;
+
+&lt;p&gt;Instead of testing for (counter == 0) within your logic, create a
+strobe signal.  We’ll call our strobe signal &lt;strong&gt;ck_stb&lt;/strong&gt;:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	ck_stb &amp;lt;= (counter == THRESHOLD-1&#39;b1);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;What makes this signal so useful is that it will only ever be on for one clock
+period at a time, and that one clock period will be the period that you need to
+do something.  As a result, you will then only need to check whether or not
+&lt;strong&gt;ck_stb&lt;/strong&gt; is true whenever you need to do something, rather than all
+&lt;strong&gt;N&lt;/strong&gt; bits of &lt;strong&gt;counter&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;p&gt;The next step is to build your logic so that it transitions on this strobe:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (ck_stb)
+	begin
+		// Build your logic this way instead
+	end else if (some_other_condition)
+	begin
+	end else if ...&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You can find an example of this within my &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/tree/master/rtl&quot;&gt;WBUART cores&lt;/a&gt;.  Look for the variables &lt;strong&gt;baud_counter&lt;/strong&gt;
+and &lt;strong&gt;zero_baud_counter&lt;/strong&gt; within either the transmitter or receiver
+modules.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-fractional-clock-divider&quot;&gt;The Fractional Clock Divider&lt;/h2&gt;
+
+&lt;p&gt;What if you need to divide your clock by 3.1415926535…?  Not a problem.
+You can accomplish this using a fractional clock divider.  The result will
+look something like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[15:0]	counter;
+always @(posedge i_clk)
+	{ ck_stb, counter } &amp;lt;= counter + 16&#39;h517d;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Ok, so … there’s a couple pieces to doing this that are worth discussing in order to understand it.&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;How does this work?  Well, consider what happens after 2^16 clocks … you’ll have 16’h517d transitions.  Hence, you’ve divided your clock by 16’h517d or &lt;em&gt;about&lt;/em&gt; by pi.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The &lt;strong&gt;ck_stb&lt;/strong&gt; signal will be set anytime this counter rolls over.  Because &lt;strong&gt;ck_stb&lt;/strong&gt; isn’t used to calculate the next counter, but only used as the output of this equation, &lt;strong&gt;ck_stb&lt;/strong&gt; becomes a logic signal you can use to drive your logic at the rate you want.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Notice that this clock register is 16 bits wide rather than N-bits wide.  Because of how the clock width couples with the fractional division number, I had to make this width a constant instead of a generic.  You can still change it to whatever you need it to be.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;As for the 16’h517d, this number is given by 2^16 divided by PI.  Where does the 16 come from?  It’s the width of your counter.  Does it need to be 16?  The more bits you have, the closer you’ll get to the actual frequency you wish to create.  I’ve often used 48-bits within my &lt;a href=&quot;https://github.com/ZipCPU/rtcclock&quot;&gt;Real-Time Clock Core&lt;/a&gt;, but what you choose should be a matter of your design needs and choices.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You can also use the &lt;strong&gt;ck_stb&lt;/strong&gt; signal within your code to do things every 1/pi’th clock, just like we used the &lt;strong&gt;ck_stb&lt;/strong&gt; before.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;What if you need to generate an actual clock signal, and not just a clocked strobe?  You can use the top bit of this counter as a clock signal that you can send to peripherals if you need to.  Just … don’t use it as a clock signal within your own logic unless you really know what you are doing.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;What is the actual clock period of this clock?  Well, because we are dividing by PI, you will find either three or four ticks between &lt;strong&gt;ck_stb&lt;/strong&gt; signals, never more, never less.  This is going to create some &lt;em&gt;phase noise&lt;/em&gt; in your &lt;em&gt;clock&lt;/em&gt;.  It can cause problems with some systems, so make sure you check the spec of whatever system you might be working with in order to know what is acceptable.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;You can find a simple example of this fractional divider in &lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/basic/clktest.v&quot;&gt;this version of
+blinky&lt;/a&gt; for
+the &lt;a href=&quot;http://icoboard.org&quot;&gt;ICO board&lt;/a&gt;.  I used this code to test and measure the
+speed of the input clock to my &lt;a href=&quot;http://icoboard.org&quot;&gt;ICO board&lt;/a&gt;.  By using
+this approach, I was able to prove that the incoming clock was 100MHz, as
+opposed to the 25MHz oscillator listed in the schematic (Oops!).&lt;/p&gt;
+
+&lt;p&gt;As a fun example, I used this same fractional clock generator approach to
+create a &lt;a href=&quot;https://github.com/ZipCPU/wbfmtxhack&quot;&gt;single bit FM signal&lt;/a&gt; that I
+then “transmitted” out of my GPIO ports.  Sure, it was an ugly signal, but it
+was enough to lock a FM receiver to it and listen to Queen on “the radio”.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-divided-counter&quot;&gt;The Divided Counter&lt;/h2&gt;
+
+&lt;p&gt;If your counter is so long that you can’t meet timing, there’s usually no cost
+to splitting the counter into a higher word and a lower word:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	low_stb, ck_stb;
+reg	[(N-1):0]	low_counter, hi_counter;
+always @(posedge i_clk)
+	{ low_stb, low_counter } &amp;lt;= low_counter + 1&#39;b1;
+always @(posedge i_clk)
+	if (low_stb)
+		{ ck_stb, counter } &amp;lt;= counter + 1&#39;b1;
+	else
+		ck_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Sure, the two words may not be synchronized, but … this is still a very
+doable approach.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-divided-fractional-clock-divider&quot;&gt;The Divided Fractional Clock Divider&lt;/h2&gt;
+
+&lt;p&gt;What if you are using a fractional divider?  If you can’t meet timing with your fractional division clock, you can also divide that one into two words, both upper and lower:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	low_counter, hi_counter;
+always @(posedge i_clk)
+	{ low_pps, low_counter } &amp;lt;= low_counter + LOW_STEP;
+always @(posedge i_clk)
+	{ ck_stb, counter } &amp;lt;= counter + HIGH_STEP + low_pps;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As before, the two counters are not in lock step with each other.  If you want to actually have a synchronized timer, you might need to delay the lower counter ‘till they line up:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	low_counter, hi_counter, dly_counter;
+wire	[(2\*N-1):0]	full_counter;
+always @(posedge i_clk)
+	{ low_pps, low_counter } &amp;lt;= low_counter + LOW_STEP;
+always @(posedge i_clk)
+	dly_counter &amp;lt;= low_counter;
+always @(posedge i_clk)
+	{ ck_stb, counter } &amp;lt;= counter + HIGH_STEP + low_pps;
+assign	full_counter = { counter, dly_counter };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;As you can see from the many different examples above, dividing your input clock down to a rate that you can then use for your logic is fairly easy.  Given the many ways of doing this wrong, we have now at least showed you several methods for doing this “right”.&lt;/p&gt;
+
+&lt;p&gt;Try it!  Let me know how these techniques work for you.&lt;/p&gt;
+</description>
+        <pubDate>Fri, 02 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/02/generating-timing.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/02/generating-timing.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>The Actual FPGA Design Process</title>
+        <description>&lt;p&gt;As I’ve been watching students and others request help on the &lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;Digilent
+Forums&lt;/a&gt;, it has become apparent to me that
+there’s quite a difference between the design process college students are using
+and the one reality has driven me to.&lt;/p&gt;
+
+&lt;p&gt;Perhaps pointing this out will serve as a warning to the young FPGA engineer
+to start their task early, and to not underestimate the amount of work
+required.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-students-fpga-design-process&quot;&gt;The Student’s FPGA Design Process&lt;/h2&gt;
+
+&lt;p&gt;Most of the student’s I’ve seen on the forum show up about a week before
+their project is due.  They want to get things done quickly, and they want
+to take the fastest path they can take to get to the goal. 
+Indeed, they are following the design process shown in Fig. 1.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 1: The Student&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/student-design-process.svg&quot; alt=&quot;Student FPGA Design Process Figure&quot; width=&quot;140&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;The student builds his design in Verilog&lt;/li&gt;
+  &lt;li&gt;He then implements it on an FPGA, adjusting his design as necessary to meet
+timing and build requirements&lt;/li&gt;
+  &lt;li&gt;The design is then placed onto the FPGA for a test, and …&lt;/li&gt;
+  &lt;li&gt;The student can’t figure out why it isn’t working.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Perhaps these students are coming from the software world.  When I program
+software, I can usually debug a program using the “debug by printf” method.
+If things get difficult, moving to the debugger is easy.  Either way, at any
+point in my program, I can look at and examine any variable at any time and
+understand what is going on within it.&lt;/p&gt;
+
+&lt;p&gt;If you expect to do this with hardware, and particularly with FPGA’s, you are
+going to end up with the other students in your class at the end of the semester
+wondering what happened.  You just don’t get that much visibility into an FPGA
+design.&lt;/p&gt;
+
+&lt;p&gt;Plan for it.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-experts-design-process&quot;&gt;The Expert’s Design Process&lt;/h2&gt;
+
+&lt;p&gt;Now, if you instead turn around and ask an expert about their design process,
+they will discuss something like Fig. 2 with you.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 2: The Expert&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img width=&quot;240&quot; src=&quot;/img/expert-design-process.svg&quot; alt=&quot;The Expert&#39;s FPGA Design Process Figure&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;If you don’t have an instructor, you have to find the specifications for
+whatever chip you are going to work with.  This applies to both the FPGA’s
+you work with, as well as any peripherals.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once you think you understand how the device you wish to interface with
+works, you’ll build your design to interface with that device.&lt;/p&gt;
+
+    &lt;p&gt;I make
+a particular point at this stage in my design process to document, at the
+top of any Verilog files I build, how that Verilog file is going to connect
+to the rest of any design.  While all of my files tend to use the
+&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;Wishbone Bus&lt;/a&gt;,
+I still need to define the various registers on that bus, as well
+as what each of the bits within those registers means, whether the registers
+are read/write, etc.&lt;/p&gt;
+
+    &lt;p&gt;As I build my design, these become my notes and
+reference.  I keep them up to date–especially before any spec sheet is ever
+written.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The next step is to build a simulator for the device.  This will allow your
+simulated logic to think it is talking to the actual device.&lt;/p&gt;
+
+    &lt;p&gt;Have I skipped this step before?  Absolutely!  What was the result?  I’ve
+almost always had to come back, retrace my steps, and build this simulator.
+(I’m currently needing to do that with an HDMI interface I’m building.)&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once you have your logic, and a simulator in place, you can now build a test
+bench that will exercise your logic against the simulator and see whether
+or not your logic works.&lt;/p&gt;
+
+    &lt;p&gt;Have I skipped this step before?  You bet!  The result?  I just got burned
+this last week.&lt;/p&gt;
+
+    &lt;p&gt;The story has to do with a &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash
+controller&lt;/a&gt; I had built.
+I was recently trying to squeeze every last LUT out of my
+&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC design&lt;/a&gt;, and
+made changes to it.  I then changed it in another design, and again, and
+eventually I had four different flash controllers and couldn’t tell which
+worked and which didn’t.  I needed a test bench to prove that my changes
+still left me with a working controller.&lt;/p&gt;
+
+    &lt;p&gt;I had no choice, but to backtrack and build the test bench I should’ve built
+in the first place.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Only after things work on the test bench, will the expert place them onto
+the FPGA.  Changes made in this process (usually because something just
+doesn’t quite meet timing) will still be validated through the
+simulator and the test bench.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Then the expert applies his design for its first Hardware in the Loop (HITL)
+test.  If the hardware he’s working with doesn’t match his simulation,
+he goes back and adjusts the simulation, his design, and the test bench.&lt;/p&gt;
+
+    &lt;p&gt;If I can, I like to use the same software for bench testing as I do for
+hardware in the loop testing.  While this is not always possible, it can be
+used to save a step … if you can.  That’s actually the reason why I like
+to use a &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/sw/host/netuart.cpp&quot;&gt;TCP/IP
+connection&lt;/a&gt; to connect to my boards–because you can never
+tell, then, whether you are connecting to the real thing or a simulation.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Only after any design passes unit testing, is it fully integrated with the
+rest of whatever the expert wishes to do.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Finally, the entire unit is tested as a whole.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;The expert will also firmly scold the student for not following this form
+exactly.  Sorry, students, it always happens.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-actual-design-process&quot;&gt;The Actual Design Process&lt;/h2&gt;
+
+&lt;p&gt;The problem with this description of the expert’s design process is that the
+expert isn’t telling the whole story.&lt;/p&gt;
+
+&lt;p&gt;Because this isn’t his first design, he has already built up a small library
+of routines–most of them surrounding how to communicate with an FPGA and how
+to get diagnostics from the FPGA.  Indeed, his design flow is perhaps more
+appropriately characterized by Fig 3.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 3: Reality&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img width=&quot;600&quot; src=&quot;/img/actual-design-process.svg&quot; alt=&quot;What the Expert actually does&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The result is that the expert can draw values and hence insights from the logic
+running within the FPGA, while the student is still stuck wondering what
+happened.&lt;/p&gt;
+
+&lt;p&gt;In my case, this scaffolding consists of both my
+open source &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone Scope&lt;/a&gt; that works 
+with &lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;GTK Wave&lt;/a&gt;, and 2) my open source
+&lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/wbubus.v&quot;&gt;UART to wishbone&lt;/a&gt;
+converter which gives you access to that
+&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;Wishbone Bus&lt;/a&gt;, to include the 
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; that I place on that bus.
+Of course, when I first started I didn’t have
+&lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;GTK Wave&lt;/a&gt; support–but that just illustrates
+how an expert’s toolset can grow to become more useful over time.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-the-student-should-have-done&quot;&gt;What the Student should have done&lt;/h2&gt;
+
+&lt;p&gt;What the student should have done was to take some time, between the simple
+&lt;a href=&quot;/blog/2017/05/19/blinky.html&quot;&gt;blinky&lt;/a&gt; and
+&lt;a href=&quot;/blog/2017/05/24/serial-port.html&quot;&gt;UART&lt;/a&gt;
+projects but before the more complex projects, to build some scaffolding.
+Specifically, he needs to build a means of evaluating logic from within the
+FPGA, and of learning how to discover whether or not the device he’s working
+with responds the way he thinks it should or not.&lt;/p&gt;
+
+&lt;p&gt;The typical curricula doesn’t lead the student to this approach.
+Instead, the typical curricula works from
+&lt;a href=&quot;/blog/2017/05/19/blinky.html&quot;&gt;blinky&lt;/a&gt; to more and more
+complex projects, but never focuses on how to build scaffolding out of these
+projects that is necessary to be truly competent at the more complex tasks.&lt;/p&gt;
+
+&lt;p&gt;The problem with this approach is that 1) few students know that this is a
+requirement on their road to success, and 2) few students allocate time for
+failure along the way.&lt;/p&gt;
+
+&lt;p&gt;This is why student’s stumble on their complex FPGA design projects.&lt;/p&gt;
+
+&lt;p&gt;If this has been your experience, please write to me.  I’d love to share any
+lessons you’ve learned from your design projects here on this blog.&lt;/p&gt;
+</description>
+        <pubDate>Fri, 02 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/02/design-process.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/02/design-process.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Building a simple wishbone slave</title>
@@ -1475,185 +1885,6 @@ but for now … we’ll just use this idea to keep things simple.&lt;/p&gt;
         <pubDate>Mon, 22 May 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/05/22/a-vision-for-controlling-fpgas.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/05/22/a-vision-for-controlling-fpgas.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Which comes first: the CPU or the peripherals?</title>
-        <description>&lt;p&gt;When working on the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;, the peripherals
-came first.  &lt;em&gt;Only&lt;/em&gt; when the peripherals were known to work did I transition to
-building the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Does the order matter?  I think it does.  Someone else tried to build a CPU
-first before building all of his peripherals–in this case, the memory
-peripheral was the problem.
-The result
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3298-psram-chip-baked-or-am-i-just-high/&quot;&gt;wasn’t pretty&lt;/a&gt;.
-While it hasn’t quite killed his project, he did run out of his startup dollars and had to put the project on the backburner.&lt;/p&gt;
-
-&lt;p&gt;If you want to build a CPU, I recommend building in this order:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Build the debugging scaffolding.  The first thing you will need is an
-interface to your FPGA that you can rely upon, one that will also allow you
-to test the peripheral components found within your FPGA.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Using your scaffolding, build some peripherals.  Test them.  Get to know
-them.  Get familiar with them.  Understand how many clocks they will take to
-respond to a request.  Understand how to aggregate those peripherals
-together so you can debug them all.&lt;/p&gt;
-
-    &lt;p&gt;I personally hang all of my peripherals off of a
-&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-&lt;a href=&quot;https://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;B4 bus&lt;/a&gt;,
-although other busses exist which can be used for this purpose.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Only once you know that your scaffolding and peripherals work, should you
-then start on trying to place your CPU within your FPGA.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Of course, this is all my own personal and humble opinions.  On the other hand,
-the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; already runs on several platforms.&lt;/p&gt;
-</description>
-        <pubDate>Sat, 20 May 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/zipcpu/2017/05/20/which-came-first.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/zipcpu/2017/05/20/which-came-first.html</guid>
-        
-        
-        <category>zipcpu</category>
-        
-      </item>
-    
-      <item>
-        <title>Knight Rider</title>
-        <description>&lt;p&gt;When I was a kid, I loved watching Knight Rider.  Once I picked up FPGA design,
-I wanted to know how to make LED’s move and dim … just like 
-&lt;a href=&quot;https://www.youtube.com/watch?v=WxE2xWZNfOc&quot;&gt;KITT’s lights&lt;/a&gt; did.&lt;/p&gt;
-
-&lt;p&gt;If you are a beginner FPGA designer, this makes the perfect beginners project.&lt;/p&gt;
-
-&lt;h2 id=&quot;walking-through-the-leds&quot;&gt;Walking through the LEDs&lt;/h2&gt;
-
-&lt;p&gt;The first step requires simply walking through the LEDs.  This is a very
-important step, as it demonstrates that all of your LEDs are properly set
-up, properly connected, and that they will turn on when requested.&lt;/p&gt;
-
-&lt;p&gt;In our case, we’ll do this two different ways.  First, we’ll step the LED’s
-once each second.  This way, there can be no question that the LED comes on
-at the proper time.  Once that works, we can speed the process up, and make
-a cool LED demo.&lt;/p&gt;
-
-&lt;p&gt;To step through the LED’s one at a time, you can use the following code:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;`default_nettype none
-`define	FASTWALKER
-//
-module	ledwalker(i_clk, o_led);
-	input	wire		i_clk;
-	output	reg	[7:0]	o_led;
-
-	// Remember the clock testing code?  This is very similar, only it
-	// creates a PPS signal once per second--every time the counter rolls
-	// over.  You could create this signal ever half second, or every
-	// quarter second, by just dropping the number of bits in the counter.
-	reg	pps;
-	reg	[31:0]	time_counter;
-	always @(posedge i_clk)
-		{ pps, time_counter } &amp;lt;= time_counter + 32&#39;d43;
-
-	//
-	// We then want to keep track of our state: which LED will be on
-	//
-	reg	[2:0]	led_posn;
-	always @(posedge i_clk)
-		if (pps)
-			led_posn &amp;lt;= led_posn + 1&#39;b1;
-
-	//
-	// Now, we turn on the one LED on corresponding to the state we have
-	// chosen.
-	//
-	always @(posedge i_clk)
-	begin
-		o_led[0] &amp;lt;= (led_posn == 3&#39;h0);
-		o_led[1] &amp;lt;= (led_posn == 3&#39;h1);
-		o_led[2] &amp;lt;= (led_posn == 3&#39;h2);
-		o_led[3] &amp;lt;= (led_posn == 3&#39;h3);
-		o_led[4] &amp;lt;= (led_posn == 3&#39;h4);
-		o_led[5] &amp;lt;= (led_posn == 3&#39;h5);
-		o_led[6] &amp;lt;= (led_posn == 3&#39;h6);
-		o_led[7] &amp;lt;= (led_posn == 3&#39;h7);
-	end
-
-endmodule&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If you don’t want to type this in, you can find my version of this example
-&lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/pmodleds/ledwalker.v&quot;&gt;here&lt;/a&gt;.
-You’ll need an &lt;a href=&quot;http://icoboard.org&quot;&gt;ICO board&lt;/a&gt; and a &lt;a href=&quot;https://store.digilentinc.com/pmod-8ld-eight-high-brightness-leds/&quot;&gt;PMod
-LED8&lt;/a&gt;
-from &lt;a href=&quot;http://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt; to
-run it, although it’s almost generic enough to run on any FPGA board.  If you
-don’t have that many LED’s?  Either don’t turn them all on, or adjust led_posn
-to only cycle through the LED’s that you do have.&lt;/p&gt;
-
-&lt;p&gt;With a little work, I’m sure you could modify this example, so that the LED
-that was ON walked from left to right, and then back from right to left.&lt;/p&gt;
-
-&lt;h2 id=&quot;dimming-the-led&quot;&gt;Dimming the LED&lt;/h2&gt;
-
-&lt;p&gt;The next thing you need to know, once you can turn each LED on individually,
-is that you can “dim” an LED by turning it on
-and off faster than an eye can see.  As you transition the LED from being more
-often on to more often off, the LED will appear to dim.  As an example, try the
-following:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;//
-`default_nettype none
-//
-module dimmer(i_clk, o_led);
-  input  wire i_clk;
-  output wire o_led;
-
-reg [26:0] counter;
-always @(posedge i_clk)
-  counter &amp;lt;= counter + 1&#39;b1;
-
-always @(posedge i_clk)
-  o_led &amp;lt;= (counter[3:0] &amp;lt; counter[26:23]);
-
-endmodule&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If you don’t want to type this in, you can find my version of this
-&lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/basic/dimmer.v&quot;&gt;here&lt;/a&gt;,
-written for the ICO Board.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-final-design&quot;&gt;The final design&lt;/h2&gt;
-
-&lt;p&gt;You really don’t want me to give you the answer, now, do you?  Without giving
-you a chance to do it yourself?  Try doing it yourself first.  Then, if you get
-stuck or once you’ve achieved your goal, feel free to look at my solution
-&lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/pmodleds/ledbouncer.v&quot;&gt;here&lt;/a&gt;.
-It’s a little more advanced than the ones above, in that it uses generic’s and
-for loops within Verilog, but the concept remains the same.&lt;/p&gt;
-
-&lt;p&gt;One problem I had using the “High-brightness” LED’s on the 
-&lt;a href=&quot;https://store.digilentinc.com/pmod-8ld-eight-high-brightness-leds/&quot;&gt;PMod LED8&lt;/a&gt;,
-was that it’s hard to see them actually “dim”.  As a result, the Knight
-Rider effect is more substantial
-on another board, such as the &lt;a href=&quot;https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications&quot;&gt;Nexys Video&lt;/a&gt; or the &lt;a href=&quot;https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/&quot;&gt;Basys-3&lt;/a&gt; from &lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt;,
-since these use red LED’s that aren’t nearly as bright.&lt;/p&gt;
-
-</description>
-        <pubDate>Sat, 20 May 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/05/20/knight-rider.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/05/20/knight-rider.html</guid>
         
         
         <category>blog</category>
