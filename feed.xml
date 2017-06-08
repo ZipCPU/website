@@ -6,9 +6,331 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 06 Jun 2017 10:21:46 -0400</pubDate>
-    <lastBuildDate>Tue, 06 Jun 2017 10:21:46 -0400</lastBuildDate>
+    <pubDate>Thu, 08 Jun 2017 14:46:36 -0400</pubDate>
+    <lastBuildDate>Thu, 08 Jun 2017 14:46:36 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Building A Simple In-Circuit Logic Analyzer</title>
+        <description>&lt;p&gt;If you’ve never built your own &lt;a href=&quot;https://en.wikipedia.org/wiki/Logic_analyzer&quot;&gt;logic
+scope&lt;/a&gt; to “see” what’s going
+on within an FPGA, it’s not really that hard to do.  There are a couple of
+steps required to do it, but not really all that more.&lt;/p&gt;
+
+&lt;p&gt;Over time, I’ve built several logic scopes–each for a different environment
+that I’ve been running in.  Somewhere around rebuilding the wheel for the
+third time, and for a different customer each time, I decided to build
+my own–so that I could have a scope that I legally owned and controlled,
+and that I could bring with me to any new FPGA job.&lt;/p&gt;
+
+&lt;p&gt;Here in this post, we’ll walk through all the steps of building a basic
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Logic_analyzer&quot;&gt;logic scope&lt;/a&gt;.  We’ll reserve
+until later how to go about turning this scope’s results into a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;
+for &lt;a href=&quot;http://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt; viewing–but only because I was
+using the scope successfully for many years before I ever even discovered
+&lt;a href=&quot;http://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;how-it-works&quot;&gt;How it works&lt;/h2&gt;
+
+&lt;p&gt;Before we get into the Verilog code necessary to build one of these things,
+let’s discuss what we want it to do.&lt;/p&gt;
+
+&lt;p&gt;We’d like three capabilities from our scope.  First, whenever something goes
+wrong within our design, we’d like to be able to look back into the past and see
+what happened, as in Fig. 1.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot;&gt;&lt;caption&gt;Fig. 1: Looking back into the past&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/scope-past.svg&quot; alt=&quot;A scope that looks back in time&quot; width=&quot;400&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Of course, this ability to look back in time will be limited by the size of our
+scope’s memory.&lt;/p&gt;
+
+&lt;p&gt;We’d also like the ability to debug an interaction that we are in the
+process of designing.  For example, if you want to read from &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash
+memory&lt;/a&gt;,
+it might be valid to look at the flash data lines together with some of your
+internal &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash control&lt;/a&gt; state.  In
+this case, you would want to start capturing at the time of your read request. 
+This capability would look something like Fig 2.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot;&gt;&lt;caption&gt;Fig. 2: After the trigger&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/scope-now.svg&quot; alt=&quot;Using a scope to see what&#39;s happening now&quot; width=&quot;400&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Continuing the our &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash controller&lt;/a&gt;
+example, what if you wanted to know what happened
+when the flash finished its program or erase cycle?  You’d then want to know
+what was happening some distance from your trigger, often a known amount of
+time later in relation to the trigger.  In that case, what you want will look
+something like Fig 3.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot;&gt;&lt;caption&gt;Fig. 3: A future event&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/scope-future.svg&quot; alt=&quot;Examining logic lines some time in the future&quot; width=&quot;400&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;We can handle all three of these needs by counting a programmable number
+of clock cycles from the scope’s trigger until we stop recording (Fig 4.)&lt;/p&gt;
+
+&lt;table align=&quot;center&quot;&gt;&lt;caption&gt;Fig. 4: Trigger Logic&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/scope-trigger.svg&quot; alt=&quot;How the holdoff works&quot; width=&quot;400&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;There remains one other feature we are going to need and that is that we will
+need to ensure our memory is initialized before we ever stop recording.
+In particular, you really don’t want to find yourself chasing some “bug” in
+your design, something that doesn’t make any sense, only to find out later
+that the data you were reading from the scope wasn’t valid.  For this
+reason, we need make sure all of the scope’s memory is initialized before it can
+be triggered.&lt;/p&gt;
+
+&lt;p&gt;This leads to the rough timing diagram shown in Fig 5.&lt;/p&gt;
+
+&lt;table&gt;&lt;caption&gt;Fig. 5: Scope timing&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/simple-scope.svg&quot; alt=&quot;The stages of a scope&#39;s capture&quot; width=&quot;800&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In particular, following any scope reset, we’ll insist on setting all of the
+values in memory before permitting the scope to be triggered.&lt;/p&gt;
+
+&lt;p&gt;Okay, now that we know what we want to do, let’s look into how to do it.&lt;/p&gt;
+
+&lt;h2 id=&quot;filling-the-scope&quot;&gt;Filling the scope&lt;/h2&gt;
+
+&lt;p&gt;The first step to building a scope is to load your data into the scope.  There
+are two parts to this.  The first is keeping track of the address you are
+writing within your block RAM, and the second part is actually writing to that
+memory.  Both parts are quite simple.&lt;/p&gt;
+
+&lt;p&gt;We’ll use a register, &lt;strong&gt;waddr&lt;/strong&gt; to contain the address we wish to write to.
+We’ll insist that this address start at zero only so we can tell if the
+scope’s memory was ever fully initialized.  This address will quietly wrap
+around the limits of the memory, whatever those limits might be, as we write.
+We’ll also increment this address every time we receive a valid data sample
+until the scope stops.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+		waddr &amp;lt;= 0;
+	else if ((i_ce)&amp;amp;&amp;amp;(!stopped))
+		waddr &amp;lt;= waddr + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Writing to memory is even simpler: On any clock when we’ve got valid data,
+we write to the scope’s memory–up until the point where we stop the scope.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if ((i_ce)&amp;amp;&amp;amp;(!stopped))
+		mem[waddr] &amp;lt;= i_data;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;If you’ve never used block RAM within an FPGA before, the various synthesis
+tools can be finicky.  In general, if you have too much logic within the same
+always block as the memory write, they won’t recognize the block RAM.  That’s
+why we keep our memory write logic &lt;em&gt;simple&lt;/em&gt;.  (Ref
+&lt;a href=&quot;https://www.xilinx.com/support/documentation/white_papers/wp231.pdf&quot;&gt;[1]&lt;/a&gt;)&lt;/p&gt;
+
+&lt;p&gt;We also write to our memory on every clock up until we are stopped.  This is
+how we guarantee that, when we get a trigger, we can have a valid capture of
+whatever it was that lead up to the trigger.&lt;/p&gt;
+
+&lt;p&gt;The final piece to our scope’s write logic is the detection of when the scope
+was filled.  Since we started the write address at zero, we’ll know we have
+filled the scope on the same clock that we both write to it, and write to it
+with the address equal to all ones.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+		primed &amp;lt;= 1&#39;b0;
+	else if ((i_ce)&amp;amp;&amp;amp;(!primed))
+		primed &amp;lt;= &amp;amp;waddr;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;With this simple logic, you’ve now created your first
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Logic_analyzer&quot;&gt;scope&lt;/a&gt;.  Now let’s look
+at how to stop it, and then how to get the results out of it.&lt;/p&gt;
+
+&lt;h2 id=&quot;triggering-the-scope&quot;&gt;Triggering the scope&lt;/h2&gt;
+
+&lt;p&gt;A quick examination of Fig. 4 above should make plain what we wish to do.&lt;/p&gt;
+
+&lt;p&gt;First, from reset until we’ve been triggered, the scope runs and records
+normally.  Once we receive a trigger, and only then, do we move on to the
+next step.  Hence, we need to know when we’ve been triggered.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+		triggered &amp;lt;= 1&#39;b0;
+	else if ((i_trigger)&amp;amp;&amp;amp;(primed))
+		triggered &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You might notice that this trigger doesn’t depend upon &lt;strong&gt;i_ce&lt;/strong&gt;, even though
+all of the data reads and writes do.  This was done on purpose so that
+any trigger that takes place between &lt;strong&gt;i_ce&lt;/strong&gt;’s will still get noticed by
+the scope.&lt;/p&gt;
+
+&lt;p&gt;The next step is to count some programmable number of clocks from the trigger
+until we stop.  We’ll call this counter the &lt;strong&gt;holdoff_counter&lt;/strong&gt;, and
+we’ll start it counting as soon as we are triggered.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_ck)
+	if ((i_reset)||(!triggered))
+		holdoff_counter &amp;lt;= 0;
+	else if (i_ce)
+		holdoff_counter &amp;lt;= holdoff_counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Once the holdoff counter reaches the user holdoff, we then set a flag to
+indicate we have stopped.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_ck)
+	if ((i_reset)||(!triggered))
+		stopped &amp;lt;= 0;
+	else if ((i_ce)&amp;amp;&amp;amp;(!stopped))
+		stopped &amp;lt;= (holdoff_counter &amp;gt;= user_holdoff);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The only tricky part about all of these controls is lining them all up so that
+the last data sample is the sample that produced the trigger.  For now, we’ll
+leave as an exercise for the student.&lt;/p&gt;
+
+&lt;p&gt;The last step will be to read the results out of your local
+&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;reading-the-results&quot;&gt;Reading the results&lt;/h2&gt;
+
+&lt;p&gt;When it comes to reading results, there are just a couple of tricks required. 
+Most of these are involved with unwrapping the RAM memory, and the rest of
+what is required is straight forward.&lt;/p&gt;
+
+&lt;p&gt;Remember how we just wrote to successive memory locations until we stopped?
+We’re going to need to unwrap all of that.&lt;/p&gt;
+
+&lt;p&gt;The first step is to calculate the offset we need into the memory array.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+		raddr &amp;lt;= 0;
+	else if ((i_wb_stb)&amp;amp;&amp;amp;(!i_wb_we)&amp;amp;&amp;amp;(i_wb_addr))
+		raddr &amp;lt;= raddr + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll then add this offset to the write address to get the address we need from
+the scope’s memory.  The trick is that this operation has now taken an
+extra clock.  If we want to support a throughput of one read per bus clock,
+we’re going to need to add one extra unit to keep up with the bus clock.
+In other words, we’ll pre-compute the next read address if we are in the middle
+of a read, but otherwise have only the offset plus the last write address.&lt;/p&gt;
+
+&lt;p&gt;Will this address calculation wrap around the end of the memory back to the
+beginning?  Most definitely.  We are counting upon that.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if ((i_wb_stb)&amp;amp;&amp;amp;(!i_wb_we)&amp;amp;&amp;amp;(i_wb_addr))
+		this_addr &amp;lt;= raddr + waddr + 1&#39;b1;
+	else
+		this_addr &amp;lt;= raddr + waddr;
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now that we have our read address, referenced from the beginning of memory
+rather than from the beginning of of the capture we are reporting, we can
+now read from the scope’s memory.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	data &amp;lt;= mem[this_addr];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As you examine this, remember that block RAM logic is special, whether read or
+write–it must
+fit the form of what the synthesizer is expecting, or the memory will be
+implemented in logic instead of RAM.  It is for that reason that we keep our
+memory read as simple as possible and don’t try to merge it with the
+output case statement below.&lt;/p&gt;
+
+&lt;p&gt;The final step is to place this value onto the bus.  We hold onto our address
+for one clock, so that we can align our data read with the bus request, and
+make certain that we are always returning the right value on the right clock.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	last_bus_addr &amp;lt;= i_wb_addr;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We do the same thing for our acknowledgement line, delaying it for one clock,
+to give us time to actually read from the bus.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	pre_ack &amp;lt;= i_wb_stb;
+always @(posedge i_clk)
+	o_wb_ack &amp;lt;= pre_ack;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Otherwise reading from this scope is just as simple as reading from any
+address from any other simple peripheral.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	case(last_bus_addr)
+	1&#39;b0: o_wb_data &amp;lt;= { 1&#39;b0, stopped, triggered, 1&#39;b0,
+			3&#39;h0, LGMEMLEN, user_holdoff };
+
+	1&#39;b1: o_wb_data &amp;lt;= data;
+	endcase&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;That’s it!  There’s not all that much to it.  A scope requires writing to
+memory, stopping based upon some trigger, and then reading the data back
+out later.  You’ve now seen all of these pieces.&lt;/p&gt;
+
+&lt;h2 id=&quot;zipcpus-wishbone-scope&quot;&gt;ZipCPU’s Wishbone Scope&lt;/h2&gt;
+
+&lt;p&gt;Now that you know how one of these scopes works, and even better how to build
+your own, you might wish to check out my own version of a &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone
+scope&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;There are a couple of differences between that my own &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone
+scope&lt;/a&gt;, name wbscope and found on GitHub,
+and the scope we’ve just outlined above, although not that many.  Here’s a
+quick list of differences:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wbscope&lt;/a&gt; allows you to use two
+asynchronous clocks, if you need them: one for the data and another
+for the bus.&lt;/p&gt;
+
+    &lt;p&gt;I needed this capability when testing the &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/enetpackets.v&quot;&gt;RMII ethernet
+controller&lt;/a&gt;
+within the &lt;a href=&quot;https://github.com/ZipCPU/openarty&quot;&gt;OpenArty project&lt;/a&gt; for the
+&lt;a href=&quot;http://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists&quot;&gt;Arty board&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Data capture within our &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt;
+has been carefully calibrated so that a hold off of zero will place the
+trigger in exactly the last location in memory.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; in the repo adds
+a couple extra bus directed capabilities.  These include&lt;/p&gt;
+
+    &lt;p&gt;o an interrupt output for an on-board CPU,&lt;/p&gt;
+
+    &lt;p&gt;o the ability to manually disable the scope’s trigger, or even&lt;/p&gt;
+
+    &lt;p&gt;o the ability to manually trigger the scope from the bus independent of the
+  trigger wired into the scope.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;I’ve also built a &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed version of the
+scope&lt;/a&gt; that
+applies
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Run-length_encoding&quot;&gt;run length encoding&lt;/a&gt;
+to the data, to allow recording events over a long period of time.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Further, there’s even a &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/axi4lscope.v&quot;&gt;AXI-lite version of the
+scope&lt;/a&gt;, although
+since I don’t use the AXI bus, that version has not been tested very much–so
+I can’t assure you that it works.&lt;/p&gt;
+
+&lt;h2 id=&quot;next-steps&quot;&gt;Next Steps&lt;/h2&gt;
+
+&lt;p&gt;We’ll still queue up for later how to actually create a
+&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus master&lt;/a&gt; that can
+be commanded from from a local host PC, as well as instructions for how to
+turn these results into a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;
+that you can view with &lt;a href=&quot;http://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt;.&lt;/p&gt;
+
+</description>
+        <pubDate>Thu, 08 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/08/simple-scope.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/08/simple-scope.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Nearest Neighbor Interpolation</title>
@@ -866,12 +1188,12 @@ exactly.  Sorry, students, it always happens.&lt;/p&gt;
 &lt;p&gt;The problem with this description of the expert’s design process is that the
 expert isn’t telling the whole story.&lt;/p&gt;
 
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 3: Reality&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img width=&quot;400&quot; src=&quot;/img/actual-design-process.svg&quot; alt=&quot;What the Expert actually does&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
 &lt;p&gt;Because this isn’t his first design, he has already built up a small library
 of routines–most of them surrounding how to communicate with an FPGA and how
 to get diagnostics from the FPGA.  Indeed, his design flow is perhaps more
 appropriately characterized by Fig 3.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 3: Reality&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img width=&quot;600&quot; src=&quot;/img/actual-design-process.svg&quot; alt=&quot;What the Expert actually does&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
 
 &lt;p&gt;The result is that the expert can draw values and hence insights from the logic
 running within the FPGA, while the student is still stuck wondering what
@@ -1666,278 +1988,6 @@ since.  Stick around, and you’ll hear about it.  For now, …&lt;/p&gt;
         <pubDate>Fri, 26 May 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/05/26/simpledbg.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/05/26/simpledbg.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>That first serial port: Debugging when you are blind</title>
-        <description>&lt;p&gt;Getting your first communications port up and running on an FPGA can be a &lt;em&gt;real&lt;/em&gt;
-challenge.  After you get your serial port up and running, you can then use it
-to get the next item up and running–since a serial port can provide a lot of 
-feedback.  But until you can read that feedback, how can you avoid
-&lt;a href=&quot;/blog/2017/05/19/fpga-hell.html&quot;&gt;FPGA hell&lt;/a&gt; long enough to
-get that first port up and running?&lt;/p&gt;
-
-&lt;h2 id=&quot;the-easy-way&quot;&gt;The easy way&lt;/h2&gt;
-
-&lt;p&gt;If you want to do things the easy way, then just connect your serial port logic
-to a known working
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Universal_asynchronous_receiver/transmitter&quot;&gt;UART&lt;/a&gt;
-simulator, such as &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/master/bench/cpp/uartsim.cpp&quot;&gt;this
-one&lt;/a&gt;,
-and examine the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD&lt;/a&gt;
-output until you get the right answers from the serial
-port.  As an example, consider the
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart/blob/master/bench/verilog/helloworld.v&quot;&gt;helloworld.v&lt;/a&gt;
-module, together with the
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart/blob/master/bench/cpp/helloworld.cpp&quot;&gt;helloworld.cpp&lt;/a&gt;
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt; driver,
-for inspiration on how you might do this.&lt;/p&gt;
-
-&lt;p&gt;Once your hello world design runs in the simulator, and once you get “Hello
-World” on the screen, you are reading for real hardware.&lt;/p&gt;
-
-&lt;p&gt;That’s the easy way.&lt;/p&gt;
-
-&lt;h2 id=&quot;building-your-own-simulator&quot;&gt;Building your own simulator&lt;/h2&gt;
-
-&lt;p&gt;But … what happens if you wish to communicate with your FPGA over something
-other than a serial port, and you have no serial port to bootstrap your
-efforts?&lt;/p&gt;
-
-&lt;p&gt;In that case, you’ll want to build your own simulator.&lt;/p&gt;
-
-&lt;p&gt;Since I’ve done this so often, I maintain a &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/sim/verilator/testb.h&quot;&gt;test bench C++
-class&lt;/a&gt;
-which I often use for wrapping the
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
-commands within a simulator. 
-While it doesn’t handle all of the
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
-code, it does handle most of it.  Still, there’s often quite a bit of work
-to be done.  You can see examples of simulators I’ve built for
-&lt;a href=&quot;https://github.com/ZipCPU/wbi2c/blob/master/bench/cpp&quot;&gt;I2C controller&lt;/a&gt;,
-a &lt;a href=&quot;https://github.com/ZipCPU/wbpmic/blob/master/bench/cpp&quot;&gt;PMod MIC controller&lt;/a&gt;,
-a &lt;a href=&quot;https://github.com/ZipCPU/sdspi/blob/master/bench/cpp&quot;&gt;SPI based SD-card controller&lt;/a&gt;,
-or even the &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/bench/cpp&quot;&gt;wishbone scope&lt;/a&gt;, which I hope to work our way up to in this blog.&lt;/p&gt;
-
-&lt;p&gt;I would also recommend making heavy use of the
-&lt;a href=&quot;http://www.cplusplus.com/refernce/cassert/assert/&quot;&gt;C assert&lt;/a&gt;
-statement any time your code &lt;em&gt;must&lt;/em&gt; do something.  For example, if you must
-wait at least 20 clocks from any request to the next, then count clocks within
-your simulator and
-&lt;a href=&quot;http://www.cplusplus.com/refernce/cassert/assert/&quot;&gt;assert&lt;/a&gt;
-that the time between accesses is less than 20.  Just be careful to make
-certain you flush any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD&lt;/a&gt;
-file you are creating before calling
-&lt;a href=&quot;http://www.cplusplus.com/refernce/cassert/assert/&quot;&gt;assert&lt;/a&gt;, lest
-you don’t get the data leading up to it.
-(The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/sim/verilator/testb.h&quot;&gt;test bench
-class&lt;/a&gt;
-was recently updated to handle this by default)&lt;/p&gt;
-
-&lt;p&gt;Once your code works in your simulated environment, the next step is to try
-it on the hardware.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-easy-move-to-hardware&quot;&gt;The Easy Move to Hardware&lt;/h2&gt;
-
-&lt;p&gt;The easy way of getting this next step going is to use an oscilloscope.  You’ll
-want to build a development board with particular “test-points” where you can
-hook up the probe for the scope, and see what’s going on.  Barring test points
-on the actual wires, sometimes you can use a general purpose I/O pin to become
-a test point.&lt;/p&gt;
-
-&lt;p&gt;This is also the expensive way.&lt;/p&gt;
-
-&lt;p&gt;I don’t own a scope, neither do I have the cash to design my own boards, so …
-enjoy this approach if you can do it.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-harder-way-to-get-hardware-working&quot;&gt;The Harder way to get Hardware Working&lt;/h2&gt;
-
-&lt;p&gt;The difficult part of this first task on your hardware is, how do you know
-what’s going on at high speed?  If you don’t have an Oscilloscope to measure
-that high speed interaction, if all you have are your LED’s and your clock,
-how shall you get to the next step?&lt;/p&gt;
-
-&lt;p&gt;The answer is to use your LED(s), just like we discussed when &lt;a href=&quot;/blog/2017/05/19/blinky.html&quot;&gt;building
-blinky&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Let’s take a look a some particular tests you can try.&lt;/p&gt;
-
-&lt;h2 id=&quot;look-for-whether-or-not-the-serial-port-is-getting-set&quot;&gt;Look for whether or not the serial port is getting set&lt;/h2&gt;
-
-&lt;p&gt;Your first question is going to be, am I even toggling the right wire, or
-vice versa, am I listening to the right wire?&lt;/p&gt;
-
-&lt;p&gt;In the case of a serial port, the line should idle high (at one) when nothing
-is being sent.  So anytime the line isn’t one is an event you are interested in,
-right?&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (!ck_uart)
-		counter &amp;lt;= 0;
-	else if (!counter[24])
-		counter &amp;lt;= counter + 1&#39;b1;
-assign	o_led = counter[24];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You did remember to use two flip flops to synchronize an asynchronous input,
-right?&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	r_uart &amp;lt;= i_uart;
-always @(posedge i_clk)
-	ck_uart &amp;lt;= r_uart;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Put together, this will turn your LED off if the UART line is ever active. 
-Once the character has been sent, the LED should idle high.  (This way you
-know the LED works …)  If the LED isn’t
-idling high, or if the line never goes low, then you know that you may be
-listening to the wrong wire.  If the LED never turns off, you might not
-have the right serial port coming out of your computer.&lt;/p&gt;
-
-&lt;p&gt;Incidentally, this test usually finds most of the UART problems that take
-place using code that passes the simulation test.&lt;/p&gt;
-
-&lt;h2 id=&quot;check-to-see-if-your-baud-rate-is-set-right&quot;&gt;Check to see if your baud rate is set right&lt;/h2&gt;
-
-&lt;p&gt;Since the start bit in any &lt;a href=&quot;https://en.wikipedia.org/wiki/Universal_asynchronous_receiver/transmitter&quot;&gt;serial port transaction is always
-zero&lt;/a&gt;, we should be able
-to check for whether or not that first clock stays low for a full baud duration
-as follows:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if ((counter[24])&amp;amp;&amp;amp;(!ck_uart))
-	begin
-		// If we are idle and something comes across the wire,
-		// start counting.
-		counter &amp;lt;= 0;
-		transitioned &amp;lt;= 1&#39;b0;
-	end else if (!counter[24])
-	begin
-		// While we are not yet idle, count up on the counter
-		// to something near a second ...
-		counter &amp;lt;= counter + 1&#39;b1;
-
-		// Set the bit_interval counter on *every* clock,
-		// up until the UART line goes high again
-		if (!transitioned)
-			bit_interval &amp;lt;= counter;
-
-		// When that first transition from zero happens, grab
-		// how long things had been low.
-		if ((ck_uart)&amp;amp;&amp;amp;(!transitioned))
-			transitioned &amp;lt;= 1&#39;b1;
-	end
-
-// Now that we have a bit_interval estimate, test it and set our LED
-always @(posedge i_clk)
-	o_led &amp;lt;= ((transitioned)&amp;amp;&amp;amp;&amp;amp;(bit_interval &amp;lt; ONE_AND_A_TENTH_BAUD)
-			&amp;amp;&amp;amp;(bit_interval &amp;gt; NINE_TENTHS_OF_A_BAUD));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This should help you discover what speed your port is transmitting at.  Just
-to check, send an “A” to the port.  Since “A” is represented by 8’d65, which
-is an odd number, and since serial ports transmit the
-&lt;a href=&quot;https://upload.wikipedia.org/wikipedia/commons/thumb/2/24/UART_timing_diagram.svg/800px&quot;&gt;LSB first&lt;/a&gt;, this should
-allow you to determine if you are within the baud rate you are expecting.
-If “A” doesn’t pass, but “B” does, then you’re baud rate is too slow.&lt;/p&gt;
-
-&lt;p&gt;This simple test &lt;em&gt;should&lt;/em&gt; find most of the rest of your problems.&lt;/p&gt;
-
-&lt;h2 id=&quot;check-to-see-if-you-are-discovering-any-characters-at-all&quot;&gt;Check to see if you are discovering any characters at all&lt;/h2&gt;
-
-&lt;p&gt;At this point, we turn from common and known problems to answering whether
-we can debug something … not so well known.  This example tests whether
-or not the serial port ever declares that a value has been read (i.e.,
-sets rx_stb high for one cycle).&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if ((counter[24])&amp;amp;&amp;amp;(!ck_uart))
-	begin
-		counter &amp;lt;= 0;
-		found &amp;lt;= 1&#39;b0;
-	end else if (!counter[24])
-	begin
-		if (rx_stb)
-			found &amp;lt;= 1&#39;b1;
-		counter &amp;lt;= counter + 1&#39;b1;
-	end else
-		counter[23:0] &amp;lt;= counter[23:0] + 1&#39;b1;
-
-assign	o_led = (found)&amp;amp;&amp;amp;(counter[23]);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Usually, though, if you’ve passed the simulation test, you’ll never have this
-problem.  Still, it can be useful to determine what’s going on.&lt;/p&gt;
-
-&lt;p&gt;Did you notice that we kept the bottom 24 bits of this counter counting,
-even after the 25th bit went high?  Or the fact that the LED was the AND
-of the found light and the 24th counter bit?  In other words, if anything
-was found, the light will blink.  If the UART line ever goes active, but
-rx_stb never goes high during this time frame, then the LED will stay off.&lt;/p&gt;
-
-&lt;h2 id=&quot;check-to-see-what-character-you-are-reading&quot;&gt;Check to see what character you are reading&lt;/h2&gt;
-
-&lt;p&gt;If you know you are receiving a character, but don’t know what it is, then …
-use the LED to find out!&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if ((counter[24])&amp;amp;&amp;amp;(!ck_uart))
-	begin
-		counter &amp;lt;= 0;
-	end else if (!counter[24])
-	begin
-		if (rx_stb)
-			read_data &amp;lt;= rx_data;
-		counter &amp;lt;= counter + 1&#39;b1;
-	end else
-		counter[23:0] &amp;lt;= counter[23:0] + 1&#39;b1;
-
-// If you don&#39;t have 8 LED&#39;s, there&#39;s no reason why you can&#39;t do this one
-// LED at a time ... it&#39;ll just take longer to do.
-assign	o_led[7:0] = read_data;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Of course, this solution depends upon your being able to display eight data bits
-on your LEDs at the same time.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-about-the-transmitter&quot;&gt;What about the transmitter?&lt;/h2&gt;
-
-&lt;p&gt;While the examples shown above apply to the UART receiver, there’s no reason
-why they cannot be turned around and made to work for the transmitter as well.
-You’ll probably want to check the transmitter output in the reverse order,
-though: first that it is getting something to send, then whether or not the
-baud rate is set right, etc.&lt;/p&gt;
-
-&lt;h2 id=&quot;possibilities-are-endless&quot;&gt;Possibilities are endless&lt;/h2&gt;
-
-&lt;p&gt;The number of ways you can set an LED as you work through a problem like
-this is endless.  There are just so many tests you can do.&lt;/p&gt;
-
-&lt;p&gt;Even still, … this approach has two problems:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;An LED can only give you one bit of information over the course of a 
-  quarter second or so … at best!  If you need more complete information
-  about what is going on within your design, getting it out via this means
-  will take a long time and may well turn into an exercise in frustration.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;LED’s can’t tell you what’s happening on a clock by clock basis.  While you
-  might be able to build a serial port without knowing this information, on
-  anything more complex this approach will become a challenge.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;So, stick around–how to use an FPGA to debug itself is the subject of this
-blog.&lt;/p&gt;
-</description>
-        <pubDate>Wed, 24 May 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/05/24/serial-port.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/05/24/serial-port.html</guid>
         
         
         <category>blog</category>
