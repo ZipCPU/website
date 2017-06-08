@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a Simple Wishbone Master</title>
+  <meta name="description" content="Explaining how to build a good wishbone controlled debugportmay take a couple of posts to do right.  Worse, it may take us a couple ofrounds just to get the ...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/08/simple-wb-master.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a Simple Wishbone Master</h1>
+    <p class="post-meta"><time datetime="2017-06-08T00:00:00-04:00" itemprop="datePublished">Jun 8, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Explaining how to build a good <a href="/blog/2017/06/05/wb-bridge-overview.html">wishbone controlled debug
+port</a>
+may take a couple of posts to do right.  Worse, it may take us a couple of
+rounds just to get the logic right, but let’s try anyway.</p>
+
+<table style="float: left"><caption>Fig 1: WB-UART Overview</caption><tr><td><img src="/img/wb-uart-smpl.svg" alt="Block Diagram of a Simpler Wishbone to UART converter" width="360" /></td></tr></table>
+
+<p>For this post, we’re going to concentrate on the wishbone bus master found
+at the bottom of the simplified UART to wishbone converter, as outlind in
+Fig 1.</p>
+
+<p>Hence, if the whole capability will eventually look like Fig 1, we’re only
+looking at the component at the very bottom within this post, and even then
+we’re only going to examine a simplified version of it.  We’ll leave the
+implementation of multiple transactions at once for a later date.</p>
+
+<p>My strategy for this blog post will be to come back and update it later
+with any updates or fixes, so (hopefully) any mistakes will get fixed over
+time.</p>
+
+<p>We are going to try to take this opportunity to build a simple wishbone bus
+master.  Before starting, you may wish to grab a copy of the
+<a href="http://opencores.org/opencores,wishbone">wishbone bus specification</a> and
+follow along in the
+<a href="http://opencores.org/cdn/downloads/wbspec_b4.pdf">B4 version</a>.</p>
+
+<p>You can find definitions for the various wishbone interface
+wires in chapter two.  We’re going to continue following our practice of
+prepending input wires with <strong>i_…</strong> and output wires with <strong>o_..</strong>, even
+though the specification appends similar notes.  We’re also going to add
+the <strong>_wb_</strong> designator to all of the inputs associated with the wishbone
+bus.  Hence, <strong>i_wb_ack</strong> will reference the return acknowledgement from
+the slave.</p>
+
+<p>Chapter three of the 
+<a href="http://opencores.org/cdn/downloads/wbspec_b4.pdf">spec</a> describes how the
+various wishbone wires compose a bus cycle.
+We’ll specifically be implementing the <em>pipelined bus cycle</em> (not the classic
+bus cycle), and we’re eventually going to build our implementation so that
+it can issue requests across the bus in a pipelined fashion as fast as the
+slave will allow it.</p>
+
+<p>If you are a visual learner, check out figures 3-6, and 3-8 from
+<a href="http://opencores.org/cdn/downloads/wbspec_b4.pdf">the specification</a>.
+I find these to be the most useful, as I’m explaining how the bus works.
+We’ll reserve the capability shown in Figures 3-11 and 3-13 for a later post.</p>
+
+<p>For today’s post, we’ll handle a single bus interaction per bus cycle, so
+the CYC line will be lowered between requests.  We’ll revisit this decision
+in a later post so that we can issue multiple requests of the bus at
+one request per clock, but that will be a later discussion.</p>
+
+<p>Further, you can see the code as we’re building it in the <a href="https://github.com/ZipCPU/icozip">ICO Zip
+repository</a>
+<a href="https://github.com/ZipCPU/icozip/blob/master/rtl/exbus/exsimple.v">here</a>.
+Since the <a href="https://github.com/ZipCPU/icozip">ICO Zip project</a> isn’t fully
+functional (yet), we’ll be building on the master branch.  That will also help
+to make sure our link references stay valid over time–even if we need to
+modify our files later.</p>
+
+<h2 id="the-control-interface">The Control Interface</h2>
+
+<p>The bus master interface we are building will ultimately be commanded from an
+external interface.  We’ve
+<a href="/blog/2017/06/05/wb-bridge-overview.html">already discussed</a>
+how that one might wish to do this over <a href="http://icoboard.org">ICO board</a>
+<a href="https://github.com/ZipCPU/icozip/blob/master/rtl/pptest">parallel port</a>,
+<a href="https://github.com/ZipCPU/wbuart32">UART</a>, SPI, or
+<a href="https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/jtagser.v">JTAG</a>. 
+Exactly which is used will be external to our bus master implementation.</p>
+
+<p>We’ll have to build up the functionality in our control interface 
+as we build up the whole interface.  The two sort of go together.</p>
+
+<p>For now, let’s handle all of our communication using 34-bit words.  We’ll use
+the top 2-bits of these 34-bit words for signaling, and then the bottom 32 for
+any values we wish to pass.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">input		i_reset;
+input		i_cmd_stb;
+input	[33:0]	i_cmd_word;
+output	reg	o_cmd_busy;</code></pre></figure>
+
+<p>Our input data word will be valid any time <strong>i_cmd_stb</strong> is valid, but it will only
+be accepted whenever <strong>o_cmd_busy</strong> is false.  Hence, when you read the code, you
+may find (<strong>i_stb</strong>)&amp;&amp;(!<strong>o_cmd_busy</strong>).  This will be the indication a
+request has been accepted.</p>
+
+<p>For now, we’ll just set <strong>o_cmd_busy</strong> to be true any time the bus is active.
+Eventually, we’ll want to take a peek at the next bus request, and drop 
+<strong>o_cmd_busy</strong> if the next request is one we are interested in.  For example,
+if we are busy doing something and the user requests a bus reset, we’ll
+need to drop the busy line and accept that request.</p>
+
+<p>For our command words, we’ll use the following definition to define how the
+34-bit control words will be interpreted:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>33</th>
+      <th>32</th>
+      <th>31 - 0</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>0</td>
+      <td>0</td>
+      <td>Read request, ignore the rest of the 32-bits, ACK on output</td>
+    </tr>
+    <tr>
+      <td>0</td>
+      <td>1</td>
+      <td>Write request, the 32-bit data contains the word to be written</td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>0</td>
+      <td>Set an address.  If bit 31 is set, we’ll add this value to the current bus address.  If bit 30 is set, the address will be incremented upon each bus access</td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>1</td>
+      <td>4’h0, 28’hxx, Bus Reset</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Our signaling scheme will allow us to issue a bus reset command, which will
+abruptly cause us to abandon any bus cycle we may be in the middle of.  To
+make this work, the bus reset request will need to override the busy flag.</p>
+
+<p>This is not the most efficient scheme.  For example, why send 34-bits when
+you are only going to pay attention to two of them (i.e. the read)?  Wouldn’t
+it make more sense to send a smaller number of bits for the read, together with
+the number of items you intend to read?  Yes, it would.  Optimizing this command
+word will be the subject of another post.</p>
+
+<p>The output of our bus will use (almost) the exact same approach.  We’ll create
+a <strong>o_cmd_stb</strong> signal that will be true any time the output references a
+valid codeword.  Unlike the input, though, we’ll ignore any flow control on the 
+output.  We can add some amount of flow control back in later with
+<a href="https://github.com/ZipCPU/zbasic/blob/master/rtl/wbufifo.v">a FIFO</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">input		o_cmd_stb;
+input		o_cmd_word;</code></pre></figure>
+
+<p>We’ll also borrow from the input codeword encoding for the return trip encoding,
+as shown below:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>33</th>
+      <th>32</th>
+      <th>31 - 0</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>0</td>
+      <td>0</td>
+      <td>Acknowledge a write.  The 32-bit value contains number of writes to acknowledge</td>
+    </tr>
+    <tr>
+      <td>0</td>
+      <td>1</td>
+      <td>Read response, the 32 data bits are the word that was read</td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>0</td>
+      <td>Acknowledge an address that has been set, with two zero bits and 30 address bits</td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>1</td>
+      <td> </td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>1</td>
+      <td>4’h0, 28’hxx, Bus Reset acknowledgement</td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>1</td>
+      <td>4’h1, 28’hxx, Bus Error</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 id="decoding-the-control-interface">Decoding the Control Interface</h2>
+
+<p>We have only four different types of command words in our code book.
+In the first section of our simple bus master, we’ll create
+flags to indicate which request is currently being made.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	i_cmd_addr = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b00);
+assign	i_cmd_rd   = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b10);
+assign	i_cmd_wr   = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b11);
+assign	i_reset    = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:28] == 6'b110000);
+// We'll use i_cmd_bus to capture whether we have a read or write request
+assign	i_cmd_bus  = (i_cmd_stb)&amp;&amp;(i_cmd_word[33]    == 1'b1);</code></pre></figure>
+
+<p>You may notice that I have violated my naming convention with these wires:
+I have named locally generated wires with an <strong>i_…</strong> prefix when they are
+not actual inputs to our bus master module, but rather the results of
+combinatorial logic applied to inputs.  In this case, it tends to work
+out, but it’s not something I’m regularly going to do.</p>
+
+<h2 id="the-wishbone-master-interface">The Wishbone Master Interface</h2>
+
+<p>This bus controller will have three basic states, as shown in Fig 2.</p>
+
+<table syle="float: none; align: center"><caption>Wishbone Master State Transition Diagram</caption><tr><td><img src="/img/wb-simple-master.svg" alt="Simple Bus Master state transition diagram" width="700" /></td></tr></table>
+
+<p>Here’s a quick description of each of those states:</p>
+
+<ul>
+  <li>
+    <p><em>IDLE</em>: When we are doing nothing, both CYC and STB must be low.  In this
+state, we’ll need to be responsive to incoming requests from the bus.
+Upon a request, we’ll need to set the request direction (<strong>o_wb_we</strong>),
+the data lines (<strong>o_wb_data</strong>) and then CYC and STB.</p>
+
+    <p>We’ll also set our address lines in this state, but without adjusting
+CYC or STB.</p>
+  </li>
+  <li>
+    <p><em>BUS REQUEST</em>: When CYC and STB are both high, a bus request is taking
+place.  This request phase lasts until <strong>i_wb_stall</strong> goes low, at
+which point our request has been accepted.</p>
+
+    <p>When we come back to this code later and transition it to handling multiple
+requests, we will transition from one request
+to the next any time <strong>o_wb_stb</strong> is true and <strong>i_wb_stall</strong> is false.</p>
+
+    <p>It is also possible that the acknowledgement might be received on the same
+clock the transaction was requested.  We’ll need to make certain we deal
+with this case.</p>
+  </li>
+  <li>
+    <p><em>BUS RESPONSE</em>: After making a request of the bus, we need to wait until
+the slave acknowledges it.  Every acknowledgement will lead us to sending
+another response across our command interface back up our command stream.
+More importantly, every read response will also need to carry the value
+read from the <strong>i_wb_data</strong> data lines in its payload.  We’ll need to
+make certain we return those back to the user.</p>
+
+    <p>Once the last acknowledgement is received, we can transition back to the
+idle state.</p>
+  </li>
+</ul>
+
+<p>There are a couple of exceptions to this model: if a bus error occurs, we’ll
+simply abandon the current transaction.  This approach has the inherent
+problem in it that acknowledgements may come back later and get mixed with
+another bus request.  For now, we’ll accept that risk and do it anyway,
+since it may be the only way to recover the bus if a peripheral is
+non-responsive.</p>
+
+<h3 id="simplified-overview">Simplified Overview</h3>
+
+<p>If you’re still somewhat new to digital design and coming from the
+software world, your first approach to building a Wishbone Bus Master might
+look something like the following:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_wb_cyc = 1'b0;
+initial	o_wb_stb = 1'b0;
+initial	newaddr  = 1'b0;
+initial	o_cmd_stb= 1'b0;
+always @(posedge i_clk)
+if ((i_reset)||(i_wb_err))
+begin
+	o_wb_cyc &lt;= 1'b0;
+	o_wb_stb &lt;= 1'b0;
+	o_cmd_busy   &lt;= 1'b0;
+	o_cmd_stb    &lt;= 1'b1;
+	newaddr &lt;= 0;
+
+	// Return over the command interface that we just had an error,
+	// or a bus reset
+	if (i_wb_reset)
+		o_cmd_word &lt;= `RSP_RESET;
+	else
+		o_cmd_word &lt;= `RSP_BUS_ERROR;
+end else if ((i_cmd_stb)&amp;&amp;(!o_cmd_busy))
+begin
+	//
+	// In the idle state
+	//
+	newaddr &lt;= 0;
+	if (i_cmd_addr)
+	begin
+		if (!i_cmd_word[31])
+			o_wb_addr &lt;= i_cmd_word[29:0];
+		else
+			o_wb_addr &lt;= i_cmd_word[29:0] + o_wb_addr;
+
+		inc &lt;= i_cmd_word[32];
+
+		// Acknowledge the new address -- on the next clock
+		// (after the add has completed)
+		newaddr &lt;= 1'b1;
+	end
+
+	if (newaddr)
+	begin
+		o_cmd_stb &lt;= 1'b1;
+		o_cmd_word &lt;= { `RSP_SUB_ADDR, 2'b00, o_wb_addr };
+	end
+
+	o_we &lt;= (i_cmd_wr);
+
+	// On a read or write request, activate the bus and go to the bus
+	// request state
+	if (i_cmd_bus)
+	begin
+		o_wb_cyc &lt;= 1'b1;
+		o_wb_stb &lt;= 1'b1;
+		o_cmd_busy   &lt;= 1'b1;
+	end
+
+	if (i_cmd_wr)
+		o_wb_data &lt;= i_cmd_word[31:0];
+end else if (o_wb_stb)
+begin
+	newaddr &lt;= 1'b0;
+	//
+	// BUS REQUEST state
+	//
+	// In the state where we are commanding the bus, and waiting for
+	// the bus request to be accepted
+	//
+	// o_wb_cyc will also be true here, since we cannot allow
+	// o_wb_stb to be true if o_wb_cyc is not true.  (Too many
+	// peripherals depend upon this bus simplification ...)
+	//
+	if (!i_wb_stall)
+	begin
+		// The request has been accepted, don't request again.
+		o_wb_stb  &lt;= 1'b0;
+		o_wb_addr &lt;= o_wb_addr + inc;
+
+		// If we get an ack on the same cycle as the request,
+		// quietly transition back to idle.
+		if (i_wb_ack)
+		begin
+			o_wb_cyc &lt;= 1'b0;
+			o_cmd_stb &lt;= 1'b1;
+			if (o_wb_we)
+				o_cmd_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+			else
+				o_cmd_word &lt;= { `RSP_SUB_DATA, i_wb_data };
+		end
+	end
+end else if (o_wb_cyc)
+begin
+	newaddr &lt;= 1'b0;
+	if (i_wb_ack)
+	begin
+		o_wb_cyc &lt;= 1'b0;
+		o_cmd_busy &lt;= 1'b0;
+		o_cmd_stb &lt;= 1'b1;
+		if (o_wb_we)
+			o_cmd_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+		else
+			o_cmd_word &lt;= { `RSP_SUB_DATA, i_wb_data };
+	end
+end</code></pre></figure>
+
+<p>From this view, the three states of the controller should be readily
+apparent.  The controller starts out idle, CYC=STB=0. 
+Once the controller receives a command, it
+moves to a bus request state to issue the command, CYC=STB=1.  Once the
+command has been issued, but before any response, it is in a bus wait state
+with CYC=1, STB=0.  When the final ACK comes back, we’ll go back to idle,
+CYC=STB=0.</p>
+
+<p>That’s how a wishbone master works.</p>
+
+<p>When I first sketch out a design, it often looks very similar to this giant
+always block above.  Perhaps it’s my software background.  I like to build
+one big always block with all the parts and pieces within it.  Indeed, my
+<a href="http://opencores.org/project,qspiflash">flash controller</a> is still built in
+this fashion, with one giant always block.</p>
+
+<p>Now that I’ve been doing this for a while, I’ve learned that breaking the
+big always block up into little blocks is easier on the FPGA.  For example,
+in this case, why should the address lines only get set when the new address
+command shows up <em>and</em> the reset is clear?</p>
+
+<p>For this reason, we’ll split up the always block into parts and pieces.</p>
+
+<h3 id="the-cyc-and-stb-lines">The CYC and STB Lines</h3>
+
+<p>The wishbone CYC and STB lines are so integrally connected, they
+tend to remain together no matter how the interface gets broken up.  Indeed,
+these two wires alone define which state we are in within our state space.
+Further, in the big always block above, few lines actually depend upon
+the reset line.  Hence, we’ll build their state diagram like this:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_wb_cyc = 1'b0;
+initial	o_wb_stb = 1'b0;
+always @(posedge i_clk)
+	if ((i_reset)||((i_wb_err)&amp;&amp;(o_wb_cyc)))
+	begin
+		// On any error or reset, then clear the bus.
+		o_wb_cyc &lt;= 1'b0;
+		o_wb_stb &lt;= 1'b0;
+	end else if (o_wb_stb)
+	begin
+		//
+		// BUS REQUEST state
+		//
+		if (!i_wb_stall)
+			// If we are only going to do one transaction,
+			// then as soon as the stall line is lowered, we are
+			// done.
+			o_wb_stb &lt;= 1'b0;
+
+		// While not likely, it is possible that a slave might ACK
+		// our request on the same clock it is received.  In that
+		// case, drop the CYC line.
+		//
+		// We gate this with the stall line in case we receive an
+		// ACK while our request has yet to go out.  This may make
+		// more sense later, when we are sending multiple back to back
+		// requests across the bus, but we'll leave this gate here
+		// as a placeholder until then.
+		if ((!i_wb_stall)&amp;&amp;(i_wb_ack))
+			o_wb_cyc &lt;= 1'b0;
+	end else if (o_wb_cyc)
+	begin
+		//
+		// BUS WAIT
+		//
+		if (i_wb_ack)
+			// Once the slave acknowledges our request, we are done.
+			o_wb_cyc &lt;= 1'b0;
+	end else begin
+		//
+		// IDLE state
+		//
+		if (i_cmd_bus)
+		begin
+			// We've been asked to start a bus cycle from our
+			// command word, either RD or WR
+			o_wb_cyc &lt;= 1'b1;
+			o_wb_stb &lt;= 1'b1;
+		end
+	end
+
+	// For now, we'll use the bus cycle line as an indication of whether
+	// or not we are too busy to accept anything else from the command
+	// port.  This will change if we want to accept multiple write
+	// commands per bus cycle, but that will be a bus master that's
+	// not nearly so simple.
+	assign	o_cmd_busy = o_wb_cyc;</code></pre></figure>
+
+<h3 id="the-write-line">The write line</h3>
+<p>We can significantly simplify the output bus write enable line.  Since we only
+accept commands when we are in the idle state, and we only transition to
+the bus request state on a read (or write) command, we can just simply leave
+this as:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if (!o_wb_cyc)
+			o_wb_we &lt;= (i_cmd_wr);</code></pre></figure>
+
+<p>Notice how much we just simplified this.</p>
+
+<p>The consequence of this simplification (and the many others like it) is that
+our code will be harder to read.
+The positive: because this line now uses fewer FPGA resources, there will
+be less logic between clocks, allowing you to (possibly) run your clock a 
+touch faster, and there will be fewer LUTs used to generate this line, allowing
+you to place more of what you care about onto your FPGA.</p>
+
+<h3 id="the-address-lines">The Address Lines</h3>
+
+<p>We remove the address lines from the big block simply because there’s no reason
+why the address line logic needs to depend upon the reset line.  On reset, we
+can allow the address (and the increment) to both come up undefined.  We’ll
+also keep our own internal new address variable in this block as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	//
+	// The bus ADDRESS lines
+	//
+	initial	newaddr = 1'b0;
+	always @(posedge i_clk)
+	begin
+		if ((i_cmd_addr)&amp;&amp;(!o_cmd_busy))
+		begin
+			// If we are in the idle state, we accept address
+			// setting commands.  Specifically, we'll allow the
+			// user to either set the address, or add a difference
+			// to our address.  The difference may not make sense
+			// now, but if we ever wish to compress our command bus,
+			// sending an address difference can drastically cut
+			// down the number of bits required in a set address
+			// request.
+			if (!i_cmd_word[31])
+				o_wb_addr &lt;= i_cmd_word[29:0];
+			else
+				o_wb_addr &lt;= i_cmd_word[29:0] + o_wb_addr;
+
+			//
+			// We'll allow that bus requests can either increment
+			// the address, or leave it the same.  One bit in the
+			// command word will tell us which, and we'll set this
+			// bit on any set address command.
+			inc &lt;= i_cmd_word[30];
+		end else if ((o_wb_stb)&amp;&amp;(!i_wb_stall))
+			// The address lines are used while the bus is active,
+			// and referenced any time STB &amp;&amp; !STALL are true.
+			//
+			// However, once STB and !STALL are both true, then the
+			// bus is ready to move to the next request.  Hence,
+			// we add our increment (one or zero) here.
+			o_wb_addr &lt;= o_wb_addr + , inc};
+
+
+		// We'd like to respond to the bus with any address we just
+		// set.  The goal here is that, upon any read from the bus,
+		// we should be able to know what address the bus was set to.
+		// For this reason, we want to return the bus address up the
+		// command stream.
+		//
+		// The problem is that the add (above) when setting the address
+		// takes a clock to do.  Hence, we'll use "newaddr" as a flag
+		// that o_wb_addr has a new value in it that needs to be
+		// returned via the command link.
+		newaddr &lt;= ((i_cmd_addr)&amp;&amp;(!o_cmd_busy));
+	end</code></pre></figure>
+
+<h3 id="the-output-data-lines">The output data lines</h3>
+
+<p>Those output data lines can be set just like the write enable line.  Only,
+this time, we don’t care what the lines are set to when we are reading.
+Hence, we’ll set them upon any request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	begin
+		// This may look a touch confusing ... what's important is that:
+		//
+		// 1. No one cares what the bus data lines are, unless we are
+		//	in the middle of a write cycle.
+		// 2. Even during a write cycle, these lines are don't cares
+		//	if the STB line is low, indicating no more requests
+		// 3. When a request is received to write, and so we transition
+		//	to a bus write cycle, that request will come with data.
+		// 4. Hence, we set the data words in the IDLE state on the
+		//	same clock we go to BUS REQUEST.  While in BUS REQUEST,
+		//	these lines cannot change until the slave has accepted
+		//	our inputs.
+		//
+		// Thus we force these lines to be constant any time STB and
+		// STALL are both true, but set them otherwise.
+		//
+		if ((!o_wb_stb)||(!i_wb_stall))
+			o_wb_data &lt;= i_cmd_word[31:0];
+	end</code></pre></figure>
+
+<p>Since we are setting 32 outputs, the logic savings is much greater than the
+savings from simplifying just the one <strong>o_wb_we</strong> line.</p>
+
+<h3 id="the-output-result">The output result</h3>
+
+<p>We also need to return a result back up the command chain.  This result will
+be dependent upon what has taken place.  It could be:</p>
+
+<ul>
+  <li>
+    <p>An acknowledgement of a bus reset request</p>
+  </li>
+  <li>
+    <p>A notification of a bus error</p>
+  </li>
+  <li>
+    <p>An acknowledgement of a new address, or a value that has been written</p>
+  </li>
+  <li>
+    <p>Or (finally) the result of any data  read from the bus.</p>
+  </li>
+</ul>
+
+<p>Because of all of these possibilities, it takes a bit of logic to set this
+right.  Remember, <strong>o_cmd_stb</strong> will be true any time <strong>o_cmd_word</strong> has valid
+information, and that the <strong>o_cmd_word</strong> wires are don’t cares any time
+<strong>o_cmd_stb</strong> is low.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_reset)
+	begin
+		o_cmd_stb &lt;= 1'b1;
+		o_cmd_word &lt;= `RSP_RESET;
+	end else if (i_wb_err)
+	begin
+		o_cmd_stb &lt;= 1'b1;
+		o_cmd_word &lt;= `RSP_BUS_ERROR;
+	end else if (o_wb_cyc) begin
+		//
+		// We're either in the BUS REQUEST or BUS WAIT states
+		//
+		// Either way, we want to return a response on our command
+		// channel if anything gets ack'd
+		o_cmd_stb &lt;= (i_wb_ack);
+		//
+		//
+		if (o_wb_we)
+			o_cmd_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+		else
+			o_cmd_word &lt;= { 2'b01, i_wb_data };
+	end else begin
+		//
+		// We are in the IDLE state.
+		//
+		// Echo any new addresses back up the command chain
+		//
+		o_cmd_stb  &lt;= newaddr;
+		o_cmd_word &lt;= { 2'b10, 2'b00, o_wb_addr };
+	end</code></pre></figure>
+
+<h2 id="a-not-so-simplified-wishbone-master">A Not-So Simplified Wishbone Master</h2>
+
+<p>If you’ve along so far, you may notice we’ve left a lot of capabilities
+we want in our bus master on the floor:</p>
+
+<ul>
+  <li>
+    <p>There’s no means for sending multiple write commands without dropping CYC
+between them.  This will break our flash controller, so we’ll have to come
+back and fix this.</p>
+  </li>
+  <li>
+    <p>There’s no means for reading from (or writing to) multiple consecutive
+addresses in one
+transaction.  That’s really useful for getting us on and off the bus
+quickly.  We’ll need to come back to this later.</p>
+  </li>
+  <li>
+    <p>There are a lot of times when the bits in our 34-bit codeword are going
+unused.  For example, why transmit 34-bits to our device just to send
+a reset, when only six of those 34 bits are ever used to decode a reset?
+Why send a 30’bit address offset, when you are just adding it to the current
+address?</p>
+  </li>
+</ul>
+
+<p>If we want a really good wishbone master interface that’s fully featured,
+we’ll need to come back and fix these things.  For now, let’s move on to the
+next piece in our command wishbone bridge.</p>
+
+<h2 id="examples">Examples</h2>
+
+<p>Now that you know the basic pieces of any wishbone bus master, here’s a list
+of some example wishbone bus master’s that I’ve built that you might find
+worth referencing:</p>
+
+<ul>
+  <li>
+    <p>Instruction fetch: <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">one word at a
+time</a>,
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v">two at a
+time</a>, and
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">using a
+cache</a>.</p>
+  </li>
+  <li>
+    <p>CPU memory stage: <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/memops.v">one word at a time
+time</a>, and
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pipemem.v">pipelined</a>.</p>
+  </li>
+  <li>
+    <p>A <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v">direct memory access (DMA)
+controller</a>.</p>
+  </li>
+  <li>
+    <p>A [similar UART-WB bridge](
+(https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v).</p>
+  </li>
+</ul>
+
+<h2 id="next-steps">Next Steps</h2>
+
+<p>You can find prior posts in this series on the <a href="/topics.html">site
+topics</a> page.  You can also see from 
+<a href="/topics.html">that page</a> where I’m hoping to go next.</p>
+
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/blog/2017/06/08/simple-wb-master.html";
+  this.page.identifier="/blog/2017/06/08/simple-wb-master";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Servants, be obedient to them that are your masters according to the flesh, with fear and trembling, in singleness of your heart, as unto Christ (Eph 6:5)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
