@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Minimizing FPGA Resource Utilization</title>
+  <meta name="description" content="There have now been several projects I’ve worked on where I’ve butted upagainst the maximum resource utilization of an FPGA chip.  If you ask amanager how to...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/12/minimizing-luts.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Minimizing FPGA Resource Utilization</h1>
+    <p class="post-meta"><time datetime="2017-06-12T00:00:00-04:00" itemprop="datePublished">Jun 12, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>There have now been several projects I’ve worked on where I’ve butted up
+against the maximum resource utilization of an FPGA chip.  If you ask a
+manager how to deal with this problem, they will think you need a bigger FPGA.
+This answer is problematic, though, for two primary reasons:</p>
+
+<ul>
+  <li>
+    <p>If you already have your board designed, built, and tested–perhaps even in
+production, and you wish to add features to the board, you will be stuck
+with the FPGA resources that you already have.  Building or even just
+assembling a new board with a bigger FPGA can be an expensive proposition.</p>
+  </li>
+  <li>
+    <p>I’m a hobbyist.  I typically can’t afford a bigger FPGA</p>
+  </li>
+</ul>
+
+<p>At times like these, a thorough code scrubbing can often help you squeak that
+last Lookup-Table (LUT) out of your FPGA.  To do that, I’ve come up with
+several strategies for reducing my LUT count on an FPGA.</p>
+
+<h2 id="what-is-a-lut">What is a LUT?</h2>
+
+<p>A LUT is a Look-Up Table.  Modern FPGA’s are built out of
+large arrays of these lookup tables.  Using a lookup table, you can build
+any logic you want–so long as you don’t exceed the number of elements in the
+lookup table.</p>
+
+<p>As an example, the <a href="https://www.xilinx.com/support/documentation/user_guides/ug474_7Series_CLB.pdf">7-series Xilinx FPGAs</a> are composed of
+“configurable logic blocks”, each of which contain two “slices”, of
+which each of those “slices” contain four 6-input LUTs.  Each of these
+LUT’s can handle either one six input lookup, or two five input lookups–as
+long as the two share the same inputs.</p>
+
+<p>The <a href="https://www.altera.com/content/dam/altera-www/global/en_US/pdfs/literature/hb/cyclone-iv/cyciv-51002.pdf">Altera Cyclone IV</a>,
+on the other hand, has only 4-input LUTs.</p>
+
+<p>The point being that every FPGA implements your logic via a combination of
+LUTs.</p>
+
+<p>Chips differ by the capability of their LUTs, as well as by the number of LUTs
+on board.  In general, the more LUTs you have, the more logic your chip can do,
+but also the more your FPGA chip is going to cost.  It’s all a tradeoff.</p>
+
+<p>To get the most logic for a given price, the FPGA design engineer needs to be
+able to code efficiently, and pack their code into the fewest LUTs possible.</p>
+
+<h2 id="the-zipcpu-and-the-s6soc">The ZipCPU and the S6SoC</h2>
+
+<p>When the <a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a> was first built, it only
+supported 32-bit
+<a href="https://en.wikipedia.org/wiki/Byte">bytes</a>.  This meant that the smallest
+unit of individually addressable memory was the full bus size: 32-bits. 
+This has all kinds of consequences when you wish to operate on 8-bit values,
+or when computer code depends upon 4*sizeof(char)==sizeof(int).</p>
+
+<p>In my case, the light dawned when I realized that I would need to rewrite the 
+entire <a href="http://sourceware.org/newlib">C-library</a> to support 32-bit bytes, that
+the <a href="https://en.wikipedia.org/wiki/Dhrystone">Dhrystone benchmark</a> depended upon
+8-bit bytes (<a href="https://github.com/ZipCPU/zipcpu/blob/master/doc/orconf.pdf">Ref</a>),
+that <a href="https://en.wikipedia.org/wiki/Coremark">Coremark</a> also depended upon
+8-bit bytes.  Figuring that this was only the tip of the iceberg regarding the
+problems I was going to have, I then decided to <em>byte</em> the bullet and add
+byte-wise addressing instructions to the
+<a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a>.</p>
+
+<p>The problem with this was that the <a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a>
+already worked and worked well on some very small FPGA’s, and the
+Spartan 6/LX4 on the
+<a href="http://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module">CMod S6</a> was
+<a href="https://github.com/ZipCPU/s6soc">one of them</a>.
+With only 2400 six-input LUTs to work with in total, and only about 50 to
+spare, could
+the additional logic necessary to fit the new instructions fit onto the
+<a href="http://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module">S6</a>?</p>
+
+<p>I actually set my goals higher.  Not only did I want the new instructions to
+fit, but I wanted to make some other upgrades as well.  Most of these other
+upgrades surrounded the slow flash speed.  Because the S6/LX4 has hardly
+any RAM, almost all of the instructions had to fit within the flash.  Flash
+access, however, is <em>slow</em>.  Hence, when I started my upgrades, the ZipCPU
+took 52 clocks per instruction when running from the flash.  Ouch!  Could
+something be done about this as well?</p>
+
+<p>So these were my goals:</p>
+
+<ul>
+  <li>
+    <p>The obvious: I wanted to be able to support the extra 8-bit byte instructions:
+LH (load halfword), SH (store halfword), LB (load byte), and SB (store byte).</p>
+  </li>
+  <li>
+    <p>I also wanted to upgrade the <a href="https://github.com/ZipCPU/s6soc">S6SoC</a>
+to be able to use the compressed instruction
+set extension of the ZipCPU.  Using that extension, the assembler can
+(sometimes) pack two instructions into one instruction word.  If the
+<a href="https://github.com/ZipCPU/s6soc">S6SoC</a> could be made to handle these
+instructions, then I wouldn’t need to compile two versions of the C-library:
+one using and one without using these instructions.</p>
+  </li>
+  <li>
+    <p>I wanted to upgrade the fetch routine, so that it could handle fetching two
+words at a time.</p>
+
+    <p>Because of the way the QSPI flash is set up, the first word you fetch from
+flash
+will always cost 22 flash clocks.  The first six of those are for the address,
+the next 8 to allow the flash to look up your address, and then another
+eight to read the data back out.  Since I was generating a clock signal from
+logic, the flash actually ran at half that speed, costing me 
+44 clocks every time I wished to fetch an instruction.  At the time, the
+<a href="https://github.com/ZipCPU/s6soc">S6SoC</a> had absolutely no pipelining,
+so it was always fetching a new instruction after executing every instruction.</p>
+
+    <p>If I could fetch two instructions at a time, that would
+cost only 60 clocks, and yet provide me with two instruction words.
+This should raise the instruction speed from one instruction every 52 clocks
+to one instruction every 38 clocks or so.</p>
+  </li>
+  <li>
+    <p>I wanted to update the flash controller so that it would work off of a
+80MHz flash clock instead of a 40MHz flash clock.  Basically, I wanted to
+run the flash at the speed of the rest of the FPGA.  Since the flash was
+rated for 100MHz, this shouldn’t be a problem, right?</p>
+
+    <p>This should reduce the number of clocks necessary to load two instructions
+from 60 clocks to 30, speeding the instruction issue rate up to about one
+instruction every 2 clocks.</p>
+
+    <p>In the end, supporting the compressed instructions got me down to one
+instruction every 18 clocks, but I’m getting ahead of myself.</p>
+  </li>
+</ul>
+
+<p>As the update went along, things went so well I started to get greedy.  So, I
+added more goals to my upgrade:</p>
+
+<ul>
+  <li>
+    <p>Now, I wanted to add the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/div.v">divide
+unit</a> into the
+design</p>
+  </li>
+  <li>
+    <p>I wanted a <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/cpuops.v">full
+multiply</a></p>
+  </li>
+  <li>
+    <p>I also wanted to partially pipeline <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">the CPU
+itself</a>.  I
+still wanted to avoid the
+expensive collision detection logic, but partially pipelining the CPU would
+speed the CPU up another 60% (5 clocks per ALU instruction down to 3)</p>
+  </li>
+</ul>
+
+<p>In the end, I got everything I wanted save the LOCK instruction.  (The LOCK
+instruction holds the bus cycle line high while reading a value, running one
+ALU operation on it, and then writing the value back.  It’s also useful
+for atomically reading 64-bit values.)</p>
+
+<h2 id="strategies-to-reduce-logic-usage">Strategies to Reduce Logic Usage</h2>
+
+<p>Here’s how I managed to fit so many upgrades into 2400 LUTs, given that I was
+already using 2345 of them.  (Yes, that’s right, on a device with 2400 LUTs,
+I managed to use <em>all</em> of them.)</p>
+
+<p>Here are some of the strategies I’ve used over time to keep my LUT usage
+down:</p>
+
+<h3 id="start-by-counting-your-logic">Start by counting your logic.</h3>
+
+<p>Your design tools should be able to tell you how many LUTs you are using.
+Some tools will even break this out nicely between design modules, helping
+you to focus on the part that needs work.</p>
+
+<p>Find out how to do this, and then track your work throughout your design.</p>
+
+<p>While one strategy is to set your sites on the biggest components, I also
+got a lot of savings by looking at how many LUTs were consumed by the smaller
+components as well.  When you are starting out at 2345 LUTs out of 2400,
+<em>every LUT matters</em>.</p>
+
+<p>Now, understand that the synthesizer is going to try to map all of your logic
+into LUTs.  Every LUT can handle some number of inputs.  Look up what your
+hardware’s definition of a LUT is, and then <em>count</em> the number of
+inputs to every flip-flop in your design.  Count the number of wires to
+each flip-flop enable, and the number of alternatives within every block. 
+Work to bring that number down to eight or less if possible, and you’ll be
+amazed at how well your design will handle both fitting onto your device,
+as well as the speed of the logic you can achieve using your logic.</p>
+
+<p>So, for some simple numbers to think about with respect to <a href="https://www.xilinx.com/support/documentation/user_guides/ug474_7Series_CLB.pdf">Xilinx’s CLB
+structure</a>:</p>
+
+<ul>
+  <li>
+    <p>5 inputs: If you can get your logic down to five inputs or less, you might
+be able to share a LUT with wires within a group</p>
+  </li>
+  <li>
+    <p>6 inputs: Anything that requires six inputs will require one LUT.  Be aware
+of busses of logic all requiring 6-inputs … you are likely to need one
+LUT for every input in that bus.</p>
+  </li>
+  <li>
+    <p>7 inputs: Requires two LUTs and a 7-Mux.  This still fits within one slice,
+so it doesn’t impact your timing (much) yet.</p>
+  </li>
+  <li>
+    <p>8 inputs: Requires four LUTs and n 8-input mux.  This still fits within 
+one slice</p>
+  </li>
+  <li>
+    <p>9 inputs and more: These don’t fit nicely into a LUT, nor do they fit nicely
+into a set of four LUTs, and so the synthesis
+tool is going to have to try to figure out how to string LUTs together to
+accomplish your logic.  If your logic isn’t an add, subtract, or compare
+that can use the carry chain, you may wish to do your best to avoid this
+amount of logic.</p>
+  </li>
+</ul>
+
+<p>As you go through your logic: <em>force every LUT to justify its existence</em>.</p>
+
+<h3 id="use-block-ram-anywhere-you-can">Use block RAM anywhere you can.</h3>
+
+<p>Look for memories that are implemented in LUTs, and turn them into block RAMs.
+Anywhere you can do this will yield an <em>amazing</em> savings.
+Indeed, switching from LUTs to block RAM has often been the difference between
+failure and success in my designs.</p>
+
+<p>For example, the following logic isn’t likely to make it into block RAM:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (A)
+		mem[addrA] &lt;= valA;
+	else if (B)
+		mem[addrB] &lt;= valB;
+	else if (C)
+		mem[addrC] &lt;= valC;</code></pre></figure>
+
+<p>However, with a couple simple manipulations, you can often trade a clock of
+delay for the capability you need.  The following, for example, will fit in
+Block RAM:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// Capture the logic we need ...
+always @(posedge i_clk)
+	wr &lt;= ((A)||(B)||(C));
+always @(posedge i_clk)
+	if (A)
+	begin
+		wAddr &lt;= addrA;
+		wData &lt;= valA;
+	end else if (B)
+	begin
+		wAddr &lt;= addrB;
+		wData &lt;= valB;
+	end else if (C)
+	begin
+		wAddr &lt;= addrC;
+		wData &lt;= valC;
+	end
+
+// So we can implement it with simplicity on the next clock,
+// using block RAM.
+always @(posedge i_clk)
+	if (wr)
+		mem[wAddr] &lt;= wData;</code></pre></figure>
+
+<p>This was an important part of getting my
+<a href="https://github.com/ZipCPU/sdspi">SD-SPI</a> and
+<a href="https://github.com/ZipCPU/openarty/blob/master/enetpackets.v">RMII ethernet</a>
+modules to work, although it didn’t help the
+<a href="https://github.com/ZipCPU/s6soc">S6SoC</a> in particular.  Still, it allowed
+me to run the SD-SPI controller with a 200MHz clock – so lowering your LUT
+usage is likely to increase your maximum speed as well.</p>
+
+<h3 id="be-very-aware-of-nested-ifs">Be very aware of nested if’s</h3>
+
+<p>My first attempt at any design tends to look like a giant if-then-else logic
+block handling states and state transitions.  They’re just too easy to
+understand and follow.  As an example, the <a href="/blog/2017/06/08/simple-wb-master.html">simple wishbone
+master</a>
+controller we built the other day started
+with a giant always block with several conditions.</p>
+
+<p>The problem with these large logic blocks is that there are often states where
+you don’t care what certain values are for some variables.  In these cases,
+you can simplify the logic for those states.</p>
+
+<p>For example, imagine something like ….</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (RESET)
+begin
+	valid &lt;= 1'b0;
+	B &lt;= 0; /// Really a don't care
+end else if (CE)
+begin
+	valid &lt;= (input is valid);
+	B &lt;= (... something of value);
+end</code></pre></figure>
+
+<p>Let’s count this logic:  Each of the bits in valid and B depend upon both RESET
+and CE, hence a minimum of one LUT each.  Further, the flip-flop clock enable
+line also requires a LUT for each flip flop.  So, we’re talking about 2 LUTs
+for the valid signal, and another 2 LUTs <em>for every bit in B</em>.</p>
+
+<p>If the only value that really depends upon the RESET is the valid signal,
+which indicates whether or not B contains a valid value, why must B be set
+on reset?  In this case, you want to separate your logic into multiple logic
+blocks, often one block per variable.  You can then end up with something
+like …</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (RESET)
+	valid &lt;= 1'b0;
+else if (CE)
+	valid &lt;= (input is valid);
+
+always @(posedge i_clk)
+if (CE)
+	B &lt;= (... something of value);</code></pre></figure>
+
+<p>If CE is a simple wire by itself, and not composed of more logic resources,
+than it won’t cost any LUTs to calculate.  Likewise if the value you wish to
+store in B comes from already calculated logic on your board, then you have
+just spared yourself one LUT for every wire in B.  Even if there are several
+inputs to the wires in B, if you just managed to drop from 6-inputs to five
+for each wire, then you may have dropped the number of LUTs used to calculate
+B in half.</p>
+
+<p>The impact of this can be significant.</p>
+
+<p>Two examples of updated and simplified logic would be my <a href="https://github.com/ZipCPU/s6soc/qflashxpress.v">simplified QSPI
+flash controller</a> when
+compared with the giant always block in <a href="https://github.com/ZipCPU/s6soc/blob/master/rtl/wbqspiflash.v">basic flash
+controller</a>.
+Even though the simplified controller can only handle read requests,
+its amazingly light on the logic.</p>
+
+<p>Likewise, my recent rewrite of my 
+<a href="https://github.com/ZipCPU/wbuart32">UART</a>
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/txuart.v">transmitter</a>
+and
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/rxuart.v">receiver</a>
+saved me many LUTs by breaking up the logic in that big always block.
+Perhaps you might enjoy looking through the
+GIT history of this <a href="https://github.com/ZipCPU/wbuart32">UART controller</a>,
+to see how easy they were to read <a href="https://github.com/ZipCPU/wbuart32/commit/e157c6e110e84f418514c7617db80519f5bba6ca">back when they used a massive state
+transition block</a>, and then to compare that with what they look like today.</p>
+
+<h3 id="reduce-your-requirements-if-you-can">Reduce your requirements if you can</h3>
+
+<p>Very few UART controllers truly need to handle 5, 6, and 7-bit words, parity,
+break setting and detection, parity error and frame error detection, hardware
+flow control, and so forth.  If you know your application well, and
+you have code in your application that is designed to handle things that will
+never happen, then <em>remove that code</em>.</p>
+
+<p>In my case, the 
+<a href="https://github.com/ZipCPU/wbuart32">UART</a>
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/txuart.v">transmitter</a>
+and
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/rxuart.v">receiver</a>
+had way more functionality than I needed.  So, I built a lighter UART
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/txuartlite.v">transmitter</a>
+and
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/rxuartlite.v">receiver</a>
+with only the capabilities I would ever use.
+Since I had long since removed the UART
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/ufifo.v">FIFO</a>,
+there wasn’t much more I could after that.</p>
+
+<p>The point being, if you’ve over designed your product–remove the
+all that extra, unused, logic when you get tight on resources.</p>
+
+<h3 id="avoid-bit-selects-if-you-can">Avoid bit selects if you can</h3>
+
+<p>I made a lot of adjustments to the
+<a href="https://github.com/ZipCPU/s6soc/blob/master/rtl/cpu/div.v">divide unit</a>
+to get it to fit.  Most of these adjustments followed the advice above,
+but one very powerful adjustment was also to get rid of a statement like …</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">if (lots_of_conditions)
+	o_quotient[current_bit] &lt;= (logic to calculate a bit);</code></pre></figure>
+
+<p>and, with some understanding that every bit needed to be set anyway, I was
+able to rearrange that statement into,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">if (lots of conditions)
+	o_quotient &lt;= { o_quotient[30:0], (logic to calculate a bit) };</code></pre></figure>
+
+<p>Think about the LUT usage required to implement this statement.  The first
+statement requires
+many LUTs <em>per bit</em> to determine not only whether that bit is going to be set,
+but also what the bit will be set to.  The second example still requires some
+LUTs to determine whether or not <em>a</em> bit is going to be set, but those LUTs
+can be shared across all bits.  Further, only the bottom bit has to have the
+special set of LUTs to determine what the bit needs to be set to.</p>
+
+<p>That one optimization by itself saved me many, many LUTs.  In the end, I think
+I saved about 100 LUTs out of a 300 LUT component, but you can look at the
+<a href="https://github.com/ZipCPU/s6soc/commits/master/rtl/cpu/div.v">git log</a> to see
+the details of the other changes that were made along the way.</p>
+
+<h3 id="manage-your-reset-logic">Manage your Reset Logic</h3>
+
+<p>If you follow <a href="https://www.xilinx.com/support/documentation/white_papers/wp272.pdf">Xilinx’s
+ guidance</a>,
+they would highly recommend against having
+a global reset.  They explain pretty clearly how it impedes all of the logic
+within your design.</p>
+
+<p>In my own implementations, such as within the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">ZipCPU</a>, I
+tend to create _valid lines stating whether or not a group of logic lines
+is actually valid.  These lines then get the reset signal, while all the other
+logic ignores it.  Indeed, many of my
+<a href="/projects.html">ZipCPU implementations </a>
+don’t use a global (or even a local) reset at all.  Sure, the CPU has
+a reset line … but I usually leave it unconnected, and instead command the
+reset from some amount of local logic.  For example, both the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbwatchdog.v">watchdog timer</a>
+and the debug port can command a reset.  Further, on a really small design
+with no debug port (i.e., the <a href="https://github.com/ZipCPU/s6soc">S6SoC again</a>),
+I used a button for that purpose.</p>
+
+<h3 id="application-specific-optimizations">Application Specific Optimizations</h3>
+
+<p>Some optimizations, though, are by nature application specific.  A good
+example of this is a <a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR
+filter</a>
+I built some time ago in support of my
+<a href="/projects.html">universal resampling project</a>.  (Any
+rate in, to any lower rate out, out of band rejection greater than 70 dB, etc.)
+When building <a href="https://en.wikipedia.org/wiki/Finite_impulse_response">the FIR</a>,
+I couldn’t afford to use block RAM’s to hold the coefficients—cause there was
+no time for a RAM lookup: every coefficient needed to be used on every clock. 
+The entire design, though, needed to run at the full clock rate.</p>
+
+<p>So, I made each tap settable from a single address that would push
+them all through memory–like a giant shift register.  Still, this was too
+much logic.</p>
+
+<p>In the end, even that wasn’t enough: I had to go farther so as to fix the
+FIR taps with constant values within the filter.  Because of the nature
+and structure of the resampling problem, this approach worked.</p>
+
+<p>I then managed to reduce the logic required even further by forcing the filter
+to be symmetric.  Indeed, the <a href="https://en.wikipedia.org/wiki/Parks-McClellan_filter_design_algorithm">Parks-McClellan filter design
+algorithm</a>,
+used for designing my lowpass anti-aliasing filters, <em>only</em> designs
+such <a href="https://en.wikipedia.org/wiki/Linear_phase">linear phase</a> (i.e. symmetric)
+filters anyway.  Thus, with this trick, I was able to use half as many
+hardware multiplies.</p>
+
+<p>Looking over my taps, I then realized I could do more since some of the taps
+were zero, some had only only one bit set in their coefficient, and since the
+mid-point was already scaled to (2^N-1) so as to be able to use a subtract
+instead of a multiply.</p>
+
+<p>If DSP usage is an issue, you might wish to consider this approach.</p>
+
+<h3 id="keep-large-comparisons-out-of-state-transition-logic">Keep large comparisons out of state transition logic</h3>
+
+<p>Don’t place large comparisons in your state transition diagrams if you
+don’t need to.</p>
+
+<p>As an example, the logic below compares A against a 32-bit value, <em>and</em>
+C against a 24-bit value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	A &lt;= A + 1'b1;
+always @(posedge i_clk)
+	C &lt;= C + 7;
+
+always @(posedge i_clk)
+if (A == 32'h00)
+	B &lt;= iB;
+else if (C == 24'h084)
+	B &lt;= ~B;</code></pre></figure>
+
+<p>If we are smart about things, we can move the comparison one clock earlier
+and calculate intermediate values.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	zA &lt;= &amp;A;
+always @(posedge i_clk)
+	mC &lt;= (C == 24'h081);</code></pre></figure>
+
+<p>These two intermediate values then relieve the stress on the set for the
+value of B,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (zA)
+	B &lt;= iB;
+else if (mC)
+	B &lt;= ~B;</code></pre></figure>
+
+<p>This was another technique that I used when simplifying the onboard
+<a href="https://github.com/ZipCPU/wbuart32">UART</a>.
+To see how it works, look at the baud counter logic within the
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/rxuartlite.v">receiver</a>,
+and pay attention to the <strong>zero_baud_counter</strong> logic.  At one time, the
+state diagram had depended upon tests for whether or not
+<strong>baud_counter</strong> was zero.  You can see from the 
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/rxuartlite.v">receiver</a>
+source how not only was the <strong>baud_counter</strong> logic removed from the main
+always loop, but the <strong>zero_baud_counter</strong> logic was removed as well.
+Now, the main loop only references the <strong>zero_baud_counter</strong> logic
+strobe to know when to step the logic forward by one.</p>
+
+<h3 id="if-all-else-fails-ask-for-help">If all else fails, ask for help</h3>
+
+<p>Finally, if all else fails, ask  someone with more experience to look over
+your code.  Perhaps they might see something you are missing?</p>
+
+<p>On second thought … maybe not.  They might tell me that the way I format my
+code is all wrong.</p>
+
+<h2 id="testing-the-changes">Testing the changes</h2>
+
+<p>Since one focus of this blog is on testing and debugging, how did I manage to
+prove that these new changes worked?</p>
+
+<p>First, all of these changes were tested initially within a simulation. 
+My favorite simulation test was to see if I could get the
+<a href="https://github.com/ZipCPU/s6soc">S6SoC</a> to
+run all the way from boot up to sending <a href="https://github.com/ZipCPU/s6soc/blob/master/sw/wlibc/hello.c">Hello
+World</a>
+out the serial port.</p>
+
+<p>Second, the new instruction set also included special NOOP encodings.  These
+allow me to place NOOPs into the code that will then cause the simulator
+to print to the screen, whether it be characters, strings, register values,
+or a full register dump.  The same code, when run within the hardware, would
+just ignore these NOOP instructions.  These allowed me, when using the
+simulator, to “debug by printf” all over the place.</p>
+
+<p>Third, the
+<a href="https://github.com/ZipCPU/s6soc/blob/master/sim/verilator/zip_sim.cpp">simulator</a>
+also printed out a lot of trace information.  This was useful for tracing back
+memory values that hadn’t been set appropriately all the way back to when they
+were set.  Further, by matching the trace timing with
+<a href="http://gtkwave.sourceforge.net">GTKwave</a>’s timing, I was able to look up,
+using <a href="http://gtkwave.sourceforge.net">GTKwave</a>,
+any values that weren’t printed in the trace to find the problem.</p>
+
+<p>Finally, for the bugs the first two items didn’t catch, I did have a
+<a href="https://github.com/ZipCPU/wbscope">wishbone scope</a> on board.  Since I didn’t
+have room on board for my favorite debug interface, I set the
+<a href="https://github.com/ZipCPU/zipcpu">CPU</a> up so that
+on any reset (button press) it would <a href="https://github.com/ZipCPU/s6soc/blob/master/sw/dev/resetdump.s">dump the
+values</a> of the
+scope and the register values on startup (these weren’t cleared on reset). 
+While the result is that the
+<a href="https://github.com/ZipCPU/s6soc/blob/master/sw/wlibc/hello.c">Hello World</a>
+program’s output doesn’t start
+out looking pretty, I can also use that startup output to find whatever caused
+the CPU to halt and need to be restarted manually.</p>
+
+<p>So, it was all doable and straight forward.  Indeed, even today, if you don’t
+have the
+<a href="http://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module">CMod S6</a>,
+you can still test how the <a href="https://github.com/ZipCPU/s6soc">S6SoC</a> would run
+on that
+<a href="http://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module">CMod S6</a>
+by using <a href="https://github.com/ZipCPU/s6soc/trunk/blob/master/sim/verilator/zip_sim.cpp">the simulator</a>.</p>
+
+<h2 id="how-did-it-work">How did it work?</h2>
+
+<p>The changes outlined above were the difference between success and failure,
+between getting the updated <a href="https://github.com/ZipCPU/s6soc">S6SoC</a>
+working with the new instruction set
+<em>and the compressed instruction extension</em>, or being able to abandon that
+hardware (and my bragging rights) entirely.  Had I not made the optimizations
+above, I might never have gotten the CPU to work with 8-bit bytes, and hence
+I might’ve never had C-library support.  Now, however, not only does the CPU
+run with 8-bit byte support, but it also has a <a href="https://github.com/ZipCPU/zipcpu/blob/master/core/div.v">divide
+unit</a>, and runs 3x
+faster than it ever did before.</p>
+
+<p>What does all this mean?  If I disable illegal instruction detection for the
+LOCK instruction, then I can play <a href="https://github.com/ZipCPU/tttt">4x4x4 Tic-Tac-Toe</a> on my <a href="http://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module">CMod
+S6</a>.</p>
+
+<p>So is minimizing LUT usage important?</p>
+
+<p>Tell me your experiences!</p>
+
+  </div>
+
+</article>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Ponder the path of thy feet, and let all thy ways be established. (Prov 4:26)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
