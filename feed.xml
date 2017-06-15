@@ -6,9 +6,502 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 15 Jun 2017 10:28:01 -0400</pubDate>
-    <lastBuildDate>Thu, 15 Jun 2017 10:28:01 -0400</lastBuildDate>
+    <pubDate>Thu, 15 Jun 2017 17:58:57 -0400</pubDate>
+    <lastBuildDate>Thu, 15 Jun 2017 17:58:57 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>How to send our bus results back out the serial port</title>
+        <description>&lt;p&gt;This post starts to complete the design of a very elementary debug port that
+can be used to command an internal, on-board, wishbone bus.  Other posts in
+this series include:&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: DBG Port Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;An overview of a UART to wishbone
+bridge&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to build a &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;Simple Wishbone Master&lt;/a&gt;, and&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create bus command words from a 7-bit data stream&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;We’ve slowly been building up to the implementation of a WB-UART component,
+such as that in Fig 1.&lt;/p&gt;
+
+&lt;p&gt;A this point, we’ve now described how to get a serial port up and running,
+how to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create words from the serial
+stream&lt;/a&gt;, and
+&lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;how to control a simple wishbone bus
+master&lt;/a&gt;
+from the command words running through this stream.  We are very close to having
+a working debug bus–since we can add the FIFOs and interrupts in later if
+we have to.&lt;/p&gt;
+
+&lt;p&gt;This lesson is about what it takes to turn the response words from the bus
+master into a characters that will be sent out the output transport.  The
+output transport, as you will recall, has a functionality similar to a
+serial port.  Indeed, it might be a serial port, although it doesn’t need
+to be.&lt;/p&gt;
+
+&lt;h2 id=&quot;stream-timing&quot;&gt;Stream timing&lt;/h2&gt;
+
+&lt;p&gt;Before we start, though, let’s examine how to handle stream timing.  Our
+problem is that we will be generating words to be sent out of our serial
+port at a rate that is much faster than the port can handle.  We’re going to
+want to make certain that these response words are not lost–in spite of the
+speed differential.&lt;/p&gt;
+
+&lt;p&gt;Earlier, we described &lt;a href=&quot;2017/06/02/generating-timing.html&quot;&gt;how to build a strobe type of
+signal&lt;/a&gt;.  For our purposes here, the
+strobe signal was one that was valid for a single clock only.  Here, we are
+also going to use a busy signal.  The two signals will work together in the
+following way: the strobe will indicate a desire to send a word downstream,
+while the busy response from the next component will be used to indicate that
+the downstream component is not ready to receive.  To deal with this, once we
+set our strobe we will continue to hold it high (request data be sent)
+until the downstream components busy but is cleared.&lt;/p&gt;
+
+&lt;p&gt;Conditions for moving forward will therefore look something like …&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
+	....&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This condition will be true any time we accept a request to send a word.&lt;/p&gt;
+
+&lt;p&gt;Likewise, there is a similar condition on the downstream side of any stream
+component:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;if ((o_dw_stb)&amp;amp;&amp;amp;(!i_tx_busy))
+	....&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Prefixes will change depending upon which side of the link we are on, or
+which components we are using, but the logic is going to be the same every
+time.&lt;/p&gt;
+
+&lt;p&gt;Now, with that out of the way, we can disassemble our words into a serial
+port output channel.&lt;/p&gt;
+
+&lt;h2 id=&quot;breaking-words-into-nibbles&quot;&gt;Breaking Words into nibbles&lt;/h2&gt;
+
+&lt;p&gt;The trick to making any stream processing work is to only do a little bit of
+processing at each step.  Hence for our first step, we turn our response
+word into bytes.&lt;/p&gt;
+
+&lt;p&gt;There are a couple primary variables to make this work.  The first one is
+the word buffer, &lt;strong&gt;r_word&lt;/strong&gt;.  This buffer holds what is left of our response
+word that has not yet been sent.  The next variable is the &lt;strong&gt;r_len&lt;/strong&gt; word
+that holds how many valid nibbles remain in our &lt;strong&gt;r_word&lt;/strong&gt; register.&lt;/p&gt;
+
+&lt;p&gt;Hence, on any new incoming word, as long as we are not busy, we send
+a nibble noting the top two bits (Read data, write acknowledgement, etc.), and
+we note that the register now has eight
+nibbles within it.  In the case of any special words, we instead send the top
+five bits of the command word and nothing more.  Other protocols would work
+as well, this is just what we are going to choose.&lt;/p&gt;
+
+&lt;p&gt;Here’s the big always blog for what we want to do.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+	begin
+		// On reset, clear our variables
+		r_word &amp;lt;= 0;
+		r_len  &amp;lt;= 0;
+		o_dw_stb  &amp;lt;= 1&#39;b0;
+		o_dw_bits &amp;lt;= 5&#39;h0;
+	end else if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
+	begin			
+		// If we are not busy, then load a new command
+		// into our buffer to be sent
+		r_word &amp;lt;= i_word[31:0];
+		r_len  &amp;lt;= 4&#39;h8;
+
+		o_dw_stb &amp;lt;= 1&#39;b1;
+		o_dw_bits &amp;lt;= { 3&#39;b100, i_word[33:32] };
+		if (i_word[33:32]==2&#39;b11)
+		begin
+			// If this is a special command,
+			// grab all top 5-bits to output
+			// them
+			o_dw_bits &amp;lt;= i_word[33:29];
+			r_len &amp;lt;= 4&#39;h0;
+		end else if (i_word[33:32] == 2&#39;b01)
+		begin // On an ACK, print only the &#39;K&#39;
+			// and nothing more
+			r_len &amp;lt;= 4&#39;h0;
+		end
+	end else if ((o_dw_stb)&amp;amp;&amp;amp;(!i_tx_busy))
+	begin
+		// Our last byte was accepted, move to the next one
+		if (r_len != 4&#39;h0)
+		begin
+			o_dw_stb  &amp;lt;= 1&#39;b1;
+			o_dw_bits &amp;lt;= { 1&#39;b0, r_word[31:28] };
+			r_word &amp;lt;= { r_word[27:0], 4&#39;h0 };
+			r_len  &amp;lt;= r_len - 1&#39;b1;
+		end else
+			o_dw_stb  &amp;lt;= 1&#39;b0;
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll simplify this giant always block by first removing the reset logic
+from it.  Indeed, the only things that need reset logic are the &lt;strong&gt;r_len&lt;/strong&gt;
+and &lt;strong&gt;o_dw_stb&lt;/strong&gt; registers.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+if (i_reset)
+begin
+	r_len &amp;lt;= 0;
+	o_dw_stb &amp;lt;= 0;
+end else if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
+begin
+	o_dw_stb &amp;lt;= 1&#39;b1;
+	if (i_word[33:32]==2&#39;b11)
+		r_len &amp;lt;= 4&#39;h0;
+	else
+		r_len &amp;lt;= 4&#39;h8;
+end else if (!i_tx_busy)
+begin
+	o_dw_stb &amp;lt;= (r_len != 4&#39;h0);
+	if (r_len != 4&#39;h0)
+		r_len &amp;lt;= r_len - 1&#39;b1;
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You should find this logic identical to the big always block above.&lt;/p&gt;
+
+&lt;p&gt;The rest of our logic, to include all the various wires associated with
+the word register &lt;strong&gt;r_word&lt;/strong&gt; can then be drastically simplified.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+// No reset logic needed
+if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
+begin
+	// On any new word, set the result
+	r_word &amp;lt;= i_word;
+end else if (!i_tx_busy)
+	// Whenever we aren&#39;t busy, a new nibble is accepted
+	// and the word shifts.  If we never set our output
+	// strobe, this will never become busy, but if the
+	// register isn&#39;t in use, there&#39;s no penalty to clearing
+	// it repeatedly.
+	r_word &amp;lt;= { r_word[27:0], 4&#39;h0 };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Even the outputs may be set quite simply.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
+begin
+	if (i_word[33:32] == 2&#39;b11)
+		o_dw_bits &amp;lt;= i_word[33:29];
+	else
+		o_dw_bits &amp;lt;= { 3&#39;b100, i_word[33:32] };
+end else if (i_tx_busy)
+	o_dw_bits &amp;lt;= { 1&#39;b0, r_word[31:28] };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;If you look over the difference between what we started with and where we
+ended up, there’s a lot of differences.  All of these differences translate
+into fewer resources in our output.  They can basically be summarized by this:
+if you don’t care the what the value of a register is under certain conditions,
+then don’t make that register depend upon those conditions.  Remember, the
+resources used by a piece of logic can be (roughly) calculated by the number
+of inputs that piece of logic requires.&lt;/p&gt;
+
+&lt;h2 id=&quot;turning-nibbles-into-characters&quot;&gt;Turning nibbles into characters&lt;/h2&gt;
+
+&lt;p&gt;The next step on the output process is to turn this stream of nibbles into
+output characters.  This is almost a pure lookup table, but the stream
+logic keeps it from being quite that.&lt;/p&gt;
+
+&lt;p&gt;The stream logic consists of paying attention to the busy and strobe flags
+to determine when we have an output to send.  In particular, if we are not
+busy and a request is made of us, we’ll forward it down the line.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if ((i_stb)&amp;amp;&amp;amp;(!o_gx_busy))
+		// On a new request, send it forward
+		o_gx_stb &amp;lt;= 1&#39;b1;
+	else if (!i_busy)
+		o_gx_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Since we don’t have more than a single clock’s worth of processing to do here,
+we can just set the busy bit to be the same as our output strobe bit.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	o_gx_busy = o_gx_stb;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The real work is in the lookup table.  When given a value between 5’h0 and
+5’hf, we just send the hexadecimal output.  Values with the 5’h10 bit set
+indicate we need to send a special character.  You can see the special
+characters we support below.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if ((i_stb)&amp;amp;&amp;amp;(!o_gx_busy))
+	begin
+		case(i_bits)
+		5&#39;h00: o_gx_char &amp;lt;= &quot;0&quot;;
+		5&#39;h01: o_gx_char &amp;lt;= &quot;1&quot;;
+		5&#39;h02: o_gx_char &amp;lt;= &quot;2&quot;;
+		5&#39;h03: o_gx_char &amp;lt;= &quot;3&quot;;
+		5&#39;h04: o_gx_char &amp;lt;= &quot;4&quot;;
+		5&#39;h05: o_gx_char &amp;lt;= &quot;5&quot;;
+		5&#39;h06: o_gx_char &amp;lt;= &quot;6&quot;;
+		5&#39;h07: o_gx_char &amp;lt;= &quot;7&quot;;
+		5&#39;h08: o_gx_char &amp;lt;= &quot;8&quot;;
+		5&#39;h09: o_gx_char &amp;lt;= &quot;9&quot;;
+		5&#39;h0a: o_gx_char &amp;lt;= &quot;a&quot;;
+		5&#39;h0b: o_gx_char &amp;lt;= &quot;b&quot;;
+		5&#39;h0c: o_gx_char &amp;lt;= &quot;c&quot;;
+		5&#39;h0d: o_gx_char &amp;lt;= &quot;d&quot;;
+		5&#39;h0e: o_gx_char &amp;lt;= &quot;e&quot;;
+		5&#39;h0f: o_gx_char &amp;lt;= &quot;f&quot;;
+		//
+		5&#39;h10: o_gx_char &amp;lt;= &quot;R&quot;;	// Read response w/data
+		5&#39;h11: o_gx_char &amp;lt;= &quot;K&quot;;	// Write ACK
+		5&#39;h12: o_gx_char &amp;lt;= &quot;A&quot;;	// Address was set
+		5&#39;h13: o_gx_char &amp;lt;= &quot;S&quot;;	// Special
+		//
+		5&#39;h18: o_gx_char &amp;lt;= &quot;T&quot;;	// reseT
+		5&#39;h19: o_gx_char &amp;lt;= &quot;E&quot;;	// BUS Error
+		5&#39;h1a: o_gx_char &amp;lt;= &quot;I&quot;;	// Interrupt
+		5&#39;h1b: o_gx_char &amp;lt;= &quot;Z&quot;;	// I&#39;m here, but slping
+		default: o_gx_char &amp;lt;= 8&#39;hd;	// Carriage return
+		endcase
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Unknown characters just get quietly turned into carriage returns, which
+the next module turns into carriage return and newline pairs (CR/NL).&lt;/p&gt;
+
+&lt;h2 id=&quot;adding-carriage-returns-and-newlines-to-the-stream&quot;&gt;Adding Carriage Returns and Newlines to the Stream&lt;/h2&gt;
+
+&lt;p&gt;The final step is to add a carriage return/newline pair to our output stream
+any time it becomes idle.  This will assist any buffered software following
+that might depend upon the end of a line before forwarding the data received.&lt;/p&gt;
+
+&lt;p&gt;To do this, we’ll create a new stream component in our processing chain.
+Any characters given to this stream will just send their characters back
+out the port.  But, if the port is idle we’ll insert a carriage return into
+the stream.  Then, any time a carriage return is sent out, we’ll set a register
+&lt;strong&gt;last_cr&lt;/strong&gt; to indicate that we’ve sent one carriage return, and don’t need
+to send it again.  This value will clear upon any new and valid data from
+the port.&lt;/p&gt;
+
+&lt;p&gt;The next state variable we’ll use is &lt;strong&gt;cr_state&lt;/strong&gt;.  This variable will be
+set at anytime &lt;strong&gt;last_cr&lt;/strong&gt; is set, and we’ll clear it upon sending a newline.&lt;/p&gt;
+
+&lt;p&gt;Put together, any time we enter our newline state, we’ll set &lt;strong&gt;last_cr&lt;/strong&gt; and
+set &lt;strong&gt;cr_state&lt;/strong&gt;.  After the carriage return is sent, we’ll send a newline
+and clear &lt;strong&gt;cr_state&lt;/strong&gt;.  We’ll then stay in that state until anything
+else is sent through the port.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+	begin
+		// On reset, act as though we&#39;ve already sent
+		// a CR/NL pair
+		cr_state &amp;lt;= 1&#39;b0;
+		last_cr  &amp;lt;= 1&#39;b0;
+		o_nl_stb &amp;lt;= 1&#39;b0;
+	end else if ((i_stb)&amp;amp;&amp;amp;(!o_nl_busy))
+	begin
+		// On any input, set the last_cr bit if it was
+		// a carriage return, and clear it otherwise. 
+		// Clear the cr_state bit either way.
+		o_nl_stb  &amp;lt;= i_stb;
+		o_nl_byte &amp;lt;= i_byte;
+		cr_state &amp;lt;= 1&#39;b0;
+		last_cr &amp;lt;= (i_byte[7:0] == 8&#39;hd);
+	end else if ((o_nl_busy)&amp;amp;&amp;amp;(!i_busy))
+	begin
+		// If we&#39;ve just sent something, let&#39;s check
+		// if we need to send a cr/newline pair
+		if (!last_cr)
+		begin
+			// We haven&#39;t sent a carriage
+			// return.  So, send it if the
+			// input is idle.
+			cr_state  &amp;lt;= (!i_stb);
+			o_nl_byte &amp;lt;= 8&#39;hd;
+			last_cr   &amp;lt;= (!i_stb);
+			o_nl_stb  &amp;lt;= (!i_stb);
+		end else if (cr_state)
+		begin
+			// We&#39;ve sent the carriage
+			// return, but not the newline.
+			// Send the newline now.
+			cr_state  &amp;lt;= 1&#39;b0;
+			o_nl_byte &amp;lt;= 8&#39;ha;
+			o_nl_stb  &amp;lt;= 1&#39;b1;
+		end else
+			// Idle the channel
+			o_nl_stb  &amp;lt;= 1&#39;b0;
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;h2 id=&quot;future-posts&quot;&gt;Future Posts&lt;/h2&gt;
+
+&lt;p&gt;There, that’s all there is to it!  You now know how to take a response word
+from the wishbone bus master, and how to send that result back out a serial
+port.&lt;/p&gt;
+
+&lt;p&gt;While we’ve just about presented all of the components, and while you almost
+have a usable bus at this point, we’re not there yet.  Some particular
+functionality remains missing.  This includes:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Adding interrupt notifications to the response stream&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Adding idle notifications to let you know you are connected to the right
+stream&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a simple wishbone interconnect&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a software bus controller&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Now that our controller is nearly complete, though, these will be much simpler
+topics.  We’ll come back to them in future posts.&lt;/p&gt;
+</description>
+        <pubDate>Thu, 15 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/15/words-back-to-bytes.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/15/words-back-to-bytes.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>No PI for you</title>
+        <description>&lt;p&gt;FPGA’s can handle simple things well, and they handle simple things fast.
+Other things like &lt;a href=&quot;https://en.wikipedia.org/wiki/Pi&quot;&gt;PI&lt;/a&gt;
+(&lt;a href=&quot;https://www.angio.net/pi/digits/100000.txt&quot;&gt;3.141592653…&lt;/a&gt;) are harder to
+deal with.  How then shall phase be dealt with within an FPGA, and in what
+units?&lt;/p&gt;
+
+&lt;p&gt;The mathematicians will define phase in units of
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Radian&quot;&gt;Radians&lt;/a&gt;, with values ranging
+between zero and 2PI.  Further, the units are periodic, so anything outside
+of the range between zero and 2PI may be brought into the range by adding
+as many 2PI values as necessary.&lt;/p&gt;
+
+&lt;p&gt;Others will define phase as a number between 0 and
+360 degrees.&lt;/p&gt;
+
+&lt;p&gt;Both refer to the same thing–the measure of time within a
+periodic waveform from the beginning of the period.&lt;/p&gt;
+
+&lt;p&gt;While Radians may be the natural units of phase (angles), they are not the
+first choice of the FPGA designer.  Why not?&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;FPGA’s need to have a known number of bits to represent something.  If you
+allocate enough bits to handle 0 to 8 (containing 0 to 2PI, or 6.28..),
+you’ll have a difficult time dealing with 16PI.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Radian&quot;&gt;Radians&lt;/a&gt; have
+roll over problems.  While both PI and 3PI/2 are valid angles
+between 0 and 2PI, their sum is outside of the
+range between 0 and 2PI.  Before you can use this out-of-range value,
+and before you can add any more phase increments to it, the number must be
+normalized by subtracting 2PI from it to get it back into the range of
+0 to 2PI.&lt;/p&gt;
+
+    &lt;p&gt;This will cost you a clock, and slow any algorithm you are building down by
+a factor of two.&lt;/p&gt;
+
+    &lt;p&gt;It will also only work if your wander into the range between 2PI and
+4PI, but not between 50PI and 52PI.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;FPGA’s can’t really handle numbers between 0 and 1.&lt;/p&gt;
+
+    &lt;p&gt;This problem is so common and the solution so well known that aspiring FPGA
+DSP engineers might just multiply the values from 0 to PI by 2^N and consider
+that the solution without ever thinking twice.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;While these might seem like viable solutions, a better approach
+to dealing with angles exists.&lt;/p&gt;
+
+&lt;h2 id=&quot;a-better-unit-for-angles&quot;&gt;A Better Unit for Angles&lt;/h2&gt;
+
+&lt;p&gt;A simpler and better angular unit choice is simply to map the range from 0
+to 2PI onto the integer interval from 0 to 2^N-1.  This can then be represented
+with an N-bit number.&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;fpga_val = floor( theta * 2^N / (2PI) + 0.5)
+&lt;/code&gt;&lt;/pre&gt;
+&lt;/div&gt;
+
+&lt;p&gt;What’s neat about this approach to angles within an FPGA is that rollover
+is handled naturally, with no other logic required.&lt;/p&gt;
+
+&lt;p&gt;Consider how one might add PI to 3PI/2.  We’ll use N=8, and so we’ll be
+representing angles with to within a degree or two.  Hence,
+our expression becomes 8’h80 plus 8’hc0.  If you add these two values together,
+and throw out any rollover, you get the value 8’h40.&lt;/p&gt;
+
+&lt;p&gt;Notice from this example how we didn’t need to waste a clock to bring our
+results back within limits.  Neither were we restricted to only integer
+Radian values, even though we did our calculation with integers.&lt;/p&gt;
+
+&lt;p&gt;Even better, FPGA’s are often optimized for integer arithmetic.  Hence,
+angular adjustments made in this fashion become easy and simple.&lt;/p&gt;
+
+&lt;h2 id=&quot;generating-sine-or-cosine&quot;&gt;Generating Sine or Cosine&lt;/h2&gt;
+
+&lt;p&gt;Depending upon your needs, you can easily convert this angle to a sine and
+cosine value.&lt;/p&gt;
+
+&lt;p&gt;For example, you could use the top bit as your sine wave value, and get a
+square wave out with no more work.  This was the approach used by the &lt;a href=&quot;https://github.com/ZipCPU/wbfmtx&quot;&gt;wishbone
+controlled FM transmitter hack&lt;/a&gt; in order
+to transmit an FM signal from an FPGA.&lt;/p&gt;
+
+&lt;p&gt;You could also use the top several bits as an index into a table, and so build
+a direct digital synthesizer.&lt;/p&gt;
+
+&lt;p&gt;Even slicker is to use your angle as an input to a &lt;a href=&quot;http://www.andraka.com/files/crdcsrvy.pdf&quot;&gt;CORDIC
+algorithm&lt;/a&gt;.  In that
+case, you can use this angle as an input to generate a sine wave or cosine
+wave.  You can also use the &lt;a href=&quot;http://www.andraka.com/files/crdcsrvy.pdf&quot;&gt;CORDIC
+algorithm&lt;/a&gt;
+to multiply by sine and cosine (at the same time), or take arc-tangents.
+If you like this idea, you ought to know that the &lt;a href=&quot;http://www.andraka.com/files/crdcsrvy.pdf&quot;&gt;CORDIC
+algorithm&lt;/a&gt; can be pipelined so
+as to operate at one input/output per clock–with no throughput loss, such as
+you would’ve had were you using either
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Radian&quot;&gt;Radians&lt;/a&gt; or
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Degree_(angle)&quot;&gt;degrees&lt;/a&gt; as your angular units.&lt;/p&gt;
+
+&lt;p&gt;Gosh, the &lt;a href=&quot;http://www.andraka.com/files/crdcsrvy.pdf&quot;&gt;CORDIC algorithm&lt;/a&gt; is just
+&lt;em&gt;so&lt;/em&gt; useful, we might need to write a post on it by itself.&lt;/p&gt;
+
+&lt;p&gt;Coming back to our topic, though, all of these approaches to generating sine
+waves work nicely … but only if you use the right angular units.&lt;/p&gt;
+</description>
+        <pubDate>Thu, 15 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/dsp/2017/06/15/no-pi-for-you.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/06/15/no-pi-for-you.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>How to create bus command words, from a 7-bit data stream</title>
@@ -2708,416 +3201,6 @@ around&lt;/a&gt; and we’ll discuss how to build one.&lt;/p&gt;
         <pubDate>Sat, 03 Jun 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/06/03/building-sidewalks.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/03/building-sidewalks.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Controlling Timing within an FPGA</title>
-        <description>&lt;p&gt;Within an FPGA, everything is based upon event based timing.  SPI controllers
-require a logic generated clock, I2C controllers have some maximum limit they
-can communicate at, UART controllers run at some user defined baud rate …
-everything wants to communicate at a carefully controlled speed.&lt;/p&gt;
-
-&lt;p&gt;Here we’ll discuss a couple ways to create the timing you need.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-power-of-two-clock-divider&quot;&gt;The Power of Two Clock Divider&lt;/h2&gt;
-
-&lt;p&gt;The first approach I will use to timing events is usually a clock divider.
-It’s just too simple and too easy to build to ignore.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	counter;
-always @(posedge i_clk)
-	counter &amp;lt;= counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Using this approach, your clock will be nicely divided by an even 2^N.
-Hence, if you attach an LED to &lt;strong&gt;counter[(N-1)]&lt;/strong&gt; you’ll have the slower clock
-you need.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-simple-clock-divider&quot;&gt;The Simple Clock Divider&lt;/h2&gt;
-
-&lt;p&gt;A very common beginners task is to create a 1kHz, 100Hz, or even a 10 Hz clock
-from your input clock.  Since these are not the result of dividing your clock
-by 2^N, a different approach is necessary.&lt;/p&gt;
-
-&lt;p&gt;Suppose for example that your system clock were at 100MHz.  You’d then need to
-divide it by 10M if you wanted to get a 10Hz clock.  This is easily done with
-a more generic clock divider circuit.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	counter;
-always @(posedge i_clk)
-	if (counter &amp;lt; THRESHOLD-1&#39;b1)
-		counter &amp;lt;= counter + 1&#39;b1;
-	else
-		counter &amp;lt;= 0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As before, you can then use &lt;strong&gt;counter[N-1]&lt;/strong&gt; as an LED driver, and you will
-have divided your clock by whatever value you set THRESHOLD to be.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-strobe-signal&quot;&gt;The Strobe Signal&lt;/h2&gt;
-
-&lt;p&gt;The problem with the simple clock dividers above is that the clock signal is N
-bits wide, and the top bit may be one for many clocks and zero for many clocks.
-How shall you make your logic work only once in all those clocks?&lt;/p&gt;
-
-&lt;p&gt;As a first rule, &lt;em&gt;do not drive your logic like this&lt;/em&gt;:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge counter[N-1])
-	begin
-		// DON&#39;T DO THIS
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This will cause you all kinds of grief, either leading you to an unreliable
-design, or forcing you to deal with multiple clock domains, clock domain
-transfers, and worse.  Unless you really know what you are doing … don’t
-use this approach.&lt;/p&gt;
-
-&lt;p&gt;When I first started building FPGA designs, I would check for zero within
-whatever state machine logic I had that was going to rely upon my new clock.
-As a result, I tended to use something like this instead:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (counter == 0)
-	begin
-		// Don&#39;t do this
-	end else if (some_other_condition)
-	begin
-		// Other logic goes here
-	end else if ...&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;My problem was that I then needed to come back later and rebuild all this
-logic.  While it worked, it required more LUTs than was actually necessary, and
-it couldn’t be clocked at any high speed.&lt;/p&gt;
-
-&lt;p&gt;So … don’t do it this way either.&lt;/p&gt;
-
-&lt;p&gt;One way to understand the problem with this approach is to count the cost of
-your logic.  This cost may be estimated by
-the number of inputs necessary to create any of your logic registers. 
-The larger the number of inputs, the more LUTs will be required to implement
-it, the slower the logic will take.  Having
-an N-bit wide clock driving a lot of logic just adds N-1 unnecessary bits to
-complicate things.  As a result, while this approach will work (and did for me
-for many years), it’ll only work for FPGA logic with a slow &lt;strong&gt;i_clk&lt;/strong&gt;
-frequency.&lt;/p&gt;
-
-&lt;p&gt;The better alternative is even simpler, and there’s no reason not to use it.&lt;/p&gt;
-
-&lt;p&gt;Instead of testing for (counter == 0) within your logic, create a
-strobe signal.  We’ll call our strobe signal &lt;strong&gt;ck_stb&lt;/strong&gt;:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	ck_stb &amp;lt;= (counter == THRESHOLD-1&#39;b1);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;What makes this signal so useful is that it will only ever be on for one clock
-period at a time, and that one clock period will be the period that you need to
-do something.  As a result, you will then only need to check whether or not
-&lt;strong&gt;ck_stb&lt;/strong&gt; is true whenever you need to do something, rather than all
-&lt;strong&gt;N&lt;/strong&gt; bits of &lt;strong&gt;counter&lt;/strong&gt;.&lt;/p&gt;
-
-&lt;p&gt;The next step is to build your logic so that it transitions on this strobe:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (ck_stb)
-	begin
-		// Build your logic this way instead
-	end else if (some_other_condition)
-	begin
-	end else if ...&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You can find an example of this within my &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/tree/master/rtl&quot;&gt;WBUART cores&lt;/a&gt;.  Look for the variables &lt;strong&gt;baud_counter&lt;/strong&gt;
-and &lt;strong&gt;zero_baud_counter&lt;/strong&gt; within either the transmitter or receiver
-modules.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-fractional-clock-divider&quot;&gt;The Fractional Clock Divider&lt;/h2&gt;
-
-&lt;p&gt;What if you need to divide your clock by 3.1415926535…?  Not a problem.
-You can accomplish this using a fractional clock divider.  The result will
-look something like:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[15:0]	counter;
-always @(posedge i_clk)
-	{ ck_stb, counter } &amp;lt;= counter + 16&#39;h517d;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Ok, so … there’s a couple pieces to doing this that are worth discussing in order to understand it.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;How does this work?  Well, consider what happens after 2^16 clocks … you’ll have 16’h517d transitions.  Hence, you’ve divided your clock by 16’h517d or &lt;em&gt;about&lt;/em&gt; by pi.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The &lt;strong&gt;ck_stb&lt;/strong&gt; signal will be set anytime this counter rolls over.  Because &lt;strong&gt;ck_stb&lt;/strong&gt; isn’t used to calculate the next counter, but only used as the output of this equation, &lt;strong&gt;ck_stb&lt;/strong&gt; becomes a logic signal you can use to drive your logic at the rate you want.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Notice that this clock register is 16 bits wide rather than N-bits wide.  Because of how the clock width couples with the fractional division number, I had to make this width a constant instead of a generic.  You can still change it to whatever you need it to be.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;As for the 16’h517d, this number is given by 2^16 divided by PI.  Where does the 16 come from?  It’s the width of your counter.  Does it need to be 16?  The more bits you have, the closer you’ll get to the actual frequency you wish to create.  I’ve often used 48-bits within my &lt;a href=&quot;https://github.com/ZipCPU/rtcclock&quot;&gt;Real-Time Clock Core&lt;/a&gt;, but what you choose should be a matter of your design needs and choices.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;You can also use the &lt;strong&gt;ck_stb&lt;/strong&gt; signal within your code to do things every 1/pi’th clock, just like we used the &lt;strong&gt;ck_stb&lt;/strong&gt; before.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;What if you need to generate an actual clock signal, and not just a clocked strobe?  You can use the top bit of this counter as a clock signal that you can send to peripherals if you need to.  Just … don’t use it as a clock signal within your own logic unless you really know what you are doing.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;What is the actual clock period of this clock?  Well, because we are dividing by PI, you will find either three or four ticks between &lt;strong&gt;ck_stb&lt;/strong&gt; signals, never more, never less.  This is going to create some &lt;em&gt;phase noise&lt;/em&gt; in your &lt;em&gt;clock&lt;/em&gt;.  It can cause problems with some systems, so make sure you check the spec of whatever system you might be working with in order to know what is acceptable.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;You can find a simple example of this fractional divider in &lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/basic/clktest.v&quot;&gt;this version of
-blinky&lt;/a&gt; for
-the &lt;a href=&quot;http://icoboard.org&quot;&gt;ICO board&lt;/a&gt;.  I used this code to test and measure the
-speed of the input clock to my &lt;a href=&quot;http://icoboard.org&quot;&gt;ICO board&lt;/a&gt;.  By using
-this approach, I was able to prove that the incoming clock was 100MHz, as
-opposed to the 25MHz oscillator listed in the schematic (Oops!).&lt;/p&gt;
-
-&lt;p&gt;As a fun example, I used this same fractional clock generator approach to
-create a &lt;a href=&quot;https://github.com/ZipCPU/wbfmtxhack&quot;&gt;single bit FM signal&lt;/a&gt; that I
-then “transmitted” out of my GPIO ports.  Sure, it was an ugly signal, but it
-was enough to lock a FM receiver to it and listen to Queen on “the radio”.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-divided-counter&quot;&gt;The Divided Counter&lt;/h2&gt;
-
-&lt;p&gt;If your counter is so long that you can’t meet timing, there’s usually no cost
-to splitting the counter into a higher word and a lower word:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	low_stb, ck_stb;
-reg	[(N-1):0]	low_counter, hi_counter;
-always @(posedge i_clk)
-	{ low_stb, low_counter } &amp;lt;= low_counter + 1&#39;b1;
-always @(posedge i_clk)
-	if (low_stb)
-		{ ck_stb, counter } &amp;lt;= counter + 1&#39;b1;
-	else
-		ck_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Sure, the two words may not be synchronized, but … this is still a very
-doable approach.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-divided-fractional-clock-divider&quot;&gt;The Divided Fractional Clock Divider&lt;/h2&gt;
-
-&lt;p&gt;What if you are using a fractional divider?  If you can’t meet timing with your fractional division clock, you can also divide that one into two words, both upper and lower:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	low_counter, hi_counter;
-always @(posedge i_clk)
-	{ low_pps, low_counter } &amp;lt;= low_counter + LOW_STEP;
-always @(posedge i_clk)
-	{ ck_stb, counter } &amp;lt;= counter + HIGH_STEP + low_pps;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As before, the two counters are not in lock step with each other.  If you want to actually have a synchronized timer, you might need to delay the lower counter ‘till they line up:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	[(N-1):0]	low_counter, hi_counter, dly_counter;
-wire	[(2\*N-1):0]	full_counter;
-always @(posedge i_clk)
-	{ low_pps, low_counter } &amp;lt;= low_counter + LOW_STEP;
-always @(posedge i_clk)
-	dly_counter &amp;lt;= low_counter;
-always @(posedge i_clk)
-	{ ck_stb, counter } &amp;lt;= counter + HIGH_STEP + low_pps;
-assign	full_counter = { counter, dly_counter };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
-
-&lt;p&gt;As you can see from the many different examples above, dividing your input clock down to a rate that you can then use for your logic is fairly easy.  Given the many ways of doing this wrong, we have now at least showed you several methods for doing this “right”.&lt;/p&gt;
-
-&lt;p&gt;Try it!  Let me know how these techniques work for you.&lt;/p&gt;
-</description>
-        <pubDate>Fri, 02 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/02/generating-timing.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/02/generating-timing.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>The Actual FPGA Design Process</title>
-        <description>&lt;p&gt;As I’ve been watching students and others request help on the &lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;Digilent
-Forums&lt;/a&gt;, it has become apparent to me that
-there’s quite a difference between the design process college students are using
-and the one reality has driven me to.&lt;/p&gt;
-
-&lt;p&gt;Perhaps pointing this out will serve as a warning to the young FPGA engineer
-to start their task early, and to not underestimate the amount of work
-required.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-students-fpga-design-process&quot;&gt;The Student’s FPGA Design Process&lt;/h2&gt;
-
-&lt;p&gt;Most of the student’s I’ve seen on the forum show up about a week before
-their project is due.  They want to get things done quickly, and they want
-to take the fastest path they can take to get to the goal. 
-Indeed, they are following the design process shown in Fig. 1.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 1: The Student&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/student-design-process.svg&quot; alt=&quot;Student FPGA Design Process Figure&quot; width=&quot;140&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;The student builds his design in Verilog&lt;/li&gt;
-  &lt;li&gt;He then implements it on an FPGA, adjusting his design as necessary to meet
-timing and build requirements&lt;/li&gt;
-  &lt;li&gt;The design is then placed onto the FPGA for a test, and …&lt;/li&gt;
-  &lt;li&gt;The student can’t figure out why it isn’t working.&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Perhaps these students are coming from the software world.  When I program
-software, I can usually debug a program using the “debug by printf” method.
-If things get difficult, moving to the debugger is easy.  Either way, at any
-point in my program, I can look at and examine any variable at any time and
-understand what is going on within it.&lt;/p&gt;
-
-&lt;p&gt;If you expect to do this with hardware, and particularly with FPGA’s, you are
-going to end up with the other students in your class at the end of the semester
-wondering what happened.  You just don’t get that much visibility into an FPGA
-design.&lt;/p&gt;
-
-&lt;p&gt;Plan for it.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-experts-design-process&quot;&gt;The Expert’s Design Process&lt;/h2&gt;
-
-&lt;p&gt;Now, if you instead turn around and ask an expert about their design process,
-they will discuss something like Fig. 2 with you.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 2: The Expert&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img width=&quot;240&quot; src=&quot;/img/expert-design-process.svg&quot; alt=&quot;The Expert&#39;s FPGA Design Process Figure&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;If you don’t have an instructor, you have to find the specifications for
-whatever chip you are going to work with.  This applies to both the FPGA’s
-you work with, as well as any peripherals.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Once you think you understand how the device you wish to interface with
-works, you’ll build your design to interface with that device.&lt;/p&gt;
-
-    &lt;p&gt;I make
-a particular point at this stage in my design process to document, at the
-top of any Verilog files I build, how that Verilog file is going to connect
-to the rest of any design.  While all of my files tend to use the
-&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;Wishbone Bus&lt;/a&gt;,
-I still need to define the various registers on that bus, as well
-as what each of the bits within those registers means, whether the registers
-are read/write, etc.&lt;/p&gt;
-
-    &lt;p&gt;As I build my design, these become my notes and
-reference.  I keep them up to date–especially before any spec sheet is ever
-written.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The next step is to build a simulator for the device.  This will allow your
-simulated logic to think it is talking to the actual device.&lt;/p&gt;
-
-    &lt;p&gt;Have I skipped this step before?  Absolutely!  What was the result?  I’ve
-almost always had to come back, retrace my steps, and build this simulator.
-(I’m currently needing to do that with an HDMI interface I’m building.)&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Once you have your logic, and a simulator in place, you can now build a test
-bench that will exercise your logic against the simulator and see whether
-or not your logic works.&lt;/p&gt;
-
-    &lt;p&gt;Have I skipped this step before?  You bet!  The result?  I just got burned
-this last week.&lt;/p&gt;
-
-    &lt;p&gt;The story has to do with a &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash
-controller&lt;/a&gt; I had built.
-I was recently trying to squeeze every last LUT out of my
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC design&lt;/a&gt;, and
-made changes to it.  I then changed it in another design, and again, and
-eventually I had four different flash controllers and couldn’t tell which
-worked and which didn’t.  I needed a test bench to prove that my changes
-still left me with a working controller.&lt;/p&gt;
-
-    &lt;p&gt;I had no choice, but to backtrack and build the test bench I should’ve built
-in the first place.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Only after things work on the test bench, will the expert place them onto
-the FPGA.  Changes made in this process (usually because something just
-doesn’t quite meet timing) will still be validated through the
-simulator and the test bench.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Then the expert applies his design for its first Hardware in the Loop (HITL)
-test.  If the hardware he’s working with doesn’t match his simulation,
-he goes back and adjusts the simulation, his design, and the test bench.&lt;/p&gt;
-
-    &lt;p&gt;If I can, I like to use the same software for bench testing as I do for
-hardware in the loop testing.  While this is not always possible, it can be
-used to save a step … if you can.  That’s actually the reason why I like
-to use a &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/sw/host/netuart.cpp&quot;&gt;TCP/IP
-connection&lt;/a&gt; to connect to my boards–because you can never
-tell, then, whether you are connecting to the real thing or a simulation.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Only after any design passes unit testing, is it fully integrated with the
-rest of whatever the expert wishes to do.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Finally, the entire unit is tested as a whole.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;The expert will also firmly scold the student for not following this form
-exactly.  Sorry, students, it always happens.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-actual-design-process&quot;&gt;The Actual Design Process&lt;/h2&gt;
-
-&lt;p&gt;The problem with this description of the expert’s design process is that the
-expert isn’t telling the whole story.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Figure 3: Reality&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img width=&quot;400&quot; src=&quot;/img/actual-design-process.svg&quot; alt=&quot;What the Expert actually does&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Because this isn’t his first design, he has already built up a small library
-of routines–most of them surrounding how to communicate with an FPGA and how
-to get diagnostics from the FPGA.  Indeed, his design flow is perhaps more
-appropriately characterized by Fig 3.&lt;/p&gt;
-
-&lt;p&gt;The result is that the expert can draw values and hence insights from the logic
-running within the FPGA, while the student is still stuck wondering what
-happened.&lt;/p&gt;
-
-&lt;p&gt;In my case, this scaffolding consists of both my
-open source &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone Scope&lt;/a&gt; that works 
-with &lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;GTK Wave&lt;/a&gt;, and 2) my open source
-&lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/wbubus.v&quot;&gt;UART to wishbone&lt;/a&gt;
-converter which gives you access to that
-&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;Wishbone Bus&lt;/a&gt;, to include the 
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; that I place on that bus.
-Of course, when I first started I didn’t have
-&lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;GTK Wave&lt;/a&gt; support–but that just illustrates
-how an expert’s toolset can grow to become more useful over time.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-the-student-should-have-done&quot;&gt;What the Student should have done&lt;/h2&gt;
-
-&lt;p&gt;What the student should have done was to take some time, between the simple
-&lt;a href=&quot;/blog/2017/05/19/blinky.html&quot;&gt;blinky&lt;/a&gt; and
-&lt;a href=&quot;/blog/2017/05/24/serial-port.html&quot;&gt;UART&lt;/a&gt;
-projects but before the more complex projects, to build some scaffolding.
-Specifically, he needs to build a means of evaluating logic from within the
-FPGA, and of learning how to discover whether or not the device he’s working
-with responds the way he thinks it should or not.&lt;/p&gt;
-
-&lt;p&gt;The typical curricula doesn’t lead the student to this approach.
-Instead, the typical curricula works from
-&lt;a href=&quot;/blog/2017/05/19/blinky.html&quot;&gt;blinky&lt;/a&gt; to more and more
-complex projects, but never focuses on how to build scaffolding out of these
-projects that is necessary to be truly competent at the more complex tasks.&lt;/p&gt;
-
-&lt;p&gt;The problem with this approach is that 1) few students know that this is a
-requirement on their road to success, and 2) few students allocate time for
-failure along the way.&lt;/p&gt;
-
-&lt;p&gt;This is why student’s stumble on their complex FPGA design projects.&lt;/p&gt;
-
-&lt;p&gt;If this has been your experience, please write to me.  I’d love to share any
-lessons you’ve learned from your design projects here on this blog.&lt;/p&gt;
-</description>
-        <pubDate>Fri, 02 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/02/design-process.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/02/design-process.html</guid>
         
         
         <category>blog</category>

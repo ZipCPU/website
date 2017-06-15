@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>No PI for you</title>
+  <meta name="description" content="FPGA’s can handle simple things well, and they handle simple things fast.Other things like PI(3.141592653…) are harder todeal with.  How then shall phase be ...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/06/15/no-pi-for-you.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">No PI for you</h1>
+    <p class="post-meta"><time datetime="2017-06-15T00:00:00-04:00" itemprop="datePublished">Jun 15, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>FPGA’s can handle simple things well, and they handle simple things fast.
+Other things like <a href="https://en.wikipedia.org/wiki/Pi">PI</a>
+(<a href="https://www.angio.net/pi/digits/100000.txt">3.141592653…</a>) are harder to
+deal with.  How then shall phase be dealt with within an FPGA, and in what
+units?</p>
+
+<p>The mathematicians will define phase in units of
+<a href="https://en.wikipedia.org/wiki/Radian">Radians</a>, with values ranging
+between zero and 2PI.  Further, the units are periodic, so anything outside
+of the range between zero and 2PI may be brought into the range by adding
+as many 2PI values as necessary.</p>
+
+<p>Others will define phase as a number between 0 and
+360 degrees.</p>
+
+<p>Both refer to the same thing–the measure of time within a
+periodic waveform from the beginning of the period.</p>
+
+<p>While Radians may be the natural units of phase (angles), they are not the
+first choice of the FPGA designer.  Why not?</p>
+
+<ul>
+  <li>
+    <p>FPGA’s need to have a known number of bits to represent something.  If you
+allocate enough bits to handle 0 to 8 (containing 0 to 2PI, or 6.28..),
+you’ll have a difficult time dealing with 16PI.</p>
+  </li>
+  <li>
+    <p><a href="https://en.wikipedia.org/wiki/Radian">Radians</a> have
+roll over problems.  While both PI and 3PI/2 are valid angles
+between 0 and 2PI, their sum is outside of the
+range between 0 and 2PI.  Before you can use this out-of-range value,
+and before you can add any more phase increments to it, the number must be
+normalized by subtracting 2PI from it to get it back into the range of
+0 to 2PI.</p>
+
+    <p>This will cost you a clock, and slow any algorithm you are building down by
+a factor of two.</p>
+
+    <p>It will also only work if your wander into the range between 2PI and
+4PI, but not between 50PI and 52PI.</p>
+  </li>
+  <li>
+    <p>FPGA’s can’t really handle numbers between 0 and 1.</p>
+
+    <p>This problem is so common and the solution so well known that aspiring FPGA
+DSP engineers might just multiply the values from 0 to PI by 2^N and consider
+that the solution without ever thinking twice.</p>
+  </li>
+</ul>
+
+<p>While these might seem like viable solutions, a better approach
+to dealing with angles exists.</p>
+
+<h2 id="a-better-unit-for-angles">A Better Unit for Angles</h2>
+
+<p>A simpler and better angular unit choice is simply to map the range from 0
+to 2PI onto the integer interval from 0 to 2^N-1.  This can then be represented
+with an N-bit number.</p>
+
+<div class="highlighter-rouge"><pre class="highlight"><code>fpga_val = floor( theta * 2^N / (2PI) + 0.5)
+</code></pre>
+</div>
+
+<p>What’s neat about this approach to angles within an FPGA is that rollover
+is handled naturally, with no other logic required.</p>
+
+<p>Consider how one might add PI to 3PI/2.  We’ll use N=8, and so we’ll be
+representing angles with to within a degree or two.  Hence,
+our expression becomes 8’h80 plus 8’hc0.  If you add these two values together,
+and throw out any rollover, you get the value 8’h40.</p>
+
+<p>Notice from this example how we didn’t need to waste a clock to bring our
+results back within limits.  Neither were we restricted to only integer
+Radian values, even though we did our calculation with integers.</p>
+
+<p>Even better, FPGA’s are often optimized for integer arithmetic.  Hence,
+angular adjustments made in this fashion become easy and simple.</p>
+
+<h2 id="generating-sine-or-cosine">Generating Sine or Cosine</h2>
+
+<p>Depending upon your needs, you can easily convert this angle to a sine and
+cosine value.</p>
+
+<p>For example, you could use the top bit as your sine wave value, and get a
+square wave out with no more work.  This was the approach used by the <a href="https://github.com/ZipCPU/wbfmtx">wishbone
+controlled FM transmitter hack</a> in order
+to transmit an FM signal from an FPGA.</p>
+
+<p>You could also use the top several bits as an index into a table, and so build
+a direct digital synthesizer.</p>
+
+<p>Even slicker is to use your angle as an input to a <a href="http://www.andraka.com/files/crdcsrvy.pdf">CORDIC
+algorithm</a>.  In that
+case, you can use this angle as an input to generate a sine wave or cosine
+wave.  You can also use the <a href="http://www.andraka.com/files/crdcsrvy.pdf">CORDIC
+algorithm</a>
+to multiply by sine and cosine (at the same time), or take arc-tangents.
+If you like this idea, you ought to know that the <a href="http://www.andraka.com/files/crdcsrvy.pdf">CORDIC
+algorithm</a> can be pipelined so
+as to operate at one input/output per clock–with no throughput loss, such as
+you would’ve had were you using either
+<a href="https://en.wikipedia.org/wiki/Radian">Radians</a> or
+<a href="https://en.wikipedia.org/wiki/Degree_(angle)">degrees</a> as your angular units.</p>
+
+<p>Gosh, the <a href="http://www.andraka.com/files/crdcsrvy.pdf">CORDIC algorithm</a> is just
+<em>so</em> useful, we might need to write a post on it by itself.</p>
+
+<p>Coming back to our topic, though, all of these approaches to generating sine
+waves work nicely … but only if you use the right angular units.</p>
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/dsp/2017/06/15/no-pi-for-you.html";
+  this.page.identifier="/dsp/2017/06/15/no-pi-for-you";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>And they say unto him, We have here but five loaves, and two fishes. He said, Bring them hither to me. (Matt 14:17-18)"</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

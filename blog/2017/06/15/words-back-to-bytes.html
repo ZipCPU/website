@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>How to send our bus results back out the serial port</title>
+  <meta name="description" content="This post starts to complete the design of a very elementary debug port thatcan be used to command an internal, on-board, wishbone bus.  Other posts inthis s...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/15/words-back-to-bytes.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">How to send our bus results back out the serial port</h1>
+    <p class="post-meta"><time datetime="2017-06-15T00:00:00-04:00" itemprop="datePublished">Jun 15, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>This post starts to complete the design of a very elementary debug port that
+can be used to command an internal, on-board, wishbone bus.  Other posts in
+this series include:</p>
+
+<table style="float: right"><caption>Fig 1: DBG Port Overview</caption><tr><td><img src="/img/wb-uart-smpl.svg" alt="Block Diagram of a Simpler Wishbone to UART converter" width="360" /></td></tr></table>
+
+<ul>
+  <li>
+    <p><a href="/blog/2017/06/05/wb-bridge-overview.html">An overview of a UART to wishbone
+bridge</a></p>
+  </li>
+  <li>
+    <p>How to build a <a href="/blog/2017/06/08/simple-wb-master.html">Simple Wishbone Master</a>, and</p>
+  </li>
+  <li>
+    <p>How to <a href="/blog/2017/06/14/creating-words-from-bytes.html">create bus command words from a 7-bit data stream</a></p>
+  </li>
+</ul>
+
+<p>We’ve slowly been building up to the implementation of a WB-UART component,
+such as that in Fig 1.</p>
+
+<p>A this point, we’ve now described how to get a serial port up and running,
+how to <a href="/blog/2017/06/14/creating-words-from-bytes.html">create words from the serial
+stream</a>, and
+<a href="/blog/2017/06/08/simple-wb-master.html">how to control a simple wishbone bus
+master</a>
+from the command words running through this stream.  We are very close to having
+a working debug bus–since we can add the FIFOs and interrupts in later if
+we have to.</p>
+
+<p>This lesson is about what it takes to turn the response words from the bus
+master into a characters that will be sent out the output transport.  The
+output transport, as you will recall, has a functionality similar to a
+serial port.  Indeed, it might be a serial port, although it doesn’t need
+to be.</p>
+
+<h2 id="stream-timing">Stream timing</h2>
+
+<p>Before we start, though, let’s examine how to handle stream timing.  Our
+problem is that we will be generating words to be sent out of our serial
+port at a rate that is much faster than the port can handle.  We’re going to
+want to make certain that these response words are not lost–in spite of the
+speed differential.</p>
+
+<p>Earlier, we described <a href="2017/06/02/generating-timing.html">how to build a strobe type of
+signal</a>.  For our purposes here, the
+strobe signal was one that was valid for a single clock only.  Here, we are
+also going to use a busy signal.  The two signals will work together in the
+following way: the strobe will indicate a desire to send a word downstream,
+while the busy response from the next component will be used to indicate that
+the downstream component is not ready to receive.  To deal with this, once we
+set our strobe we will continue to hold it high (request data be sent)
+until the downstream components busy but is cleared.</p>
+
+<p>Conditions for moving forward will therefore look something like …</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">if ((i_stb)&amp;&amp;(!o_dw_busy))
+	....</code></pre></figure>
+
+<p>This condition will be true any time we accept a request to send a word.</p>
+
+<p>Likewise, there is a similar condition on the downstream side of any stream
+component:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">if ((o_dw_stb)&amp;&amp;(!i_tx_busy))
+	....</code></pre></figure>
+
+<p>Prefixes will change depending upon which side of the link we are on, or
+which components we are using, but the logic is going to be the same every
+time.</p>
+
+<p>Now, with that out of the way, we can disassemble our words into a serial
+port output channel.</p>
+
+<h2 id="breaking-words-into-nibbles">Breaking Words into nibbles</h2>
+
+<p>The trick to making any stream processing work is to only do a little bit of
+processing at each step.  Hence for our first step, we turn our response
+word into bytes.</p>
+
+<p>There are a couple primary variables to make this work.  The first one is
+the word buffer, <strong>r_word</strong>.  This buffer holds what is left of our response
+word that has not yet been sent.  The next variable is the <strong>r_len</strong> word
+that holds how many valid nibbles remain in our <strong>r_word</strong> register.</p>
+
+<p>Hence, on any new incoming word, as long as we are not busy, we send
+a nibble noting the top two bits (Read data, write acknowledgement, etc.), and
+we note that the register now has eight
+nibbles within it.  In the case of any special words, we instead send the top
+five bits of the command word and nothing more.  Other protocols would work
+as well, this is just what we are going to choose.</p>
+
+<p>Here’s the big always blog for what we want to do.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_reset)
+	begin
+		// On reset, clear our variables
+		r_word &lt;= 0;
+		r_len  &lt;= 0;
+		o_dw_stb  &lt;= 1'b0;
+		o_dw_bits &lt;= 5'h0;
+	end else if ((i_stb)&amp;&amp;(!o_dw_busy))
+	begin			
+		// If we are not busy, then load a new command
+		// into our buffer to be sent
+		r_word &lt;= i_word[31:0];
+		r_len  &lt;= 4'h8;
+
+		o_dw_stb &lt;= 1'b1;
+		o_dw_bits &lt;= { 3'b100, i_word[33:32] };
+		if (i_word[33:32]==2'b11)
+		begin
+			// If this is a special command,
+			// grab all top 5-bits to output
+			// them
+			o_dw_bits &lt;= i_word[33:29];
+			r_len &lt;= 4'h0;
+		end else if (i_word[33:32] == 2'b01)
+		begin // On an ACK, print only the 'K'
+			// and nothing more
+			r_len &lt;= 4'h0;
+		end
+	end else if ((o_dw_stb)&amp;&amp;(!i_tx_busy))
+	begin
+		// Our last byte was accepted, move to the next one
+		if (r_len != 4'h0)
+		begin
+			o_dw_stb  &lt;= 1'b1;
+			o_dw_bits &lt;= { 1'b0, r_word[31:28] };
+			r_word &lt;= { r_word[27:0], 4'h0 };
+			r_len  &lt;= r_len - 1'b1;
+		end else
+			o_dw_stb  &lt;= 1'b0;
+	end</code></pre></figure>
+
+<p>We’ll simplify this giant always block by first removing the reset logic
+from it.  Indeed, the only things that need reset logic are the <strong>r_len</strong>
+and <strong>o_dw_stb</strong> registers.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_reset)
+begin
+	r_len &lt;= 0;
+	o_dw_stb &lt;= 0;
+end else if ((i_stb)&amp;&amp;(!o_dw_busy))
+begin
+	o_dw_stb &lt;= 1'b1;
+	if (i_word[33:32]==2'b11)
+		r_len &lt;= 4'h0;
+	else
+		r_len &lt;= 4'h8;
+end else if (!i_tx_busy)
+begin
+	o_dw_stb &lt;= (r_len != 4'h0);
+	if (r_len != 4'h0)
+		r_len &lt;= r_len - 1'b1;
+end</code></pre></figure>
+
+<p>You should find this logic identical to the big always block above.</p>
+
+<p>The rest of our logic, to include all the various wires associated with
+the word register <strong>r_word</strong> can then be drastically simplified.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+// No reset logic needed
+if ((i_stb)&amp;&amp;(!o_dw_busy))
+begin
+	// On any new word, set the result
+	r_word &lt;= i_word;
+end else if (!i_tx_busy)
+	// Whenever we aren't busy, a new nibble is accepted
+	// and the word shifts.  If we never set our output
+	// strobe, this will never become busy, but if the
+	// register isn't in use, there's no penalty to clearing
+	// it repeatedly.
+	r_word &lt;= { r_word[27:0], 4'h0 };</code></pre></figure>
+
+<p>Even the outputs may be set quite simply.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if ((i_stb)&amp;&amp;(!o_dw_busy))
+begin
+	if (i_word[33:32] == 2'b11)
+		o_dw_bits &lt;= i_word[33:29];
+	else
+		o_dw_bits &lt;= { 3'b100, i_word[33:32] };
+end else if (i_tx_busy)
+	o_dw_bits &lt;= { 1'b0, r_word[31:28] };</code></pre></figure>
+
+<p>If you look over the difference between what we started with and where we
+ended up, there’s a lot of differences.  All of these differences translate
+into fewer resources in our output.  They can basically be summarized by this:
+if you don’t care the what the value of a register is under certain conditions,
+then don’t make that register depend upon those conditions.  Remember, the
+resources used by a piece of logic can be (roughly) calculated by the number
+of inputs that piece of logic requires.</p>
+
+<h2 id="turning-nibbles-into-characters">Turning nibbles into characters</h2>
+
+<p>The next step on the output process is to turn this stream of nibbles into
+output characters.  This is almost a pure lookup table, but the stream
+logic keeps it from being quite that.</p>
+
+<p>The stream logic consists of paying attention to the busy and strobe flags
+to determine when we have an output to send.  In particular, if we are not
+busy and a request is made of us, we’ll forward it down the line.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if ((i_stb)&amp;&amp;(!o_gx_busy))
+		// On a new request, send it forward
+		o_gx_stb &lt;= 1'b1;
+	else if (!i_busy)
+		o_gx_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>Since we don’t have more than a single clock’s worth of processing to do here,
+we can just set the busy bit to be the same as our output strobe bit.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	o_gx_busy = o_gx_stb;</code></pre></figure>
+
+<p>The real work is in the lookup table.  When given a value between 5’h0 and
+5’hf, we just send the hexadecimal output.  Values with the 5’h10 bit set
+indicate we need to send a special character.  You can see the special
+characters we support below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if ((i_stb)&amp;&amp;(!o_gx_busy))
+	begin
+		case(i_bits)
+		5'h00: o_gx_char &lt;= "0";
+		5'h01: o_gx_char &lt;= "1";
+		5'h02: o_gx_char &lt;= "2";
+		5'h03: o_gx_char &lt;= "3";
+		5'h04: o_gx_char &lt;= "4";
+		5'h05: o_gx_char &lt;= "5";
+		5'h06: o_gx_char &lt;= "6";
+		5'h07: o_gx_char &lt;= "7";
+		5'h08: o_gx_char &lt;= "8";
+		5'h09: o_gx_char &lt;= "9";
+		5'h0a: o_gx_char &lt;= "a";
+		5'h0b: o_gx_char &lt;= "b";
+		5'h0c: o_gx_char &lt;= "c";
+		5'h0d: o_gx_char &lt;= "d";
+		5'h0e: o_gx_char &lt;= "e";
+		5'h0f: o_gx_char &lt;= "f";
+		//
+		5'h10: o_gx_char &lt;= "R";	// Read response w/data
+		5'h11: o_gx_char &lt;= "K";	// Write ACK
+		5'h12: o_gx_char &lt;= "A";	// Address was set
+		5'h13: o_gx_char &lt;= "S";	// Special
+		//
+		5'h18: o_gx_char &lt;= "T";	// reseT
+		5'h19: o_gx_char &lt;= "E";	// BUS Error
+		5'h1a: o_gx_char &lt;= "I";	// Interrupt
+		5'h1b: o_gx_char &lt;= "Z";	// I'm here, but slping
+		default: o_gx_char &lt;= 8'hd;	// Carriage return
+		endcase
+	end</code></pre></figure>
+
+<p>Unknown characters just get quietly turned into carriage returns, which
+the next module turns into carriage return and newline pairs (CR/NL).</p>
+
+<h2 id="adding-carriage-returns-and-newlines-to-the-stream">Adding Carriage Returns and Newlines to the Stream</h2>
+
+<p>The final step is to add a carriage return/newline pair to our output stream
+any time it becomes idle.  This will assist any buffered software following
+that might depend upon the end of a line before forwarding the data received.</p>
+
+<p>To do this, we’ll create a new stream component in our processing chain.
+Any characters given to this stream will just send their characters back
+out the port.  But, if the port is idle we’ll insert a carriage return into
+the stream.  Then, any time a carriage return is sent out, we’ll set a register
+<strong>last_cr</strong> to indicate that we’ve sent one carriage return, and don’t need
+to send it again.  This value will clear upon any new and valid data from
+the port.</p>
+
+<p>The next state variable we’ll use is <strong>cr_state</strong>.  This variable will be
+set at anytime <strong>last_cr</strong> is set, and we’ll clear it upon sending a newline.</p>
+
+<p>Put together, any time we enter our newline state, we’ll set <strong>last_cr</strong> and
+set <strong>cr_state</strong>.  After the carriage return is sent, we’ll send a newline
+and clear <strong>cr_state</strong>.  We’ll then stay in that state until anything
+else is sent through the port.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_reset)
+	begin
+		// On reset, act as though we've already sent
+		// a CR/NL pair
+		cr_state &lt;= 1'b0;
+		last_cr  &lt;= 1'b0;
+		o_nl_stb &lt;= 1'b0;
+	end else if ((i_stb)&amp;&amp;(!o_nl_busy))
+	begin
+		// On any input, set the last_cr bit if it was
+		// a carriage return, and clear it otherwise. 
+		// Clear the cr_state bit either way.
+		o_nl_stb  &lt;= i_stb;
+		o_nl_byte &lt;= i_byte;
+		cr_state &lt;= 1'b0;
+		last_cr &lt;= (i_byte[7:0] == 8'hd);
+	end else if ((o_nl_busy)&amp;&amp;(!i_busy))
+	begin
+		// If we've just sent something, let's check
+		// if we need to send a cr/newline pair
+		if (!last_cr)
+		begin
+			// We haven't sent a carriage
+			// return.  So, send it if the
+			// input is idle.
+			cr_state  &lt;= (!i_stb);
+			o_nl_byte &lt;= 8'hd;
+			last_cr   &lt;= (!i_stb);
+			o_nl_stb  &lt;= (!i_stb);
+		end else if (cr_state)
+		begin
+			// We've sent the carriage
+			// return, but not the newline.
+			// Send the newline now.
+			cr_state  &lt;= 1'b0;
+			o_nl_byte &lt;= 8'ha;
+			o_nl_stb  &lt;= 1'b1;
+		end else
+			// Idle the channel
+			o_nl_stb  &lt;= 1'b0;
+	end</code></pre></figure>
+
+<h2 id="future-posts">Future Posts</h2>
+
+<p>There, that’s all there is to it!  You now know how to take a response word
+from the wishbone bus master, and how to send that result back out a serial
+port.</p>
+
+<p>While we’ve just about presented all of the components, and while you almost
+have a usable bus at this point, we’re not there yet.  Some particular
+functionality remains missing.  This includes:</p>
+
+<ul>
+  <li>
+    <p>Adding interrupt notifications to the response stream</p>
+  </li>
+  <li>
+    <p>Adding idle notifications to let you know you are connected to the right
+stream</p>
+  </li>
+  <li>
+    <p>Creating a simple wishbone interconnect</p>
+  </li>
+  <li>
+    <p>Creating a hand-controlled test bench to prove this works</p>
+  </li>
+  <li>
+    <p>Creating a software bus controller</p>
+  </li>
+</ul>
+
+<p>Now that our controller is nearly complete, though, these will be much simpler
+topics.  We’ll come back to them in future posts.</p>
+
+  </div>
+
+</article>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>As cold waters to a thirsty soul, so is good news from a far country. (Prov 25:25)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
