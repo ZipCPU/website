@@ -200,13 +200,13 @@ the number of items you intend to read?  Yes, it would.  Optimizing this command
 word will be the subject of another post.</p>
 
 <p>The output of our bus will use (almost) the exact same approach.  We’ll create
-a <strong>o_cmd_stb</strong> signal that will be true any time the output references a
+a <strong>o_rsp_stb</strong> signal that will be true any time the output references a
 valid codeword.  Unlike the input, though, we’ll ignore any flow control on the 
 output.  We can add some amount of flow control back in later with
 <a href="https://github.com/ZipCPU/zbasic/blob/master/rtl/wbufifo.v">a FIFO</a>.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">input		o_cmd_stb;
-input		o_cmd_word;</code></pre></figure>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">input		o_rsp_stb;
+input		o_rsp_word;</code></pre></figure>
 
 <p>We’ll also borrow from the input codeword encoding for the return trip encoding,
 as shown below:</p>
@@ -243,12 +243,12 @@ as shown below:</p>
     <tr>
       <td>1</td>
       <td>1</td>
-      <td>4’h0, 28’hxx, Bus Reset acknowledgement</td>
+      <td>3’h0, 29’hxx, Bus Reset acknowledgement</td>
     </tr>
     <tr>
       <td>1</td>
       <td>1</td>
-      <td>4’h1, 28’hxx, Bus Error</td>
+      <td>3’h1, 29’hxx, Bus Error</td>
     </tr>
   </tbody>
 </table>
@@ -259,12 +259,13 @@ as shown below:</p>
 In the first section of our simple bus master, we’ll create
 flags to indicate which request is currently being made.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	i_cmd_addr = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b00);
-assign	i_cmd_rd   = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b10);
-assign	i_cmd_wr   = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b11);
-assign	i_reset    = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:28] == 6'b110000);
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	i_cmd_rd   = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b00);
+assign	i_cmd_wr   = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b01);
 // We'll use i_cmd_bus to capture whether we have a read or write request
-assign	i_cmd_bus  = (i_cmd_stb)&amp;&amp;(i_cmd_word[33]    == 1'b1);</code></pre></figure>
+assign	i_cmd_bus  = (i_cmd_stb)&amp;&amp;(i_cmd_word[33]    == 1'b0);
+//
+assign	i_cmd_addr = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b10);
+assign	i_cmd_special = (i_cmd_stb)&amp;&amp;(i_cmd_word[33:32] == 2'b11);</code></pre></figure>
 
 <p>You may notice that I have violated my naming convention with these wires:
 I have named locally generated wires with an <strong>i_…</strong> prefix when they are
@@ -332,22 +333,22 @@ look something like the following:</p>
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_wb_cyc = 1'b0;
 initial	o_wb_stb = 1'b0;
 initial	newaddr  = 1'b0;
-initial	o_cmd_stb= 1'b0;
+initial	o_rsp_stb= 1'b0;
 always @(posedge i_clk)
 if ((i_reset)||(i_wb_err))
 begin
 	o_wb_cyc &lt;= 1'b0;
 	o_wb_stb &lt;= 1'b0;
 	o_cmd_busy   &lt;= 1'b0;
-	o_cmd_stb    &lt;= 1'b1;
+	o_rsp_stb    &lt;= 1'b1;
 	newaddr &lt;= 0;
 
 	// Return over the command interface that we just had an error,
 	// or a bus reset
 	if (i_wb_reset)
-		o_cmd_word &lt;= `RSP_RESET;
+		o_rsp_word &lt;= `RSP_RESET;
 	else
-		o_cmd_word &lt;= `RSP_BUS_ERROR;
+		o_rsp_word &lt;= `RSP_BUS_ERROR;
 end else if ((i_cmd_stb)&amp;&amp;(!o_cmd_busy))
 begin
 	//
@@ -356,12 +357,12 @@ begin
 	newaddr &lt;= 0;
 	if (i_cmd_addr)
 	begin
-		if (!i_cmd_word[31])
+		if (!i_cmd_word[1])
 			o_wb_addr &lt;= i_cmd_word[29:0];
 		else
 			o_wb_addr &lt;= i_cmd_word[29:0] + o_wb_addr;
 
-		inc &lt;= i_cmd_word[32];
+		inc &lt;= !i_cmd_word[0];
 
 		// Acknowledge the new address -- on the next clock
 		// (after the add has completed)
@@ -370,8 +371,8 @@ begin
 
 	if (newaddr)
 	begin
-		o_cmd_stb &lt;= 1'b1;
-		o_cmd_word &lt;= { `RSP_SUB_ADDR, 2'b00, o_wb_addr };
+		o_rsp_stb &lt;= 1'b1;
+		o_rsp_word &lt;= { `RSP_SUB_ADDR, o_wb_addr, 1'b0, !inc };
 	end
 
 	o_we &lt;= (i_cmd_wr);
@@ -411,11 +412,11 @@ begin
 		if (i_wb_ack)
 		begin
 			o_wb_cyc &lt;= 1'b0;
-			o_cmd_stb &lt;= 1'b1;
+			o_rsp_stb &lt;= 1'b1;
 			if (o_wb_we)
-				o_cmd_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+				o_rsp_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
 			else
-				o_cmd_word &lt;= { `RSP_SUB_DATA, i_wb_data };
+				o_rsp_word &lt;= { `RSP_SUB_DATA, i_wb_data };
 		end
 	end
 end else if (o_wb_cyc)
@@ -425,11 +426,11 @@ begin
 	begin
 		o_wb_cyc &lt;= 1'b0;
 		o_cmd_busy &lt;= 1'b0;
-		o_cmd_stb &lt;= 1'b1;
+		o_rsp_stb &lt;= 1'b1;
 		if (o_wb_we)
-			o_cmd_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+			o_rsp_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
 		else
-			o_cmd_word &lt;= { `RSP_SUB_DATA, i_wb_data };
+			o_rsp_word &lt;= { `RSP_SUB_DATA, i_wb_data };
 	end
 end</code></pre></figure>
 
@@ -564,17 +565,17 @@ also keep our own internal new address variable in this block as well.</p>
 			// sending an address difference can drastically cut
 			// down the number of bits required in a set address
 			// request.
-			if (!i_cmd_word[31])
-				o_wb_addr &lt;= i_cmd_word[29:0];
+			if (!i_cmd_word[1])
+				o_wb_addr &lt;= i_cmd_word[31:2];
 			else
-				o_wb_addr &lt;= i_cmd_word[29:0] + o_wb_addr;
+				o_wb_addr &lt;= i_cmd_word[31:2] + o_wb_addr;
 
 			//
 			// We'll allow that bus requests can either increment
 			// the address, or leave it the same.  One bit in the
 			// command word will tell us which, and we'll set this
 			// bit on any set address command.
-			inc &lt;= i_cmd_word[30];
+			inc &lt;= !i_cmd_word[0];
 		end else if ((o_wb_stb)&amp;&amp;(!i_wb_stall))
 			// The address lines are used while the bus is active,
 			// and referenced any time STB &amp;&amp; !STALL are true.
@@ -650,40 +651,40 @@ be dependent upon what has taken place.  It could be:</p>
 </ul>
 
 <p>Because of all of these possibilities, it takes a bit of logic to set this
-right.  Remember, <strong>o_cmd_stb</strong> will be true any time <strong>o_cmd_word</strong> has valid
-information, and that the <strong>o_cmd_word</strong> wires are don’t cares any time
-<strong>o_cmd_stb</strong> is low.</p>
+right.  Remember, <strong>o_rsp_stb</strong> will be true any time <strong>o_rsp_word</strong> has valid
+information, and that the <strong>o_rsp_word</strong> wires are don’t cares any time
+<strong>o_rsp_stb</strong> is low.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
 	if (i_reset)
 	begin
-		o_cmd_stb &lt;= 1'b1;
-		o_cmd_word &lt;= `RSP_RESET;
+		o_rsp_stb &lt;= 1'b1;
+		o_rsp_word &lt;= `RSP_RESET;
 	end else if (i_wb_err)
 	begin
-		o_cmd_stb &lt;= 1'b1;
-		o_cmd_word &lt;= `RSP_BUS_ERROR;
+		o_rsp_stb &lt;= 1'b1;
+		o_rsp_word &lt;= `RSP_BUS_ERROR;
 	end else if (o_wb_cyc) begin
 		//
 		// We're either in the BUS REQUEST or BUS WAIT states
 		//
 		// Either way, we want to return a response on our command
 		// channel if anything gets ack'd
-		o_cmd_stb &lt;= (i_wb_ack);
+		o_rsp_stb &lt;= (i_wb_ack);
 		//
 		//
 		if (o_wb_we)
-			o_cmd_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+			o_rsp_word &lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
 		else
-			o_cmd_word &lt;= { 2'b01, i_wb_data };
+			o_rsp_word &lt;= { `RSP_SUB_DATA, i_wb_data };
 	end else begin
 		//
 		// We are in the IDLE state.
 		//
 		// Echo any new addresses back up the command chain
 		//
-		o_cmd_stb  &lt;= newaddr;
-		o_cmd_word &lt;= { 2'b10, 2'b00, o_wb_addr };
+		o_rsp_stb  &lt;= newaddr;
+		o_rsp_word &lt;= { `RSP_SUB_ADDR, o_wb_addr, 1'b0, !inc };
 	end</code></pre></figure>
 
 <h2 id="a-not-so-simplified-wishbone-master">A Not-So Simplified Wishbone Master</h2>

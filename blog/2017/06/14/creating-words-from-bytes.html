@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>How to create bus command words, from a 7-bit data stream</title>
+  <meta name="description" content="This is our next post in how to build awishbone controlled debugging portinto your design.  Other posts on this topic include:">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/14/creating-words-from-bytes.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">How to create bus command words, from a 7-bit data stream</h1>
+    <p class="post-meta"><time datetime="2017-06-14T00:00:00-04:00" itemprop="datePublished">Jun 14, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>This is our next post in how to build a
+<a href="http://opencores.org/opencores,wishbone">wishbone</a> controlled debugging port
+into your design.  Other posts on this topic include:</p>
+
+<ul>
+  <li>
+    <p><a href="/blog/2017/06/05/wb-bridge-overview.html">An overview of a UART to wishbone
+bridge</a></p>
+
+    <p>Don’t let the title fool you.  The <a href="https://github.com/ZipCPU/zbasic/blob/master/rtl/wbubus.v">UART to wishbone
+bridge</a> was my
+first debugging bus.  It was so versatile, that I’ve rebuilt it for many other
+platforms–not all of them using a <a href="https://github.com/ZipCPU/wbuart32">UART (serial)</a> port.</p>
+  </li>
+  <li>
+    <p>How to build a <a href="/blog/2017/06/08/simple-wb-master.html">Simple Wishbone Master</a></p>
+  </li>
+</ul>
+
+<table style="float: right"><caption>Fig 1: WB-UART Overview</caption><tr><td><img src="/img/wb-uart-smpl.svg" alt="Block Diagram of a Simpler Wishbone to UART converter" width="360" /></td></tr></table>
+
+<p>These two articles have presented the overview shown in Fig. 1 as a simple
+bus overview that we might use.  Using this overview as a guide, we’ve discussed
+how to build the
+<a href="/blog/2017/06/08/simple-wb-master.html">bus master</a>.
+We’ve said nothing (yet) about FIFO’s, resets, interrupts, or converting
+response words back to bytes.  Today, though, we’re going to discuss how to
+create the command words from the incoming interface.  We’ll also use this
+incoming port to generate a reset for the rest of the port.</p>
+
+<p>We’ll do this in two parts.  The <a href="https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbdechex.v">first
+part</a> will
+turn our 7-bit incoming printable ASCII bytes into a shorter, simpler, 5’bit
+values formatted to be used by the next component.  The <a href="https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbpack.v">second
+part</a> will
+actually pack these bits into words and send them to our 
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbexec.v">bus master</a>
+(since we have no FIFO yet …).</p>
+
+<h2 id="design-outline">Design Outline</h2>
+
+<p>We’d like to turn printable ASCII into command words.  We’re going to
+design this ASCII in such a fashion that every command word will begin with
+a capitol letter identifying the command, and end with 0-8 nibbles of
+hexadecimal characters.  So, let’s look at what that requires:</p>
+
+<ul>
+  <li>
+    <p>Addresses will begin with an “A” character.</p>
+  </li>
+  <li>
+    <p>Read requests will consist of an “R” character alone.</p>
+  </li>
+  <li>
+    <p>Write requests will consist of an “W” character.</p>
+  </li>
+  <li>
+    <p>Reset requests consist of a “T” character.</p>
+  </li>
+  <li>
+    <p>Write requests and address values will be followed by 0-8 nibbles of value.
+This value will encode either the value to be written, or the new address
+to be set.</p>
+  </li>
+  <li>
+    <p>Unspecified command word bits will be set to zero, allowing unsigned
+extensions of words.</p>
+  </li>
+  <li>
+    <p>Addresses will end in multiples of four.  If the 2 bit is set on an address,
+the value will be added to the last address register.  If the 1 bit is clear,
+the address will be incremented (by 4) on every read or write.  Hence,
+“A2040RRRR” should read four consecutive values from the 0x02040 address.</p>
+  </li>
+</ul>
+
+<p>Some examples of this coding would be:</p>
+
+<ul>
+  <li>Read from address 0x2040.</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A2040R</code></pre></figure>
+
+<ul>
+  <li>Write 0xdeadbeef to the address 0x2044</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A2044Wdeadbeef</code></pre></figure>
+
+<ul>
+  <li>Write a 1 to the next four consecutive addresses</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">W1W1W1W1</code></pre></figure>
+
+<p>Our encoding will need to turn these sorts of commands into 34-bit command
+words suitable for the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbexec.v">bus master</a>.</p>
+
+<h2 id="transforming-printable-ascii-to-binary-nibbles">Transforming Printable ASCII to Binary Nibbles</h2>
+
+<p>As outlined above, we’re going to focus on a hexadecimal encoding format. 
+This is simply for the purpose of keeping the encoding simple enough so that
+you can either type the value in via a keyboard, or perhaps read and comprehend
+it when two pieces of software are talking to each other.  In both cases, you
+want the command channel to be comprehensible.</p>
+
+<p>For this purpose, the values ‘0’-‘9’, and ‘a’-‘f’ will be transformed into
+bit values 5’h0 to 5’hf.  Yes, that is a <em>five</em> bit encoding we’re going to
+use to go to the next step.</p>
+
+<p>Why?  If we are using a hexadecimal encoding, why do we need five bits?</p>
+
+<p>We’ll use the fifth bit to tell us some extra information: is this a read
+request, a write command, a new address or a reset command?  These extra
+options will use that extra bit, and we’ll generate it from specific
+letters that aren’t part of the hexadecimal encoding.</p>
+
+<p>For example, if the user types a “T”, we’ll use that as an indication that
+we want to reset our entire debugging bus component.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	o_reset &lt;= (i_stb)&amp;&amp;(i_byte[6:0] == 7'h54);</code></pre></figure>
+
+<p>Otherwise, if we receive anything other than an incoming nothing character
+7’h7f, we’ll be producing an output.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	o_stb   &lt;= (i_stb)&amp;&amp;(i_byte[6:0] != 7'h7f);</code></pre></figure>
+
+<p>All that’s left here is to decide what that output value will be.</p>
+
+<p>We’ll handle that with a giant case statement.  Although this may look complex,
+once it gets turned into FPGA logic, this is nothing more than a 7-bit lookup
+table per output bit, or about 20 LUTs.  (Remember <a href="/blog/2017/06/12/minimizing-luts.html">how to count
+LUTs</a>?)</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+begin
+	case(i_byte[6:0])
+	// Transform hexadecimal characters '0' to '9' to their
+	// binary equivalents, with the out of band flag cleared
+	7'h30: o_bits &lt;= 5'h00;
+	7'h31: o_bits &lt;= 5'h01;
+	7'h32: o_bits &lt;= 5'h02;
+	7'h33: o_bits &lt;= 5'h03;
+	7'h34: o_bits &lt;= 5'h04;
+	7'h35: o_bits &lt;= 5'h05;
+	7'h36: o_bits &lt;= 5'h06;
+	7'h37: o_bits &lt;= 5'h07;
+	7'h38: o_bits &lt;= 5'h08;
+	7'h39: o_bits &lt;= 5'h09;
+	//
+	// Hexadecimal characters 'a' through 'f'
+	//	(Note that 'A' is used for 'Address' and hence we don't
+	//	support upper case hexadecimal letters here)
+	7'h61: o_bits &lt;= 5'h0a;
+	7'h62: o_bits &lt;= 5'h0b;
+	7'h63: o_bits &lt;= 5'h0c;
+	7'h64: o_bits &lt;= 5'h0d;
+	7'h65: o_bits &lt;= 5'h0e;
+	7'h66: o_bits &lt;= 5'h0f;
+	//
+	// Other characters set out of band information (o_bits[4])
+	// These are primarily the bus command bits
+	7'h52: o_bits &lt;= 5'h10;	// 'R', or read command
+	7'h57: o_bits &lt;= 5'h11;	// 'W', or write command
+	7'h41: o_bits &lt;= 5'h12;	// 'A', set address
+	7'h53: o_bits &lt;= 5'h13;	// 'S', "special" ... reserved for later
+	7'h54: o_bits &lt;= 5'h16;	// 'T' --set for form only
+	default: // an "other" character, to be subsequently ignored.
+		// Also used as an end of word character, if received
+		o_bits &lt;= 5'h1f;
+	endcase
+end</code></pre></figure>
+
+<p>But what will we do with this five-bit value result?  That’s the next stage.</p>
+
+<h2 id="transforming-binary-nibbles-to-words">Transforming Binary Nibbles to Words</h2>
+
+<p>To pack four bits at a time into a 34-bit value is going to take several
+steps.</p>
+
+<p>The first step deals with the upper two bits of the output command word.
+These are given by the lower two bits in our five bit word, but only when
+the upper bit is set.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_word[33:32] = 2'b11;
+always @(posedge i_clk)
+	if ((i_stb)&amp;&amp;(i_bits[4:2] == 3'b100)) // new command
+		o_word[33:32] &lt;= i_bits[1:0];</code></pre></figure>
+
+<p>We may wish to add other “special” command words into our dictionary in the
+future.  Checking for 3’b100 checks that the high bit is set, but also leaves
+room for us to check for other command words later.</p>
+
+<p>Now, any time we are told what command we are about to do, we’re going to need
+to keep track of whether or not our register has a command loaded within it.
+We’ll build our command word up from the first letter indicating what command
+we are issuing (‘A’, ‘R’, or ‘W’).  On any non-hexadecimal character, we’ll
+flush the command through the system.  We’re also going to clear any partial
+command on any reset request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	cmd_loaded = 1'b0;
+always @(posedge i_clk)
+	if (i_reset)
+		cmd_loaded &lt;= 1'b0;
+	else if ((i_stb)&amp;&amp;(i_bits[4:2] == 3'b100))
+		cmd_loaded &lt;= 1'b1;
+	else if ((i_stb)&amp;&amp;(i_bits[4]))
+		cmd_loaded &lt;= 1'b0;</code></pre></figure>
+
+<p>Any thing else, any other special command, will just drop on the flow and
+the command will go from loaded to unloaded.</p>
+
+<p>The last piece of logic before we build our word itself is the one to determine
+when to send our word to the next stage.  We’ll do that any time we have a
+command loaded and a new character comes in with that extra high-bit set.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_stb = 1'b0;
+always @(posedge i_clk)
+	o_stb &lt;= (!i_reset)&amp;&amp;((i_stb)&amp;&amp;(cmd_loaded)&amp;&amp;(i_bits[4]));</code></pre></figure>
+
+<p>Now, finally, we can build the word that we will output.  At this point,
+building this word in a register is quite easy.
+On any new value, we just shift the new value into our word and move everything
+over by four bits.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_word[31:0] = 0;
+always @(posedge i_clk)
+	if (i_reset)
+		r_word[31:0] &lt;= 0;
+	else if (i_stb)
+	begin
+		if (i_bits[4])
+		begin
+			// Record the command into our buffer
+			r_word[33:32] &lt;= i_bits[1:0];
+			// Clear our buffer on any new command
+			r_word[31:0] &lt;= 0;
+		end else
+			// Other wise, new hex digits just get
+			// placed in the bottom of our shift register,
+			// and everything quietly moves over by one
+			r_word[31:0] &lt;= { r_word[27:0], i_bits[3:0] };
+	end</code></pre></figure>
+
+<p>Sure, we’ll clear our buffer on any new reset command and any time we get a
+command word as opposed to a hex digit.  That way, if we want to send any short
+unsigned numbers, we have only to give those unsigned digits.  For example,
+W5W6\n will write the value five to the bus, and then the value 6.  With this
+approach, we don’t need to send all 8-nibbles defining our 32-bit word if we
+don’t have to.</p>
+
+<p>Finally, for timing purposes, we wait for an incoming value before setting
+our output word.  Why timing?  Well, because our output strobe is only true
+for the immediate clock following the incoming strobe.  <strong>r_word</strong> has also
+changed by then.  Hence, we’ll grab a copy before then of what we wish to
+send out.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if (i_reset)
+			o_word &lt;= 0;
+		else if (i_stb)
+			o_word &lt;= r_word;</code></pre></figure>
+
+<h2 id="thats-it">That’s it!</h2>
+
+<p>That’s all there is to it.  You’ve now seen how simple it can be to compose
+an output word from several input bytes.</p>
+
+<p>Sure, this protocol is simple.  It takes us up to 9-bytes to send a 32-bit
+address, and another 9-bytes any time we wish to write a 32-bit value.
+In other words, we are sending 72-bits any time we wish to use 34-bits worth
+of information.</p>
+
+<p>Can this be improved upon?  Definitely.  But first, let’s just work through
+what it takes to build our entire interface before we try to improve upon it.</p>
+
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/blog/2017/06/14/creating-words-from-bytes.html";
+  this.page.identifier="/blog/2017/06/14/creating-words-from-bytes";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>And Jesus took the loaves; and when he had given thanks, he distributed to the disciples, and the disciples to them that were set down; and likewise of the fishes as much as they would. (John 6:11)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

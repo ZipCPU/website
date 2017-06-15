@@ -6,9 +6,301 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 12 Jun 2017 12:55:01 -0400</pubDate>
-    <lastBuildDate>Mon, 12 Jun 2017 12:55:01 -0400</lastBuildDate>
+    <pubDate>Wed, 14 Jun 2017 20:09:23 -0400</pubDate>
+    <lastBuildDate>Wed, 14 Jun 2017 20:09:23 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>How to create bus command words, from a 7-bit data stream</title>
+        <description>&lt;p&gt;This is our next post in how to build a
+&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone&lt;/a&gt; controlled debugging port
+into your design.  Other posts on this topic include:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;An overview of a UART to wishbone
+bridge&lt;/a&gt;&lt;/p&gt;
+
+    &lt;p&gt;Don’t let the title fool you.  The &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbubus.v&quot;&gt;UART to wishbone
+bridge&lt;/a&gt; was my
+first debugging bus.  It was so versatile, that I’ve rebuilt it for many other
+platforms–not all of them using a &lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;UART (serial)&lt;/a&gt; port.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to build a &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;Simple Wishbone Master&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: WB-UART Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;These two articles have presented the overview shown in Fig. 1 as a simple
+bus overview that we might use.  Using this overview as a guide, we’ve discussed
+how to build the
+&lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;bus master&lt;/a&gt;.
+We’ve said nothing (yet) about FIFO’s, resets, interrupts, or converting
+response words back to bytes.  Today, though, we’re going to discuss how to
+create the command words from the incoming interface.  We’ll also use this
+incoming port to generate a reset for the rest of the port.&lt;/p&gt;
+
+&lt;p&gt;We’ll do this in two parts.  The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbdechex.v&quot;&gt;first
+part&lt;/a&gt; will
+turn our 7-bit incoming printable ASCII bytes into a shorter, simpler, 5’bit
+values formatted to be used by the next component.  The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbpack.v&quot;&gt;second
+part&lt;/a&gt; will
+actually pack these bits into words and send them to our 
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbexec.v&quot;&gt;bus master&lt;/a&gt;
+(since we have no FIFO yet …).&lt;/p&gt;
+
+&lt;h2 id=&quot;design-outline&quot;&gt;Design Outline&lt;/h2&gt;
+
+&lt;p&gt;We’d like to turn printable ASCII into command words.  We’re going to
+design this ASCII in such a fashion that every command word will begin with
+a capitol letter identifying the command, and end with 0-8 nibbles of
+hexadecimal characters.  So, let’s look at what that requires:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Addresses will begin with an “A” character.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Read requests will consist of an “R” character alone.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Write requests will consist of an “W” character.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Reset requests consist of a “T” character.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Write requests and address values will be followed by 0-8 nibbles of value.
+This value will encode either the value to be written, or the new address
+to be set.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Unspecified command word bits will be set to zero, allowing unsigned
+extensions of words.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Addresses will end in multiples of four.  If the 2 bit is set on an address,
+the value will be added to the last address register.  If the 1 bit is clear,
+the address will be incremented (by 4) on every read or write.  Hence,
+“A2040RRRR” should read four consecutive values from the 0x02040 address.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Some examples of this coding would be:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Read from address 0x2040.&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A2040R&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Write 0xdeadbeef to the address 0x2044&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A2044Wdeadbeef&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Write a 1 to the next four consecutive addresses&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;W1W1W1W1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Our encoding will need to turn these sorts of commands into 34-bit command
+words suitable for the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hexbus/wbexec.v&quot;&gt;bus master&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;transforming-printable-ascii-to-binary-nibbles&quot;&gt;Transforming Printable ASCII to Binary Nibbles&lt;/h2&gt;
+
+&lt;p&gt;As outlined above, we’re going to focus on a hexadecimal encoding format. 
+This is simply for the purpose of keeping the encoding simple enough so that
+you can either type the value in via a keyboard, or perhaps read and comprehend
+it when two pieces of software are talking to each other.  In both cases, you
+want the command channel to be comprehensible.&lt;/p&gt;
+
+&lt;p&gt;For this purpose, the values ‘0’-‘9’, and ‘a’-‘f’ will be transformed into
+bit values 5’h0 to 5’hf.  Yes, that is a &lt;em&gt;five&lt;/em&gt; bit encoding we’re going to
+use to go to the next step.&lt;/p&gt;
+
+&lt;p&gt;Why?  If we are using a hexadecimal encoding, why do we need five bits?&lt;/p&gt;
+
+&lt;p&gt;We’ll use the fifth bit to tell us some extra information: is this a read
+request, a write command, a new address or a reset command?  These extra
+options will use that extra bit, and we’ll generate it from specific
+letters that aren’t part of the hexadecimal encoding.&lt;/p&gt;
+
+&lt;p&gt;For example, if the user types a “T”, we’ll use that as an indication that
+we want to reset our entire debugging bus component.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	o_reset &amp;lt;= (i_stb)&amp;amp;&amp;amp;(i_byte[6:0] == 7&#39;h54);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Otherwise, if we receive anything other than an incoming nothing character
+7’h7f, we’ll be producing an output.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	o_stb   &amp;lt;= (i_stb)&amp;amp;&amp;amp;(i_byte[6:0] != 7&#39;h7f);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;All that’s left here is to decide what that output value will be.&lt;/p&gt;
+
+&lt;p&gt;We’ll handle that with a giant case statement.  Although this may look complex,
+once it gets turned into FPGA logic, this is nothing more than a 7-bit lookup
+table per output bit, or about 20 LUTs.  (Remember &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;how to count
+LUTs&lt;/a&gt;?)&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+begin
+	case(i_byte[6:0])
+	// Transform hexadecimal characters &#39;0&#39; to &#39;9&#39; to their
+	// binary equivalents, with the out of band flag cleared
+	7&#39;h30: o_bits &amp;lt;= 5&#39;h00;
+	7&#39;h31: o_bits &amp;lt;= 5&#39;h01;
+	7&#39;h32: o_bits &amp;lt;= 5&#39;h02;
+	7&#39;h33: o_bits &amp;lt;= 5&#39;h03;
+	7&#39;h34: o_bits &amp;lt;= 5&#39;h04;
+	7&#39;h35: o_bits &amp;lt;= 5&#39;h05;
+	7&#39;h36: o_bits &amp;lt;= 5&#39;h06;
+	7&#39;h37: o_bits &amp;lt;= 5&#39;h07;
+	7&#39;h38: o_bits &amp;lt;= 5&#39;h08;
+	7&#39;h39: o_bits &amp;lt;= 5&#39;h09;
+	//
+	// Hexadecimal characters &#39;a&#39; through &#39;f&#39;
+	//	(Note that &#39;A&#39; is used for &#39;Address&#39; and hence we don&#39;t
+	//	support upper case hexadecimal letters here)
+	7&#39;h61: o_bits &amp;lt;= 5&#39;h0a;
+	7&#39;h62: o_bits &amp;lt;= 5&#39;h0b;
+	7&#39;h63: o_bits &amp;lt;= 5&#39;h0c;
+	7&#39;h64: o_bits &amp;lt;= 5&#39;h0d;
+	7&#39;h65: o_bits &amp;lt;= 5&#39;h0e;
+	7&#39;h66: o_bits &amp;lt;= 5&#39;h0f;
+	//
+	// Other characters set out of band information (o_bits[4])
+	// These are primarily the bus command bits
+	7&#39;h52: o_bits &amp;lt;= 5&#39;h10;	// &#39;R&#39;, or read command
+	7&#39;h57: o_bits &amp;lt;= 5&#39;h11;	// &#39;W&#39;, or write command
+	7&#39;h41: o_bits &amp;lt;= 5&#39;h12;	// &#39;A&#39;, set address
+	7&#39;h53: o_bits &amp;lt;= 5&#39;h13;	// &#39;S&#39;, &quot;special&quot; ... reserved for later
+	7&#39;h54: o_bits &amp;lt;= 5&#39;h16;	// &#39;T&#39; --set for form only
+	default: // an &quot;other&quot; character, to be subsequently ignored.
+		// Also used as an end of word character, if received
+		o_bits &amp;lt;= 5&#39;h1f;
+	endcase
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;But what will we do with this five-bit value result?  That’s the next stage.&lt;/p&gt;
+
+&lt;h2 id=&quot;transforming-binary-nibbles-to-words&quot;&gt;Transforming Binary Nibbles to Words&lt;/h2&gt;
+
+&lt;p&gt;To pack four bits at a time into a 34-bit value is going to take several
+steps.&lt;/p&gt;
+
+&lt;p&gt;The first step deals with the upper two bits of the output command word.
+These are given by the lower two bits in our five bit word, but only when
+the upper bit is set.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_word[33:32] = 2&#39;b11;
+always @(posedge i_clk)
+	if ((i_stb)&amp;amp;&amp;amp;(i_bits[4:2] == 3&#39;b100)) // new command
+		o_word[33:32] &amp;lt;= i_bits[1:0];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We may wish to add other “special” command words into our dictionary in the
+future.  Checking for 3’b100 checks that the high bit is set, but also leaves
+room for us to check for other command words later.&lt;/p&gt;
+
+&lt;p&gt;Now, any time we are told what command we are about to do, we’re going to need
+to keep track of whether or not our register has a command loaded within it.
+We’ll build our command word up from the first letter indicating what command
+we are issuing (‘A’, ‘R’, or ‘W’).  On any non-hexadecimal character, we’ll
+flush the command through the system.  We’re also going to clear any partial
+command on any reset request.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	cmd_loaded = 1&#39;b0;
+always @(posedge i_clk)
+	if (i_reset)
+		cmd_loaded &amp;lt;= 1&#39;b0;
+	else if ((i_stb)&amp;amp;&amp;amp;(i_bits[4:2] == 3&#39;b100))
+		cmd_loaded &amp;lt;= 1&#39;b1;
+	else if ((i_stb)&amp;amp;&amp;amp;(i_bits[4]))
+		cmd_loaded &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Any thing else, any other special command, will just drop on the flow and
+the command will go from loaded to unloaded.&lt;/p&gt;
+
+&lt;p&gt;The last piece of logic before we build our word itself is the one to determine
+when to send our word to the next stage.  We’ll do that any time we have a
+command loaded and a new character comes in with that extra high-bit set.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_stb = 1&#39;b0;
+always @(posedge i_clk)
+	o_stb &amp;lt;= (!i_reset)&amp;amp;&amp;amp;((i_stb)&amp;amp;&amp;amp;(cmd_loaded)&amp;amp;&amp;amp;(i_bits[4]));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now, finally, we can build the word that we will output.  At this point,
+building this word in a register is quite easy.
+On any new value, we just shift the new value into our word and move everything
+over by four bits.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_word[31:0] = 0;
+always @(posedge i_clk)
+	if (i_reset)
+		r_word[31:0] &amp;lt;= 0;
+	else if (i_stb)
+	begin
+		if (i_bits[4])
+		begin
+			// Record the command into our buffer
+			r_word[33:32] &amp;lt;= i_bits[1:0];
+			// Clear our buffer on any new command
+			r_word[31:0] &amp;lt;= 0;
+		end else
+			// Other wise, new hex digits just get
+			// placed in the bottom of our shift register,
+			// and everything quietly moves over by one
+			r_word[31:0] &amp;lt;= { r_word[27:0], i_bits[3:0] };
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Sure, we’ll clear our buffer on any new reset command and any time we get a
+command word as opposed to a hex digit.  That way, if we want to send any short
+unsigned numbers, we have only to give those unsigned digits.  For example,
+W5W6\n will write the value five to the bus, and then the value 6.  With this
+approach, we don’t need to send all 8-nibbles defining our 32-bit word if we
+don’t have to.&lt;/p&gt;
+
+&lt;p&gt;Finally, for timing purposes, we wait for an incoming value before setting
+our output word.  Why timing?  Well, because our output strobe is only true
+for the immediate clock following the incoming strobe.  &lt;strong&gt;r_word&lt;/strong&gt; has also
+changed by then.  Hence, we’ll grab a copy before then of what we wish to
+send out.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
+		if (i_reset)
+			o_word &amp;lt;= 0;
+		else if (i_stb)
+			o_word &amp;lt;= r_word;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;h2 id=&quot;thats-it&quot;&gt;That’s it!&lt;/h2&gt;
+
+&lt;p&gt;That’s all there is to it.  You’ve now seen how simple it can be to compose
+an output word from several input bytes.&lt;/p&gt;
+
+&lt;p&gt;Sure, this protocol is simple.  It takes us up to 9-bytes to send a 32-bit
+address, and another 9-bytes any time we wish to write a 32-bit value.
+In other words, we are sending 72-bits any time we wish to use 34-bits worth
+of information.&lt;/p&gt;
+
+&lt;p&gt;Can this be improved upon?  Definitely.  But first, let’s just work through
+what it takes to build our entire interface before we try to improve upon it.&lt;/p&gt;
+
+</description>
+        <pubDate>Wed, 14 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/14/creating-words-from-bytes.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/14/creating-words-from-bytes.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Minimizing FPGA Resource Utilization</title>
@@ -1035,13 +1327,13 @@ the number of items you intend to read?  Yes, it would.  Optimizing this command
 word will be the subject of another post.&lt;/p&gt;
 
 &lt;p&gt;The output of our bus will use (almost) the exact same approach.  We’ll create
-a &lt;strong&gt;o_cmd_stb&lt;/strong&gt; signal that will be true any time the output references a
+a &lt;strong&gt;o_rsp_stb&lt;/strong&gt; signal that will be true any time the output references a
 valid codeword.  Unlike the input, though, we’ll ignore any flow control on the 
 output.  We can add some amount of flow control back in later with
 &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbufifo.v&quot;&gt;a FIFO&lt;/a&gt;.&lt;/p&gt;
 
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;input		o_cmd_stb;
-input		o_cmd_word;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;input		o_rsp_stb;
+input		o_rsp_word;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;p&gt;We’ll also borrow from the input codeword encoding for the return trip encoding,
 as shown below:&lt;/p&gt;
@@ -1078,12 +1370,12 @@ as shown below:&lt;/p&gt;
     &lt;tr&gt;
       &lt;td&gt;1&lt;/td&gt;
       &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;4’h0, 28’hxx, Bus Reset acknowledgement&lt;/td&gt;
+      &lt;td&gt;3’h0, 29’hxx, Bus Reset acknowledgement&lt;/td&gt;
     &lt;/tr&gt;
     &lt;tr&gt;
       &lt;td&gt;1&lt;/td&gt;
       &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;4’h1, 28’hxx, Bus Error&lt;/td&gt;
+      &lt;td&gt;3’h1, 29’hxx, Bus Error&lt;/td&gt;
     &lt;/tr&gt;
   &lt;/tbody&gt;
 &lt;/table&gt;
@@ -1094,12 +1386,13 @@ as shown below:&lt;/p&gt;
 In the first section of our simple bus master, we’ll create
 flags to indicate which request is currently being made.&lt;/p&gt;
 
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	i_cmd_addr = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b00);
-assign	i_cmd_rd   = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b10);
-assign	i_cmd_wr   = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b11);
-assign	i_reset    = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:28] == 6&#39;b110000);
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	i_cmd_rd   = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b00);
+assign	i_cmd_wr   = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b01);
 // We&#39;ll use i_cmd_bus to capture whether we have a read or write request
-assign	i_cmd_bus  = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33]    == 1&#39;b1);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+assign	i_cmd_bus  = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33]    == 1&#39;b0);
+//
+assign	i_cmd_addr = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b10);
+assign	i_cmd_special = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b11);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;p&gt;You may notice that I have violated my naming convention with these wires:
 I have named locally generated wires with an &lt;strong&gt;i_…&lt;/strong&gt; prefix when they are
@@ -1167,22 +1460,22 @@ look something like the following:&lt;/p&gt;
 &lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_wb_cyc = 1&#39;b0;
 initial	o_wb_stb = 1&#39;b0;
 initial	newaddr  = 1&#39;b0;
-initial	o_cmd_stb= 1&#39;b0;
+initial	o_rsp_stb= 1&#39;b0;
 always @(posedge i_clk)
 if ((i_reset)||(i_wb_err))
 begin
 	o_wb_cyc &amp;lt;= 1&#39;b0;
 	o_wb_stb &amp;lt;= 1&#39;b0;
 	o_cmd_busy   &amp;lt;= 1&#39;b0;
-	o_cmd_stb    &amp;lt;= 1&#39;b1;
+	o_rsp_stb    &amp;lt;= 1&#39;b1;
 	newaddr &amp;lt;= 0;
 
 	// Return over the command interface that we just had an error,
 	// or a bus reset
 	if (i_wb_reset)
-		o_cmd_word &amp;lt;= `RSP_RESET;
+		o_rsp_word &amp;lt;= `RSP_RESET;
 	else
-		o_cmd_word &amp;lt;= `RSP_BUS_ERROR;
+		o_rsp_word &amp;lt;= `RSP_BUS_ERROR;
 end else if ((i_cmd_stb)&amp;amp;&amp;amp;(!o_cmd_busy))
 begin
 	//
@@ -1191,12 +1484,12 @@ begin
 	newaddr &amp;lt;= 0;
 	if (i_cmd_addr)
 	begin
-		if (!i_cmd_word[31])
+		if (!i_cmd_word[1])
 			o_wb_addr &amp;lt;= i_cmd_word[29:0];
 		else
 			o_wb_addr &amp;lt;= i_cmd_word[29:0] + o_wb_addr;
 
-		inc &amp;lt;= i_cmd_word[32];
+		inc &amp;lt;= !i_cmd_word[0];
 
 		// Acknowledge the new address -- on the next clock
 		// (after the add has completed)
@@ -1205,8 +1498,8 @@ begin
 
 	if (newaddr)
 	begin
-		o_cmd_stb &amp;lt;= 1&#39;b1;
-		o_cmd_word &amp;lt;= { `RSP_SUB_ADDR, 2&#39;b00, o_wb_addr };
+		o_rsp_stb &amp;lt;= 1&#39;b1;
+		o_rsp_word &amp;lt;= { `RSP_SUB_ADDR, o_wb_addr, 1&#39;b0, !inc };
 	end
 
 	o_we &amp;lt;= (i_cmd_wr);
@@ -1246,11 +1539,11 @@ begin
 		if (i_wb_ack)
 		begin
 			o_wb_cyc &amp;lt;= 1&#39;b0;
-			o_cmd_stb &amp;lt;= 1&#39;b1;
+			o_rsp_stb &amp;lt;= 1&#39;b1;
 			if (o_wb_we)
-				o_cmd_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+				o_rsp_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
 			else
-				o_cmd_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
+				o_rsp_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
 		end
 	end
 end else if (o_wb_cyc)
@@ -1260,11 +1553,11 @@ begin
 	begin
 		o_wb_cyc &amp;lt;= 1&#39;b0;
 		o_cmd_busy &amp;lt;= 1&#39;b0;
-		o_cmd_stb &amp;lt;= 1&#39;b1;
+		o_rsp_stb &amp;lt;= 1&#39;b1;
 		if (o_wb_we)
-			o_cmd_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+			o_rsp_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
 		else
-			o_cmd_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
+			o_rsp_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
 	end
 end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
@@ -1399,17 +1692,17 @@ also keep our own internal new address variable in this block as well.&lt;/p&gt;
 			// sending an address difference can drastically cut
 			// down the number of bits required in a set address
 			// request.
-			if (!i_cmd_word[31])
-				o_wb_addr &amp;lt;= i_cmd_word[29:0];
+			if (!i_cmd_word[1])
+				o_wb_addr &amp;lt;= i_cmd_word[31:2];
 			else
-				o_wb_addr &amp;lt;= i_cmd_word[29:0] + o_wb_addr;
+				o_wb_addr &amp;lt;= i_cmd_word[31:2] + o_wb_addr;
 
 			//
 			// We&#39;ll allow that bus requests can either increment
 			// the address, or leave it the same.  One bit in the
 			// command word will tell us which, and we&#39;ll set this
 			// bit on any set address command.
-			inc &amp;lt;= i_cmd_word[30];
+			inc &amp;lt;= !i_cmd_word[0];
 		end else if ((o_wb_stb)&amp;amp;&amp;amp;(!i_wb_stall))
 			// The address lines are used while the bus is active,
 			// and referenced any time STB &amp;amp;&amp;amp; !STALL are true.
@@ -1485,40 +1778,40 @@ be dependent upon what has taken place.  It could be:&lt;/p&gt;
 &lt;/ul&gt;
 
 &lt;p&gt;Because of all of these possibilities, it takes a bit of logic to set this
-right.  Remember, &lt;strong&gt;o_cmd_stb&lt;/strong&gt; will be true any time &lt;strong&gt;o_cmd_word&lt;/strong&gt; has valid
-information, and that the &lt;strong&gt;o_cmd_word&lt;/strong&gt; wires are don’t cares any time
-&lt;strong&gt;o_cmd_stb&lt;/strong&gt; is low.&lt;/p&gt;
+right.  Remember, &lt;strong&gt;o_rsp_stb&lt;/strong&gt; will be true any time &lt;strong&gt;o_rsp_word&lt;/strong&gt; has valid
+information, and that the &lt;strong&gt;o_rsp_word&lt;/strong&gt; wires are don’t cares any time
+&lt;strong&gt;o_rsp_stb&lt;/strong&gt; is low.&lt;/p&gt;
 
 &lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
 	if (i_reset)
 	begin
-		o_cmd_stb &amp;lt;= 1&#39;b1;
-		o_cmd_word &amp;lt;= `RSP_RESET;
+		o_rsp_stb &amp;lt;= 1&#39;b1;
+		o_rsp_word &amp;lt;= `RSP_RESET;
 	end else if (i_wb_err)
 	begin
-		o_cmd_stb &amp;lt;= 1&#39;b1;
-		o_cmd_word &amp;lt;= `RSP_BUS_ERROR;
+		o_rsp_stb &amp;lt;= 1&#39;b1;
+		o_rsp_word &amp;lt;= `RSP_BUS_ERROR;
 	end else if (o_wb_cyc) begin
 		//
 		// We&#39;re either in the BUS REQUEST or BUS WAIT states
 		//
 		// Either way, we want to return a response on our command
 		// channel if anything gets ack&#39;d
-		o_cmd_stb &amp;lt;= (i_wb_ack);
+		o_rsp_stb &amp;lt;= (i_wb_ack);
 		//
 		//
 		if (o_wb_we)
-			o_cmd_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
+			o_rsp_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
 		else
-			o_cmd_word &amp;lt;= { 2&#39;b01, i_wb_data };
+			o_rsp_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
 	end else begin
 		//
 		// We are in the IDLE state.
 		//
 		// Echo any new addresses back up the command chain
 		//
-		o_cmd_stb  &amp;lt;= newaddr;
-		o_cmd_word &amp;lt;= { 2&#39;b10, 2&#39;b00, o_wb_addr };
+		o_rsp_stb  &amp;lt;= newaddr;
+		o_rsp_word &amp;lt;= { `RSP_SUB_ADDR, o_wb_addr, 1&#39;b0, !inc };
 	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;h2 id=&quot;a-not-so-simplified-wishbone-master&quot;&gt;A Not-So Simplified Wishbone Master&lt;/h2&gt;
@@ -2828,218 +3121,6 @@ lessons you’ve learned from your design projects here on this blog.&lt;/p&gt;
         
         
         <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Building a simple wishbone slave</title>
-        <description>&lt;p&gt;If you’ve never written bus logic before, the
-&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt; is a good place to
-start.  Although other busses have more features to them, 
-the &lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt; can be simplified
-into an extremely easy bus to work with.&lt;/p&gt;
-
-&lt;p&gt;For our purpose, we’ll be using the
-&lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;B4 version of the specification&lt;/a&gt;,
-and specifically the pipelined mode within it.&lt;/p&gt;
-
-&lt;h2 id=&quot;wishbone-bus-components&quot;&gt;Wishbone bus components&lt;/h2&gt;
-
-&lt;p&gt;The first step, though, is to simplify the wishbone bus for our discussion.
-As with the other logic I have presented, I prefix ports with &lt;strong&gt;i_&lt;/strong&gt; if they
-are inputs, and &lt;strong&gt;o_&lt;/strong&gt; if they are outputs.  Further, because these inputs
-and outputs to our bus slave are wishbone connected, I’ll adjust their
-prefixes to read &lt;strong&gt;i_wb_&lt;/strong&gt; for inputs and &lt;strong&gt;o_wb_&lt;/strong&gt; for outputs.&lt;/p&gt;
-
-&lt;p&gt;Using this notation, the
-&lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;wishbone specification&lt;/a&gt;
-defines the following wires from the perspective of a slave:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;i_wb_cyc&lt;/strong&gt; is true any time a wishbone transaction is taking place.  It
- needs to become true on (or before) the first &lt;strong&gt;i_wb_stb&lt;/strong&gt; clock,
- and generally stays true until the last &lt;strong&gt;o_wb_ack&lt;/strong&gt;.&lt;/p&gt;
-
-    &lt;p&gt;We’re going to assume that the &lt;strong&gt;i_wb_cyc&lt;/strong&gt; line is high during our
- transaction, and that the logic necessary to insure this has already been
- taken care of within the bus master.  Therefore, we’ll ignore this wire.&lt;/p&gt;
-
-    &lt;p&gt;Incidentally, the &lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;specification&lt;/a&gt;
- isn’t clear regarding whether or not this signal can be ignored by the slave.
- (It cannot be ignored by the interconnect …)  If you
- are dealing with a master you aren’t certain of, you can &lt;em&gt;and&lt;/em&gt; your
- &lt;strong&gt;i_wb_stb&lt;/strong&gt; line with your &lt;strong&gt;i_wb_cyc&lt;/strong&gt; signal and do just as well.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;i_wb_stb&lt;/strong&gt; is true for any bus transaction request.  While &lt;strong&gt;i_wb_stb&lt;/strong&gt;
- is true, the other wishbone slave inputs (&lt;strong&gt;i_wb_we&lt;/strong&gt;, &lt;strong&gt;i_wb_addr&lt;/strong&gt;,
- &lt;strong&gt;i_wb_data&lt;/strong&gt;, and &lt;strong&gt;i_wb_sel&lt;/strong&gt;) are valid and reference the same
- transaction.  The transaction is accepted by the slave any time
- &lt;strong&gt;i_wb_stb&lt;/strong&gt; is true at the same time as &lt;strong&gt;o_wb_stall&lt;/strong&gt; is false.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;i_wb_we&lt;/strong&gt; is true for any write requests&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;i_wb_addr&lt;/strong&gt; contains the address of the request&lt;/p&gt;
-
-    &lt;p&gt;From the perspective of
- the wishbone slave that we are working with, this address contains only the
- address lines of relevance to the slave.  Hence, while the bus may have 32
- address lines, the slave might only be interested in might have anywhere
- between no address lines and all 32 address lines.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;i_wb_data&lt;/strong&gt; contains the data we wish to write.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;o_wb_ack&lt;/strong&gt; is a response from the slave, indicating that the request has
- been completed.  For every request given to the slave, there must be one
- and only one clock cycle with &lt;strong&gt;o_wb_ack&lt;/strong&gt; high&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;o_wb_stall&lt;/strong&gt; is used to control the flow of data into the slave.  It will
- be true on any cycle when the master &lt;em&gt;cannot&lt;/em&gt; accept data from the slave,
- and false any time data can be accepted.  This allows the slave to control
- the flow of requests being given to it.&lt;/p&gt;
-
-    &lt;p&gt;For our simple example, we’ll just set this line to zero.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;o_wb_data&lt;/strong&gt; is the data returned by the slave to the bus master as a 
- result of any read request.  It is valid whenever &lt;strong&gt;o_wb_ack&lt;/strong&gt; is true,
- and it’s value may be ignored any time &lt;strong&gt;o_wb_ack&lt;/strong&gt; is false.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;While &lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;the spec&lt;/a&gt;,
-defines other wires that may be a part of this interface, we’ll ignore these
-and instead focus on the minimum required logic
-necessary to get a simplified demonstration up and running.&lt;/p&gt;
-
-&lt;h2 id=&quot;writes-to-the-slave&quot;&gt;Writes to the slave&lt;/h2&gt;
-
-&lt;p&gt;You may remember from our discussion on how to write to a 
-&lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;very simple bus&lt;/a&gt; that we based all of
-our logic off of an &lt;strong&gt;i_wr&lt;/strong&gt; line.  Whenever this line was true, we would
-read from the bus.  As a review,
-the &lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;simple bus&lt;/a&gt; write logic was written as,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_wr)
-		memory[i_addr] &amp;lt;= i_data;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Moving from this simple example to the wishbone is quite easy.  In particular,
-&lt;em&gt;all&lt;/em&gt; we need to do is to adjust the &lt;strong&gt;i_wr&lt;/strong&gt; logic for the wishbone bus.
-Once done, the interaction should look identical:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if ((i_wb_stb)&amp;amp;&amp;amp;(i_wb_we)&amp;amp;&amp;amp;(!o_wb_stall))
-	begin
-		// Your write logic here, such as
-		// memory[i_addr] &amp;lt;= i_data;
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Simple, huh?&lt;/p&gt;
-
-&lt;h2 id=&quot;reads-from-the-slave&quot;&gt;Reads from the slave&lt;/h2&gt;
-
-&lt;p&gt;Reading from the port is fairly easy as well.  The first step is to create a
-response for every address given to us, as we did before.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	//
-	// Basically o_wb_data &amp;lt;= memory[i_wb_addr];
-	//
-	// If you aren&#39;t implementing a memory, your
-	// result will instead look like ...
-	case(i_wb_addr)
-	4&#39;h0: o_wb_data &amp;lt;= some_register;
-	// ...
-	default: o_wb_data &amp;lt;= some_default response;
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;One more step is required for both reading and writing: we need to return an
-acknowledgement back to the bus that this transaction has been completed, and
-that the data on the bus is now valid.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	o_wb_ack &amp;lt;= ((i_wb_stb)&amp;amp;&amp;amp;(!o_wb_stall));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;For some peripherals, the answer is known before you request it.  In that
-case, you might just &lt;em&gt;assign&lt;/em&gt; the &lt;strong&gt;o_wb_ack&lt;/strong&gt; signal instead of waiting for
-the positive edge of the clock.&lt;/p&gt;
-
-&lt;p&gt;Other peripherals may need to delay the acknowledgement by another clock.  Two examples of this would be the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; and the &lt;a href=&quot;https://github.com/ZipCPU/wbuart/blob/master/wbuart.v&quot;&gt;wbuart serial port&lt;/a&gt; controller.  Both of these examples require one clock to calculate an output,
-and then another clock to select between possible outputs.&lt;/p&gt;
-
-&lt;p&gt;The other key piece to any wishbone interaction is the stall line.  For our
-simple interaction, we’ll just hold this line zero.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	o_wb_stall = 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;What that means is that we are able to accept a wishbone request on every
-clock cycle, and that our transaction rate will be as fast as the clock rate.
-This works well for many peripherals, although some peripherals such as
-&lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash&lt;/a&gt;
-or &lt;a href=&quot;http://github.com/ZipCPU/xulalx25/blob/master/rtl/wbsdram.v&quot;&gt;SDRAM&lt;/a&gt; may
-need to adjust this line if they cannot accept a new request every
-clock cycle.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-if-you-can-only-accept-requests--sometimes&quot;&gt;What if you can only accept requests … sometimes?&lt;/h2&gt;
-
-&lt;p&gt;So … what if your peripheral cannot accept requests on every clock cycle?&lt;/p&gt;
-
-&lt;p&gt;Here’s an example set of logic where the peripheral starts a state machine
-upon any request, and only returns a result once the state machine becomes
-idle.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;reg	busy;
-
-always @(posedge i_clk)
-	if ((i_wb_stb)&amp;amp;&amp;amp;(!o_wb_stall))
-	begin
-		state &amp;lt;= SOME_NEW_STATE;
-		local_data &amp;lt;= i_wb_data;
-		busy &amp;lt;= 1&#39;b1;
-	end else case(state)
-	SOME_NEW_STATE: begin
-		// Your logic here ...
-		if (some_condition)
-			state &amp;lt;= SOME_NEXT_STATE;
-		end
-	...
-	SOME_FINAL_STATE: begin
-		state &amp;lt;= IDLE_STATE;
-		busy &amp;lt;= 1&#39;b0;
-		ack  &amp;lt;= 1&#39;b1;
-		o_data &amp;lt;= any_read_data_response;
-	enddcase
-
-assign	o_wb_stall &amp;lt;= busy;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Examples of this in practice include the
-&lt;a href=&quot;https://github.com/ZipCPU/wbicapetwo&quot;&gt;wishbone ICAPE2 controller&lt;/a&gt;,
-and a &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;QSPI flash controller&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-can-you-use-this-interface-for&quot;&gt;What can you use this interface for?&lt;/h2&gt;
-
-&lt;p&gt;What can you use this for?  Anything!  Feel free to look over our
-&lt;a href=&quot;/projects.html&quot;&gt;projects page&lt;/a&gt; for some example peripheral components that
-use this simple interaction.&lt;/p&gt;
-
-&lt;p&gt;In particular, I intend to follow up this article with the idea of using a
-wishbone interface to create an interface whereby
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;a scope&lt;/a&gt; may be read for improved
-debugging purposes.&lt;/p&gt;
-</description>
-        <pubDate>Mon, 29 May 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/zipcpu/2017/05/29/simple-wishbone.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/zipcpu/2017/05/29/simple-wishbone.html</guid>
-        
-        
-        <category>zipcpu</category>
         
       </item>
     
