@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>The debugging bus: a goal for FPGA interaction</title>
+  <meta name="description" content="It’s been a while since I presented the vision for controlling FPGAlogic.Since that time, we’ve put a lot of work into building an FPGA controllerthat we can...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/16/dbg-bus-forest.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">The debugging bus: a goal for FPGA interaction</h1>
+    <p class="post-meta"><time datetime="2017-06-16T00:00:00-04:00" itemprop="datePublished">Jun 16, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>It’s been a while since I presented the <a href="/blog/2017/05/22/a-vision-for-controlling-fpgas.html">vision for controlling FPGA
+logic</a>.
+Since that time, we’ve put a lot of work into building an FPGA controller
+that we can use for debugging logic running within our FPGA.
+<a href="/blog/2017/06/05/wb-bridge-overview.html">[1]</a>
+<a href="/blog/2017/06/14/creating-words-from-bytes.html">[2]</a>
+<a href="/blog/2017/06/08/simple-wb-master.html">[3]</a>
+<a href="/blog/2017/06/15/words-back-to-bytes.html">[4]</a></p>
+
+<p>Our goal over all is to provide the student, or any other junior FPGA
+designer for that matter, with a tool, similar to what an <a href="/blog/2017/06/02/design-process.html">expert might
+use</a>, that he can use to figure out what
+is going on within his design.</p>
+
+<p>Today, let’s take a look at what that the software side of communicating
+with an FPGA might look like.  In other words, once we connect to our FPGA,
+how will we control that FPGA from software?</p>
+
+<h2 id="a-simple-fpga-software-controller">A Simple FPGA Software Controller</h2>
+
+<p>The simplest FPGA control program that I’ve built is the one I call 
+<a href="https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp">wbregs</a>.
+This program just reads (or writes) a single register within the FPGA.  The
+<a href="https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp">source code</a>
+for this program makes it look more complicated than it is though.  That’s
+really nothing more than the fact that it’s been lying around long enough to be
+<em>improved upon</em> one too many times … but I digress.</p>
+
+<p>Lets trim this program down to its bare minimum details, and see what it
+would take to control an FPGA using this sort of controller.</p>
+
+<p>The first step in my idealized world would be to declare a global value
+   to hold a pointer to my FPGA’s interface:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">FPGA</span> <span class="err">\</span><span class="o">*</span><span class="n">m</span><span class="err">\</span><span class="n">_fpga</span><span class="p">;</span></code></pre></figure>
+
+<p>Then, somewhere within my main program file, I’d want to connect to my FPGA.
+If the FPGA talks to the computer via a serial port, I might wish to
+say something like:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">const</span> <span class="kt">char</span> <span class="n">SERIAL_PORT</span><span class="p">[]</span> <span class="o">=</span> <span class="s">"/dev/ttyUSB0"</span><span class="p">;</span>
+<span class="n">m_fpga</span> <span class="o">=</span> <span class="n">FPGA</span><span class="p">(</span><span class="n">SERIAL_PORT</span><span class="p">);</span></code></pre></figure>
+
+<p>We may need to come back to the name later, in case we have more than one USB
+serial port connector, but for now let’s just move on.</p>
+
+<p>I’d really rather connect to my FPGA from any one of my computers via a
+network port, as in:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">const</span> <span class="kt">char</span> <span class="n">FPGASERVER</span><span class="p">[]</span> <span class="o">=</span> <span class="s">"fpgahost.name"</span><span class="p">;</span> <span class="c1">// Could be 192.168.7.1 ...
+</span><span class="k">const</span> <span class="kt">int</span> <span class="n">FPGAPORT</span> <span class="o">=</span> <span class="mi">2853</span><span class="p">;</span> <span class="c1">// Some random number, known to you
+//
+</span><span class="n">m_fpga</span> <span class="o">=</span> <span class="n">FPGA</span><span class="p">(</span><span class="n">FPGASERVER</span><span class="p">,</span> <span class="n">FPGAPORT</span><span class="p">);</span></code></pre></figure>
+
+<p>Wouldn’t it be nice if that was all it took to connect to an FPGA?</p>
+
+<p>How about reading the a status register from the FPGA?  For example, we
+might wish to read from the erase control register of the <a href="http://opencores.org/project,qspiflash">flash
+controller</a> to see if it is still
+busy.  In that case, it might be nice to write something as simple as:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">if</span> <span class="p">(</span><span class="n">m_fpga</span><span class="o">-&gt;</span><span class="n">readio</span><span class="p">(</span><span class="n">R_FLASH_EREG</span><span class="p">)</span> <span class="o">&amp;</span> <span class="n">FLASH_BUSY</span><span class="p">)</span>
+	<span class="p">...</span></code></pre></figure>
+
+<p>The same could be said about writing to the erase control register, in order
+to command the flash to erase a segment of flash memory–but that’s a topic
+for a later day.</p>
+
+<p>For now, what about that <a href="https://github.com/ZipCPU/wbscope">scope</a>?  Wouldn’t
+it be nice to be able to reset the <a href="https://github.com/ZipCPU/wbscope">scope</a>
+for another capture?  The easiest way I can think of doing that would be
+to write the new hold off to the <a href="https://github.com/ZipCPU/wbscope">scope</a>
+control register, as in:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">m_fpga</span><span class="o">-&gt;</span><span class="n">writeio</span><span class="p">(</span><span class="n">R_SCOPE_CONTROL</span><span class="p">,</span> <span class="mi">25</span><span class="p">);</span> <span class="o">//</span> <span class="n">New</span> <span class="n">holdoff</span> <span class="n">is</span> <span class="mi">25</span><span class="o">-</span><span class="n">clocks</span></code></pre></figure>
+
+<p>Or to read from the internal FPGA <a href="https://github.com/ZipCPU/wbscope">scope</a>,
+wouldn’t it be nice to just simply … read?</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&amp;</span><span class="n">lt</span><span class="p">;</span> <span class="n">scope_len</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+	<span class="n">m_scope_memory</span> <span class="o">=</span> <span class="n">m_fpga</span><span class="o">-&gt;</span><span class="n">readio</span><span class="p">(</span><span class="n">R_SCOPE_DATA</span><span class="p">);</span></code></pre></figure>
+
+<p>You do remember how, in our <a href="/blog/2017/06/08/simple-scope.html">example scope
+design</a>, we placed
+all of the <a href="https://github.com/ZipCPU/wbscope">scope</a>’s data at the same
+register address, right?</p>
+
+<p>We might even manage to optimize successive reads, making a similar command
+that could capture any optimizations associated with many reads in a row.
+If so, we could write our for loop that read’s from the FPGA into something
+that could be optimized, such as:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">m_fpga</span><span class="o">-&gt;</span><span class="n">readz</span><span class="p">(</span><span class="n">R_SCOPE_DATA</span><span class="p">,</span> <span class="n">scope_len</span><span class="p">,</span> <span class="n">m_scope_memory</span><span class="p">);</span></code></pre></figure>
+
+<p>Working on Video?  One of the hardest parts of working on Video is getting
+that video information in and out of the computer.  Unlike the scope,
+your video information is going to occupy successive addresses, rather
+than a single data address.</p>
+
+<p>Wouldn’t it be nice if you could read from your video RAM area exactly what
+was being transmitted, as in:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="kt">uint32_t</span>	<span class="n">m_video_image</span><span class="p">[</span><span class="n">NUMBER_OF_PIXELS</span><span class="p">];</span>
+<span class="p">...</span>
+<span class="n">video_size</span> <span class="o">=</span> <span class="n">NUMBER_OF_PIXELS</span><span class="p">;</span>
+<span class="n">m_fpga</span><span class="o">-&gt;</span><span class="n">readi</span><span class="p">(</span><span class="n">R_VIDEO_RAM</span><span class="p">,</span> <span class="n">video_size</span><span class="p">,</span> <span class="n">m_video_image</span><span class="p">);</span></code></pre></figure>
+
+<p>Then, when we are done, we should close our FPGA interface via a C++ destructor
+such as:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">delete</span> <span class="n">m_fpga</span><span class="p">;</span></code></pre></figure>
+
+<p>Could we make controlling an FPGA that easy?  The answer is, Yes.  Yes, we can.
+Not only can this be done, but
+<a href="https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp">wbregs</a>
+does it.  Sure, 
+<a href="https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp">wbregs</a>
+has a lot more code for error handling, and I just added code to look address
+names up from linker map files, but simply reading and writing from an
+FPGA is what it was designed to do.</p>
+
+<h2 id="this-will-only-hurt-once">This will only hurt once</h2>
+
+<p>Even better, after you go through the pain of building just one debugging
+controller for your FPGA, you can then use it for <em>every one</em> of your FPGA
+projects.</p>
+
+<p>Think this one over: the debugging interface isn’t going to be graded.
+(Ask your instructor if you aren’t sure of that.)  If that’s a problem,
+then pull it out of your code before you turn it in.  Either way, if you
+use a debugging bus in your design you will have a leg up over all of your
+classmates who do not.</p>
+
+<p>Now, consider this sort of interface from the standpoint of the <a href="/blog/2017/06/02/design-process.html">FPGA expert’s
+design process</a>.
+He’s going to build this sort of interface once, and then he’s going to use it
+in all of his projects.  Some time later, he may come back and add a little
+bit of capability to it, but he’ll still be using it with every project.</p>
+
+<p>Perhaps an example from my experience would help.  My first design was for
+a <a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users">Basys-3</a> development board.  That’s where
+I build the first version of my own <a href="https://github.com/ZipCPU/zbasic/blob/master/rtl/wbubus.v">FPGA debugging
+interface</a>.</p>
+
+<ol>
+  <li>
+    <p>After I built that first interface (it was similar to the <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus
+interface</a> we are
+building here) I became frustrated with how slow it was–particularly
+when I was using it to read and write new configurations to the flash.</p>
+
+    <p>So, I added compression to the interface: both
+<a href="https://github.com/ZipCPU/zbasic/blob/master/rtl/wbucompress.v">encoding</a>
+and
+<a href="https://github.com/ZipCPU/zbasic/blob/master/rtl/wbudecompress.v">decoding</a>.</p>
+  </li>
+  <li>
+    <p>More recently, I got frustrated with the fact that my interface used up
+a serial port, preventing my CPU from printing to the same serial port.</p>
+
+    <p>In this case, I restricted the debugging interface to 7-bits, and used
+the high order ASCII bit to determine if the interface was communicating
+printable ASCII (such as the CPU with a printf), or unprintable characters
+(such as the debugging interface).  Since I was only ever using 7-bit
+bytes for the debugging interface in the first place, this change was easy
+to do, and it then gave me two channels of data that I could run through
+my serial port.</p>
+  </li>
+</ol>
+
+<p>My point is simply this: You need to pay for your tools.  Pay the time and
+energy to build them once and build them well.  Now that they are built,
+use them in all of your projects.</p>
+
+<p>Let’s even go one step farther: I’m going to license <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">this hexbus student
+interface</a> that we are
+building under the <a href="https://www.gnu.org/licenses/lgpl-3.0.en.html">LGPL</a>. 
+What that means is that I’ll let you copy it into your project, without being
+required to post the rest of the code for your project.  If you improve upon
+it, post your improvements.  If you are willing to assign ownership of those
+improvements to me, then I’ll post them back into the directory for others to
+use.</p>
+
+<p>Once we’re finished, then you, as a student, can play the role of the
+expert.  You too can come to the FPGA design problem with a debugging
+tool suite under your belt.</p>
+
+<p>This is why I <a href="/blog/2017/06/02/design-process.html">pointed
+out</a>, when
+discussing how an Expert <em>really</em> does FPGA design, that he comes to the
+problem with a lot of tools already in his toolbox.</p>
+
+<h2 id="just-a-simple-vision">Just a simple vision</h2>
+
+<p>All of our work here is simply towards one single goal: to build an interface
+to your FPGA that will then simplify all of your interactions with that FPGA.
+Such an interface allows us to write commands to the FPGA and to read status
+back out of the FPGA.  It will allow us to develop and prove that peripherals
+work, and it will help us to find out why they do not work when they do not
+work.</p>
+
+<p>This is the component most students don’t realize they are missing within their
+design.</p>
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/blog/2017/06/16/dbg-bus-forest.html";
+  this.page.identifier="/blog/2017/06/16/dbg-bus-forest";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Woe unto you, scribes and Pharisees, hypocrites! for ye pay tithe of mint and anise and cummin, and have omitted the weightier matters of the law, judgment, mercy, and faith: these ought ye to have done, and not to leave the other undone. (Matt 23:23)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

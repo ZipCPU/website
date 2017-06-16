@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Adding interrupt reporting to our debugging bus</title>
+  <meta name="description" content="This post starts to complete the design of a very elementary debug port thatcan be used to command an internal, on-board, wishbone bus.  Other posts inthis s...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/16/adding-ints.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Adding interrupt reporting to our debugging bus</h1>
+    <p class="post-meta"><time datetime="2017-06-16T00:00:00-04:00" itemprop="datePublished">Jun 16, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>This post starts to complete the design of a very elementary debug port that
+can be used to command an internal, on-board, wishbone bus.  Other posts in
+this series include:</p>
+
+<table style="float: right"><caption>Fig 1: WB-UART Overview</caption><tr><td><img src="/img/wb-uart-smpl.svg" alt="Block Diagram of a Simpler Wishbone to UART converter" width="360" /></td></tr></table>
+
+<ul>
+  <li>
+    <p><a href="/blog/2017/06/05/wb-bridge-overview.html">An overview of a UART to wishbone
+bridge</a></p>
+  </li>
+  <li>
+    <p>How to build a <a href="/blog/2017/06/08/simple-wb-master.html">Simple Wishbone Master</a></p>
+  </li>
+  <li>
+    <p>How to <a href="/blog/2017/06/14/creating-words-from-bytes.html">create bus command words from a 7-bit data stream</a></p>
+  </li>
+  <li>
+    <p>How to <a href="/blog/2017/06/14/words-back-to-bytes.html">turn the bus master responses back into a serial stream</a></p>
+  </li>
+</ul>
+
+<p>We’ve now just about got a fully functional wishbone master controlled from a
+serial stream that can now be used as a debugging bus. 
+We’ve worked out how to get a serial port up and running,
+how to <a href="/blog/2017/06/14/creating-words-from-bytes.html">create words from the serial
+stream</a>, and
+<a href="/blog/2017/06/08/simple-wb-master.html">how to control a simple wishbone bus
+master</a>
+from the command words running through this stream, and then <a href="/blog/2017/06/14/words-back-to-bytes.html">how to send
+the response words back down the serial port</a>.  The result is a <em>very simple</em> debugging capability.</p>
+
+<p>While simple, nothing keeps this capability from being very successful within
+someone’s design.  This lesson is about adding interrupt notification to the
+output stream of our debugging port.</p>
+
+<h2 id="interrupt-requirements">Interrupt Requirements</h2>
+
+<p>For our purposes, we’ll define an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> as the notification of an
+event having taken place.  Example interrupts might be that the wishbone scope
+has tripped, or that the flash controller has finished erasing or programming
+flash.  Either way, some sort of notification has taken place, and you’d like
+to be notified of it.</p>
+
+<p>We’ll require this of our interrupt processing:</p>
+
+<ul>
+  <li>
+    <p>When an interrupt takes place, we’d like to be informed.</p>
+  </li>
+  <li>
+    <p>We don’t want to be informed twice for the same interrupt.</p>
+  </li>
+  <li>
+    <p>We don’t want to need to control the bus interface, but rather the FPGA.
+Hence, any internal interrupt state within the bus interface should be self
+clearing.</p>
+  </li>
+  <li>
+    <p>The interrupt notification should only get inserted into the stream when
+the stream is idle.</p>
+  </li>
+</ul>
+
+<p>Hence, whenever the interrupt line is raised, we’ll consider that an
+interrupt condition has taken place.  We’ll send an interrupt character (“I”)
+across the channel.  No more interrupt notifications will be sent across the
+channel until the “I” has been committed to, and the interrupt line has gone
+low.</p>
+
+<p>Sound simple enough?</p>
+
+<h2 id="the-interrupt-stream-processor">The interrupt stream processor</h2>
+
+<p>This processor is almost simplicity itself.</p>
+
+<p>We’ll start with the definition of the interrupt command word that we will be
+inserting into our stream.  It is a <em>special</em> word, and so it begins with
+2’b11.  After that, it is the 2nd special word, so we have a prefix of
+5’h11010.  The rest of the interrupt word we set to zero.  That allows us to
+extend our protocol later, should we wish to, with 29 bits of information or
+zeros to indicate no information.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">`define	INT_PREFIX	5'b11010
+`define	INT_WORD	{ `INT_PREFIX, {(34-5){1'b0}} }</code></pre></figure>
+
+<p>I should mention, at this point, a quick lesson in programming practice.  The
+first time I built this controller, I didn’t define these values at the top
+of the file.  Then, when I needed to change them, I missed changing all of them.
+By having `define statements at the top, one change to this definition
+will changes all of its uses later.</p>
+
+<p>Our processing will focus around two primary registers: <strong>int_state</strong> and
+<strong>pending_interrupt</strong>.  The idea is basically this: when an interrupt takes
+place, we’ll go into our interrupt state, and set the interrupt to be pending.
+In other words, we are waiting to send the value out the port.  Once the
+value has been sent, the pending register will clear, but we’ll stay in our
+interrupt state until the interrupt itself clears.</p>
+
+<p>Here you can see that logic below.  First, for the <strong>int_state</strong>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	int_state = 1'b0;
+always @(posedge i_clk)
+	if (i_reset)
+		int_state &lt;= 1'b0;
+	else if ((i_interrupt)&amp;&amp;(!int_state))
+		int_state &lt;= 1'b1;
+	else if ((!pending_interrupt)&amp;&amp;(!i_interrupt))
+		int_state &lt;= 1'b0;</code></pre></figure>
+
+<p>Note that this state register is only cleared when the interrupt line goes
+low <strong>and</strong> the pending line has gone low, indicating that both we have sent
+the interrupt word forward, and that the interrupt has cleared itself.</p>
+
+<p>Then, here’s the same logic but for the <strong>pending_int</strong>.  Note that this
+one is cleared whenever the interrupt word is actually sent down stream.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	pending_interrupt = 1'b0;
+always @(posedge i_clk)
+	if (i_reset)
+		pending_interrupt &lt;= 1'b0;
+	else if ((i_interrupt)&amp;&amp;(!int_state))
+		pending_interrupt &lt;= 1'b1;
+	else if ((o_int_stb)&amp;&amp;(!i_busy)
+			&amp;&amp;(o_int_word[33:29] == `INT_PREFIX))
+		pending_interrupt &lt;= 1'b0;</code></pre></figure>
+
+<p>The rest of our logic is mostly stream processing.</p>
+
+<p>For example, we’d like to know when we have a valid word loaded into our
+output register, so that the interrupt never slows down our communications
+stream, but only inserts itself when we are idle.  If a word is loaded, and
+waiting to be sent, then we won’t insert an interrupt into the stream.</p>
+
+<p>We’ll consider a response word to be loaded any time the incoming strobe
+is true, and we’ll clear the condition whenever that word gets written our
+the output port.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	loaded = 1'b0;
+always @(posedge i_clk)
+	if (i_reset)
+		loaded &lt;= 1'b0;
+	else if (i_stb)
+		loaded &lt;= 1'b1;
+	else if ((o_int_stb)&amp;&amp;(!i_busy))
+		loaded &lt;= 1'b0;</code></pre></figure>
+
+<p>But when do we have something to write?  Obviously we have something to write
+when something is given to us, as in whenever <strong>i_stb</strong> is true.  But we
+also want to make certain we have something to write anytime we have a 
+<strong>pending_interrupt</strong>.  We’ll clear our output request upon a write, as
+long as we don’t have a pending interrupt request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_int_stb = 1'b0;
+always @(posedge i_clk)
+	if (i_reset)
+		o_int_stb &lt;= 1'b0;
+	else if (i_stb)
+		o_int_stb &lt;= 1'b1;
+	else if (pending_interrupt)
+		o_int_stb &lt;= 1'b1;
+	else if ((!loaded)||(!i_busy))
+		o_int_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>The consequence of this logic is that once there is an interrupt waiting to
+be inserted into the output stream, <strong>o_int_stb</strong> will remain high until
+it is sent.  Likewise, any time there is a word requested, <strong>o_int_stb</strong>
+will also remain high.  It’s not going to dip low anytime something moves
+in the downstream direction.</p>
+
+<p>Finally, what word shall be sent?  Whenever a request is made, we’ll send
+the incoming word.  So that we wait for the request, we’ll wait until the
+request is made <strong>and</strong> we don’t have a valid request loaded into our
+outgoing register.  If there is no incoming request, then we’ll automatically
+load our interrupt word.  This will get ignored, though, unless the
+<strong>o_int_stb</strong> line is also high.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if ((i_stb)&amp;&amp;(!loaded))
+		o_int_word &lt;= i_word;
+	else if ((pending_interrupt)&amp;&amp;(!loaded))
+		// Send an interrupt
+		o_int_word &lt;= `INT_WORD;</code></pre></figure>
+
+<h2 id="future-posts">Future Posts</h2>
+
+<p>Adding this one simple capability into our response stream was very easily
+done.  We’ll add idles into this stream next to identify our stream as being
+used for this purpose.  I think you’ll find, when we add the idles in, that
+the idles are just about as easy as the interrupts are.</p>
+
+<p>After we add idle’s, all of the Verilog will be in place.  The next step
+will be to create a simple wishbone interconnect, and then the Verilator
+test bench necessary to try this out before deploying it on an actual FPGA.</p>
+
+<p>This means we still have the following topics to come:</p>
+
+<ul>
+  <li>
+    <p>Adding idle notifications to let you know you are connected to the right
+stream</p>
+  </li>
+  <li>
+    <p>Connecting the bus streaming components together</p>
+  </li>
+  <li>
+    <p>Creating a simple wishbone interconnect</p>
+  </li>
+  <li>
+    <p>Creating a hand-controlled test bench to prove this works</p>
+  </li>
+  <li>
+    <p>Creating a software bus controller</p>
+  </li>
+</ul>
+
+<p>Indeed, if you wanted to try this controller out, it’s far enough along that
+you could probably start working with it today.  Just be aware–it doesn’t
+have any FIFO support.  If you try to read from this bus too fast, or write
+to it too fast, you may find either your commands or their responses getting
+lost.  Perhaps we should add a FIFO to our additional topics list as well, then.</p>
+
+<ul>
+  <li>Adding in FIFO support</li>
+</ul>
+
+<p>Sound interesting?  Write me if you try this, and let me know how it goes.</p>
+
+
+  </div>
+
+</article>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Then went out to him Jerusalem, and all Judaea, and all the region round about Jordan (Matt 3:5)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

@@ -6,9 +6,465 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 15 Jun 2017 18:13:15 -0400</pubDate>
-    <lastBuildDate>Thu, 15 Jun 2017 18:13:15 -0400</lastBuildDate>
+    <pubDate>Fri, 16 Jun 2017 07:37:10 -0400</pubDate>
+    <lastBuildDate>Fri, 16 Jun 2017 07:37:10 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>The debugging bus: a goal for FPGA interaction</title>
+        <description>&lt;p&gt;It’s been a while since I presented the &lt;a href=&quot;/blog/2017/05/22/a-vision-for-controlling-fpgas.html&quot;&gt;vision for controlling FPGA
+logic&lt;/a&gt;.
+Since that time, we’ve put a lot of work into building an FPGA controller
+that we can use for debugging logic running within our FPGA.
+&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;[1]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;[2]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;[3]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/15/words-back-to-bytes.html&quot;&gt;[4]&lt;/a&gt;&lt;/p&gt;
+
+&lt;p&gt;Our goal over all is to provide the student, or any other junior FPGA
+designer for that matter, with a tool, similar to what an &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;expert might
+use&lt;/a&gt;, that he can use to figure out what
+is going on within his design.&lt;/p&gt;
+
+&lt;p&gt;Today, let’s take a look at what that the software side of communicating
+with an FPGA might look like.  In other words, once we connect to our FPGA,
+how will we control that FPGA from software?&lt;/p&gt;
+
+&lt;h2 id=&quot;a-simple-fpga-software-controller&quot;&gt;A Simple FPGA Software Controller&lt;/h2&gt;
+
+&lt;p&gt;The simplest FPGA control program that I’ve built is the one I call 
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp&quot;&gt;wbregs&lt;/a&gt;.
+This program just reads (or writes) a single register within the FPGA.  The
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp&quot;&gt;source code&lt;/a&gt;
+for this program makes it look more complicated than it is though.  That’s
+really nothing more than the fact that it’s been lying around long enough to be
+&lt;em&gt;improved upon&lt;/em&gt; one too many times … but I digress.&lt;/p&gt;
+
+&lt;p&gt;Lets trim this program down to its bare minimum details, and see what it
+would take to control an FPGA using this sort of controller.&lt;/p&gt;
+
+&lt;p&gt;The first step in my idealized world would be to declare a global value
+   to hold a pointer to my FPGA’s interface:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;FPGA&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_fpga&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Then, somewhere within my main program file, I’d want to connect to my FPGA.
+If the FPGA talks to the computer via a serial port, I might wish to
+say something like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SERIAL_PORT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;/dev/ttyUSB0&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;FPGA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;SERIAL_PORT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We may need to come back to the name later, in case we have more than one USB
+serial port connector, but for now let’s just move on.&lt;/p&gt;
+
+&lt;p&gt;I’d really rather connect to my FPGA from any one of my computers via a
+network port, as in:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;FPGASERVER&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;fpgahost.name&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// Could be 192.168.7.1 ...
+&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;FPGAPORT&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2853&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// Some random number, known to you
+//
+&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;FPGA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;FPGASERVER&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;FPGAPORT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Wouldn’t it be nice if that was all it took to connect to an FPGA?&lt;/p&gt;
+
+&lt;p&gt;How about reading the a status register from the FPGA?  For example, we
+might wish to read from the erase control register of the &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash
+controller&lt;/a&gt; to see if it is still
+busy.  In that case, it might be nice to write something as simple as:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;readio&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R_FLASH_EREG&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;FLASH_BUSY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The same could be said about writing to the erase control register, in order
+to command the flash to erase a segment of flash memory–but that’s a topic
+for a later day.&lt;/p&gt;
+
+&lt;p&gt;For now, what about that &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt;?  Wouldn’t
+it be nice to be able to reset the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt;
+for another capture?  The easiest way I can think of doing that would be
+to write the new hold off to the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt;
+control register, as in:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;writeio&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R_SCOPE_CONTROL&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;25&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;//&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;New&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;holdoff&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;is&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;25&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clocks&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Or to read from the internal FPGA &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt;,
+wouldn’t it be nice to just simply … read?&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;scope_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;m_scope_memory&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;readio&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R_SCOPE_DATA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You do remember how, in our &lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;example scope
+design&lt;/a&gt;, we placed
+all of the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt;’s data at the same
+register address, right?&lt;/p&gt;
+
+&lt;p&gt;We might even manage to optimize successive reads, making a similar command
+that could capture any optimizations associated with many reads in a row.
+If so, we could write our for loop that read’s from the FPGA into something
+that could be optimized, such as:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;readz&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R_SCOPE_DATA&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;scope_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_scope_memory&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Working on Video?  One of the hardest parts of working on Video is getting
+that video information in and out of the computer.  Unlike the scope,
+your video information is going to occupy successive addresses, rather
+than a single data address.&lt;/p&gt;
+
+&lt;p&gt;Wouldn’t it be nice if you could read from your video RAM area exactly what
+was being transmitted, as in:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;kt&quot;&gt;uint32_t&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;m_video_image&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NUMBER_OF_PIXELS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;video_size&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;NUMBER_OF_PIXELS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;readi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R_VIDEO_RAM&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;video_size&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_video_image&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Then, when we are done, we should close our FPGA interface via a C++ destructor
+such as:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;delete&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Could we make controlling an FPGA that easy?  The answer is, Yes.  Yes, we can.
+Not only can this be done, but
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp&quot;&gt;wbregs&lt;/a&gt;
+does it.  Sure, 
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp&quot;&gt;wbregs&lt;/a&gt;
+has a lot more code for error handling, and I just added code to look address
+names up from linker map files, but simply reading and writing from an
+FPGA is what it was designed to do.&lt;/p&gt;
+
+&lt;h2 id=&quot;this-will-only-hurt-once&quot;&gt;This will only hurt once&lt;/h2&gt;
+
+&lt;p&gt;Even better, after you go through the pain of building just one debugging
+controller for your FPGA, you can then use it for &lt;em&gt;every one&lt;/em&gt; of your FPGA
+projects.&lt;/p&gt;
+
+&lt;p&gt;Think this one over: the debugging interface isn’t going to be graded.
+(Ask your instructor if you aren’t sure of that.)  If that’s a problem,
+then pull it out of your code before you turn it in.  Either way, if you
+use a debugging bus in your design you will have a leg up over all of your
+classmates who do not.&lt;/p&gt;
+
+&lt;p&gt;Now, consider this sort of interface from the standpoint of the &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;FPGA expert’s
+design process&lt;/a&gt;.
+He’s going to build this sort of interface once, and then he’s going to use it
+in all of his projects.  Some time later, he may come back and add a little
+bit of capability to it, but he’ll still be using it with every project.&lt;/p&gt;
+
+&lt;p&gt;Perhaps an example from my experience would help.  My first design was for
+a &lt;a href=&quot;https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users&quot;&gt;Basys-3&lt;/a&gt; development board.  That’s where
+I build the first version of my own &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbubus.v&quot;&gt;FPGA debugging
+interface&lt;/a&gt;.&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;After I built that first interface (it was similar to the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;hexbus
+interface&lt;/a&gt; we are
+building here) I became frustrated with how slow it was–particularly
+when I was using it to read and write new configurations to the flash.&lt;/p&gt;
+
+    &lt;p&gt;So, I added compression to the interface: both
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbucompress.v&quot;&gt;encoding&lt;/a&gt;
+and
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbudecompress.v&quot;&gt;decoding&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;More recently, I got frustrated with the fact that my interface used up
+a serial port, preventing my CPU from printing to the same serial port.&lt;/p&gt;
+
+    &lt;p&gt;In this case, I restricted the debugging interface to 7-bits, and used
+the high order ASCII bit to determine if the interface was communicating
+printable ASCII (such as the CPU with a printf), or unprintable characters
+(such as the debugging interface).  Since I was only ever using 7-bit
+bytes for the debugging interface in the first place, this change was easy
+to do, and it then gave me two channels of data that I could run through
+my serial port.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;My point is simply this: You need to pay for your tools.  Pay the time and
+energy to build them once and build them well.  Now that they are built,
+use them in all of your projects.&lt;/p&gt;
+
+&lt;p&gt;Let’s even go one step farther: I’m going to license &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;this hexbus student
+interface&lt;/a&gt; that we are
+building under the &lt;a href=&quot;https://www.gnu.org/licenses/lgpl-3.0.en.html&quot;&gt;LGPL&lt;/a&gt;. 
+What that means is that I’ll let you copy it into your project, without being
+required to post the rest of the code for your project.  If you improve upon
+it, post your improvements.  If you are willing to assign ownership of those
+improvements to me, then I’ll post them back into the directory for others to
+use.&lt;/p&gt;
+
+&lt;p&gt;Once we’re finished, then you, as a student, can play the role of the
+expert.  You too can come to the FPGA design problem with a debugging
+tool suite under your belt.&lt;/p&gt;
+
+&lt;p&gt;This is why I &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;pointed
+out&lt;/a&gt;, when
+discussing how an Expert &lt;em&gt;really&lt;/em&gt; does FPGA design, that he comes to the
+problem with a lot of tools already in his toolbox.&lt;/p&gt;
+
+&lt;h2 id=&quot;just-a-simple-vision&quot;&gt;Just a simple vision&lt;/h2&gt;
+
+&lt;p&gt;All of our work here is simply towards one single goal: to build an interface
+to your FPGA that will then simplify all of your interactions with that FPGA.
+Such an interface allows us to write commands to the FPGA and to read status
+back out of the FPGA.  It will allow us to develop and prove that peripherals
+work, and it will help us to find out why they do not work when they do not
+work.&lt;/p&gt;
+
+&lt;p&gt;This is the component most students don’t realize they are missing within their
+design.&lt;/p&gt;
+</description>
+        <pubDate>Fri, 16 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/16/dbg-bus-forest.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/16/dbg-bus-forest.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
+    
+      <item>
+        <title>Adding interrupt reporting to our debugging bus</title>
+        <description>&lt;p&gt;This post starts to complete the design of a very elementary debug port that
+can be used to command an internal, on-board, wishbone bus.  Other posts in
+this series include:&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: WB-UART Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;An overview of a UART to wishbone
+bridge&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to build a &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;Simple Wishbone Master&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create bus command words from a 7-bit data stream&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/14/words-back-to-bytes.html&quot;&gt;turn the bus master responses back into a serial stream&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;We’ve now just about got a fully functional wishbone master controlled from a
+serial stream that can now be used as a debugging bus. 
+We’ve worked out how to get a serial port up and running,
+how to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create words from the serial
+stream&lt;/a&gt;, and
+&lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;how to control a simple wishbone bus
+master&lt;/a&gt;
+from the command words running through this stream, and then &lt;a href=&quot;/blog/2017/06/14/words-back-to-bytes.html&quot;&gt;how to send
+the response words back down the serial port&lt;/a&gt;.  The result is a &lt;em&gt;very simple&lt;/em&gt; debugging capability.&lt;/p&gt;
+
+&lt;p&gt;While simple, nothing keeps this capability from being very successful within
+someone’s design.  This lesson is about adding interrupt notification to the
+output stream of our debugging port.&lt;/p&gt;
+
+&lt;h2 id=&quot;interrupt-requirements&quot;&gt;Interrupt Requirements&lt;/h2&gt;
+
+&lt;p&gt;For our purposes, we’ll define an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Interrupt&quot;&gt;interrupt&lt;/a&gt; as the notification of an
+event having taken place.  Example interrupts might be that the wishbone scope
+has tripped, or that the flash controller has finished erasing or programming
+flash.  Either way, some sort of notification has taken place, and you’d like
+to be notified of it.&lt;/p&gt;
+
+&lt;p&gt;We’ll require this of our interrupt processing:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;When an interrupt takes place, we’d like to be informed.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;We don’t want to be informed twice for the same interrupt.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;We don’t want to need to control the bus interface, but rather the FPGA.
+Hence, any internal interrupt state within the bus interface should be self
+clearing.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The interrupt notification should only get inserted into the stream when
+the stream is idle.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Hence, whenever the interrupt line is raised, we’ll consider that an
+interrupt condition has taken place.  We’ll send an interrupt character (“I”)
+across the channel.  No more interrupt notifications will be sent across the
+channel until the “I” has been committed to, and the interrupt line has gone
+low.&lt;/p&gt;
+
+&lt;p&gt;Sound simple enough?&lt;/p&gt;
+
+&lt;h2 id=&quot;the-interrupt-stream-processor&quot;&gt;The interrupt stream processor&lt;/h2&gt;
+
+&lt;p&gt;This processor is almost simplicity itself.&lt;/p&gt;
+
+&lt;p&gt;We’ll start with the definition of the interrupt command word that we will be
+inserting into our stream.  It is a &lt;em&gt;special&lt;/em&gt; word, and so it begins with
+2’b11.  After that, it is the 2nd special word, so we have a prefix of
+5’h11010.  The rest of the interrupt word we set to zero.  That allows us to
+extend our protocol later, should we wish to, with 29 bits of information or
+zeros to indicate no information.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;`define	INT_PREFIX	5&#39;b11010
+`define	INT_WORD	{ `INT_PREFIX, {(34-5){1&#39;b0}} }&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;I should mention, at this point, a quick lesson in programming practice.  The
+first time I built this controller, I didn’t define these values at the top
+of the file.  Then, when I needed to change them, I missed changing all of them.
+By having `define statements at the top, one change to this definition
+will changes all of its uses later.&lt;/p&gt;
+
+&lt;p&gt;Our processing will focus around two primary registers: &lt;strong&gt;int_state&lt;/strong&gt; and
+&lt;strong&gt;pending_interrupt&lt;/strong&gt;.  The idea is basically this: when an interrupt takes
+place, we’ll go into our interrupt state, and set the interrupt to be pending.
+In other words, we are waiting to send the value out the port.  Once the
+value has been sent, the pending register will clear, but we’ll stay in our
+interrupt state until the interrupt itself clears.&lt;/p&gt;
+
+&lt;p&gt;Here you can see that logic below.  First, for the &lt;strong&gt;int_state&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	int_state = 1&#39;b0;
+always @(posedge i_clk)
+	if (i_reset)
+		int_state &amp;lt;= 1&#39;b0;
+	else if ((i_interrupt)&amp;amp;&amp;amp;(!int_state))
+		int_state &amp;lt;= 1&#39;b1;
+	else if ((!pending_interrupt)&amp;amp;&amp;amp;(!i_interrupt))
+		int_state &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Note that this state register is only cleared when the interrupt line goes
+low &lt;strong&gt;and&lt;/strong&gt; the pending line has gone low, indicating that both we have sent
+the interrupt word forward, and that the interrupt has cleared itself.&lt;/p&gt;
+
+&lt;p&gt;Then, here’s the same logic but for the &lt;strong&gt;pending_int&lt;/strong&gt;.  Note that this
+one is cleared whenever the interrupt word is actually sent down stream.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	pending_interrupt = 1&#39;b0;
+always @(posedge i_clk)
+	if (i_reset)
+		pending_interrupt &amp;lt;= 1&#39;b0;
+	else if ((i_interrupt)&amp;amp;&amp;amp;(!int_state))
+		pending_interrupt &amp;lt;= 1&#39;b1;
+	else if ((o_int_stb)&amp;amp;&amp;amp;(!i_busy)
+			&amp;amp;&amp;amp;(o_int_word[33:29] == `INT_PREFIX))
+		pending_interrupt &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The rest of our logic is mostly stream processing.&lt;/p&gt;
+
+&lt;p&gt;For example, we’d like to know when we have a valid word loaded into our
+output register, so that the interrupt never slows down our communications
+stream, but only inserts itself when we are idle.  If a word is loaded, and
+waiting to be sent, then we won’t insert an interrupt into the stream.&lt;/p&gt;
+
+&lt;p&gt;We’ll consider a response word to be loaded any time the incoming strobe
+is true, and we’ll clear the condition whenever that word gets written our
+the output port.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	loaded = 1&#39;b0;
+always @(posedge i_clk)
+	if (i_reset)
+		loaded &amp;lt;= 1&#39;b0;
+	else if (i_stb)
+		loaded &amp;lt;= 1&#39;b1;
+	else if ((o_int_stb)&amp;amp;&amp;amp;(!i_busy))
+		loaded &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;But when do we have something to write?  Obviously we have something to write
+when something is given to us, as in whenever &lt;strong&gt;i_stb&lt;/strong&gt; is true.  But we
+also want to make certain we have something to write anytime we have a 
+&lt;strong&gt;pending_interrupt&lt;/strong&gt;.  We’ll clear our output request upon a write, as
+long as we don’t have a pending interrupt request.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_int_stb = 1&#39;b0;
+always @(posedge i_clk)
+	if (i_reset)
+		o_int_stb &amp;lt;= 1&#39;b0;
+	else if (i_stb)
+		o_int_stb &amp;lt;= 1&#39;b1;
+	else if (pending_interrupt)
+		o_int_stb &amp;lt;= 1&#39;b1;
+	else if ((!loaded)||(!i_busy))
+		o_int_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The consequence of this logic is that once there is an interrupt waiting to
+be inserted into the output stream, &lt;strong&gt;o_int_stb&lt;/strong&gt; will remain high until
+it is sent.  Likewise, any time there is a word requested, &lt;strong&gt;o_int_stb&lt;/strong&gt;
+will also remain high.  It’s not going to dip low anytime something moves
+in the downstream direction.&lt;/p&gt;
+
+&lt;p&gt;Finally, what word shall be sent?  Whenever a request is made, we’ll send
+the incoming word.  So that we wait for the request, we’ll wait until the
+request is made &lt;strong&gt;and&lt;/strong&gt; we don’t have a valid request loaded into our
+outgoing register.  If there is no incoming request, then we’ll automatically
+load our interrupt word.  This will get ignored, though, unless the
+&lt;strong&gt;o_int_stb&lt;/strong&gt; line is also high.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if ((i_stb)&amp;amp;&amp;amp;(!loaded))
+		o_int_word &amp;lt;= i_word;
+	else if ((pending_interrupt)&amp;amp;&amp;amp;(!loaded))
+		// Send an interrupt
+		o_int_word &amp;lt;= `INT_WORD;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;h2 id=&quot;future-posts&quot;&gt;Future Posts&lt;/h2&gt;
+
+&lt;p&gt;Adding this one simple capability into our response stream was very easily
+done.  We’ll add idles into this stream next to identify our stream as being
+used for this purpose.  I think you’ll find, when we add the idles in, that
+the idles are just about as easy as the interrupts are.&lt;/p&gt;
+
+&lt;p&gt;After we add idle’s, all of the Verilog will be in place.  The next step
+will be to create a simple wishbone interconnect, and then the Verilator
+test bench necessary to try this out before deploying it on an actual FPGA.&lt;/p&gt;
+
+&lt;p&gt;This means we still have the following topics to come:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Adding idle notifications to let you know you are connected to the right
+stream&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Connecting the bus streaming components together&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a simple wishbone interconnect&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a software bus controller&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Indeed, if you wanted to try this controller out, it’s far enough along that
+you could probably start working with it today.  Just be aware–it doesn’t
+have any FIFO support.  If you try to read from this bus too fast, or write
+to it too fast, you may find either your commands or their responses getting
+lost.  Perhaps we should add a FIFO to our additional topics list as well, then.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;Adding in FIFO support&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Sound interesting?  Write me if you try this, and let me know how it goes.&lt;/p&gt;
+
+</description>
+        <pubDate>Fri, 16 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/16/adding-ints.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/16/adding-ints.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>How to send our bus results back out the serial port</title>
@@ -1965,7 +2421,7 @@ begin
 
 	// Return over the command interface that we just had an error,
 	// or a bus reset
-	if (i_wb_reset)
+	if (i_reset)
 		o_rsp_word &amp;lt;= `RSP_RESET;
 	else
 		o_rsp_word &amp;lt;= `RSP_BUS_ERROR;
@@ -2832,378 +3288,6 @@ how to build an interpolator.&lt;/p&gt;
         
         
         <category>dsp</category>
-        
-      </item>
-    
-      <item>
-        <title>An Overview of a Wishbone-UART Bridge</title>
-        <description>&lt;p&gt;I’ve now tried to write about how to convert a UART stream to a wishbone master
-several times over, and … each time the result has been too complex to
-explain within a simple blog post.&lt;/p&gt;
-
-&lt;p&gt;So, in good engineering fashion, let’s decompose the problem.  Instead of
-presenting an entire wishbone controller, let me instead present you with an
-overview of the RTL side of a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbubus.v&quot;&gt;working UART to wishbone
-bridge&lt;/a&gt; that I’ve
-now used for many of my projects.  When we build a new/simpler on this blog,
-we’ll need to include many of these design elements, so it’s worth taking a
-look at.&lt;/p&gt;
-
-&lt;p&gt;You can see an outline overview of the parts and pieces I’ve used before
-in Fig. 1.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: WB-UART Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-ovw.svg&quot; alt=&quot;Block Diagram of a Working Wishbone to UART converter&quot; width=&quot;240&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;h2 id=&quot;the-transport-end&quot;&gt;The Transport End&lt;/h2&gt;
-
-&lt;p&gt;At the top of this figure are the receiver and transmitter. In this design, the
-transport layer is a generic 8-bit interface.&lt;/p&gt;
-
-&lt;p&gt;Because the transport layer is so generic, it can be provided by either a
-&lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/toplevel.v&quot;&gt;serial port&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/jtagser.v&quot;&gt;JTAG port&lt;/a&gt;,
-or even a &lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt; DEPP channel, such as the
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/deppbyte.v&quot;&gt;S6SoC&lt;/a&gt; uses.
-Indeed, even my work on the &lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/pptest/pport.v&quot;&gt;ICO
-board&lt;/a&gt; will
-use a fairly generic 8-bit parallel port interface.&lt;/p&gt;
-
-&lt;p&gt;There’s one additional requirement to this interface, necessary when the
-interface runs over something similar to a SPI port: there must be an idle
-character.  That way when a character &lt;em&gt;must&lt;/em&gt; be sent, such as when the SPI port
-must transmit in order to receive, the idle character can be sent.  To date,
-I’ve used an 8’hff for this purpose–but only if I’ve needed it.  That
-character can be generated by the transmitter, or quietly dropped in the
-receiver.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-bus-master-end&quot;&gt;The Bus Master End&lt;/h2&gt;
-
-&lt;p&gt;On the other end of the UART to wishbone bridge is the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v&quot;&gt;wishbone bus
-master&lt;/a&gt; that
-commands the entire bus interface to the chip.  Any peripheral can be hung off
-of such a bus:
-&lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbsdram.v&quot;&gt;SDRAM&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/wb2axip&quot;&gt;an AXI bus&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/enetpackets.v&quot;&gt;network interface&lt;/a&gt;,
-an LED/switch/button interface,
-&lt;a href=&quot;https://github.com/ZipCPU/rtcclock&quot;&gt;real–time clock&lt;/a&gt;,
-GPIO,
-&lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/wboled.v&quot;&gt;OLEDRgb controller&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/master/rtl/wbuart.v&quot;&gt;UART controller&lt;/a&gt;,
-PS/2 mouse controller, and more.&lt;/p&gt;
-
-&lt;p&gt;In this case, the bus master accepts commands in the form of 36-bit words. 
-These 36-bit words specify to the bus:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;What address to use (one word),&lt;/li&gt;
-  &lt;li&gt;Whether to write one word,&lt;/li&gt;
-  &lt;li&gt;Whether to stop writing, or&lt;/li&gt;
-  &lt;li&gt;Whether to read multiple words.&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;The read/write commands also include a bit indicating whether the address
-should increment between bus accesses, or whether all of the accesses will
-be to the same bus address.&lt;/p&gt;
-
-&lt;p&gt;Three specific capabilities of that can be hung off of this bus are worth
-mentioning.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;The first is the &lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash controller&lt;/a&gt;.
-Because I can control the flash over
-a &lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;UART port&lt;/a&gt;, I can read, erase, and
-program the flash.  That means that I can reconfigure the entire FPGA over
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;UART&lt;/a&gt;.  Even better, if you connect
-one of &lt;a href=&quot;https://github.com/ZipCPU/wbicapetwo&quot;&gt;Xilinx’s ICAPE2 interfaces to the
-bus&lt;/a&gt;,
-you can then load and reload the FPGA’s configuration–without JTAG access.&lt;/p&gt;
-
-    &lt;p&gt;The flash interface itself creates a unique requirement of this bus:  When
-writing to the flash, the flash controller uses the end of the wishbone
-cycle (CYC line goes low) as the signal to start programming the flash.  For
-this reason, when writing a series of values, we cannot drop the wishbone
-cycle line (CYC) until the last value is written.  Dropping the CYC line is
-then the indication to the flash chip that it can start programming.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Since I’ve spent much of my time building a
-   &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;CPU&lt;/a&gt;, I’m particularly interested in
-   being able to start, step, halt, and reboot the
-   &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;CPU&lt;/a&gt; from a debug port controlled by
-   this interface.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Finally, for the purposes of this blog, this wishbone interface is useful
-because you can now control a 
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone Scope&lt;/a&gt;, whether it be a
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v&quot;&gt;traditional
-scope&lt;/a&gt; or an
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;RLE compressed
-scope&lt;/a&gt; which
-you can then use to debug any other part of your design.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;That’s how powerful the wishbone bus master is.&lt;/p&gt;
-
-&lt;h2 id=&quot;characters-to-bits&quot;&gt;Characters to Bits&lt;/h2&gt;
-
-&lt;p&gt;Since this was my first interface (although now in its 3rd generation), I
-needed to be able to read what was going
-on.  To accomplish this, I insisted that the interface run over printable
-ASCII characters: 0-9, A-Z, a-z, @ and %.  The result is that, if necessary,
-I can read the interface by eye and understand what is being sent–although
-it does require a (not so secret) decoder ring to do it.&lt;/p&gt;
-
-&lt;p&gt;Newlines are treated as out of band characters, and used to end writes that may
-currently be in progress.  This keeps us from using a 6-bit interface.&lt;/p&gt;
-
-&lt;p&gt;Hence, the first level beneath the transport layer
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbutohex.v&quot;&gt;converts printable ASCII into 6-bit
-words&lt;/a&gt;
-and &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbusixchar.v&quot;&gt;back again&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;This also slows down the speed of the transport, since the transport
-layer can handle 8-bit bytes and we’re only using six of those 8-bit bytes.&lt;/p&gt;
-
-&lt;p&gt;Perhaps we can build a better one on this blog as time progresses?&lt;/p&gt;
-
-&lt;h2 id=&quot;assembling-into-lines&quot;&gt;Assembling into lines&lt;/h2&gt;
-
-&lt;p&gt;While perhaps not required, the interface does &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbucompactlines.v&quot;&gt;assemble responses into
-lines&lt;/a&gt;.
-To do this, it inserts line breaks at the end of any response, or any time the
-line would otherwise overflow.&lt;/p&gt;
-
-&lt;p&gt;From a user’s standpoint, this makes it a lot easier to synchronize your eyes
-to the beginning of commands and responses–especially when/if you need to
-debug this interface.&lt;/p&gt;
-
-&lt;h2 id=&quot;packing-bytes-into-words&quot;&gt;Packing Bytes into Words&lt;/h2&gt;
-
-&lt;p&gt;Any wishbone bus command requires first knowing whether you wish to read or
-write, a bus address, and possible a 32-bit data word.&lt;/p&gt;
-
-&lt;p&gt;To do all of these things, you need to be able to assemble 8-bit bytes into
-words that are at least 32-bits in length.  That length is the minimum to hold
-a 32-bit data word that you wish to write, but by itself it’s not enough.  The
-interface must also be able to indicate the type of transaction that is being
-requested.&lt;/p&gt;
-
-&lt;p&gt;In the example we’ve been following, we &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbureadcw.v&quot;&gt;convert six 6-bit characters into a
-36-bit word&lt;/a&gt; and
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbudeword.v&quot;&gt;back again&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;While 36-bits works, it may be overkill for what we need.  Perhaps we can
-drop this down to a 35-bit word?&lt;/p&gt;
-
-&lt;h2 id=&quot;compression&quot;&gt;Compression&lt;/h2&gt;
-
-&lt;p&gt;UARTs are slow.  Reading an FPGA’s configuration from a flash, so you know
-whether or not it needs to be reflashed, over a slow UART link can be &lt;em&gt;painful&lt;/em&gt;.
-To speed things up, I added compression to this example bridge.
-For reading and writing, we use a simple compression scheme based upon a
-table of the most recently sent values.  Addresses get compressed based
-upon either the difference between them and the last address, or perhaps just
-the low order bits of the address might be sent.&lt;/p&gt;
-
-&lt;p&gt;You can see the table look up and address decoding logic within the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/wbudecompress.v&quot;&gt;decompression
-module&lt;/a&gt;, or the
-logic to see if a codeword to be sent can be found within
-a table lookup
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/wbucompress.v&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;resets-and-interrupts&quot;&gt;Resets and Interrupts&lt;/h2&gt;
-
-&lt;p&gt;As a final step, the bus interface needs to handle a couple extra pieces:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;When the bus is idle, the interface should send something periodically so that  you know the FPGA is active on the other end.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;If ever an interrupt occurs, you want that information inserted into the
-data stream&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;This logic is captured in the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/wbuidleint.v&quot;&gt;idle-int
-module&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Finally, you need some form of fault tolerance, so that if a peripheral
-doesn’t respond to the bus, the bus can detect that fact, reset the bus,
-and return an error across the channel.  We use the same error code for a bus
-time out as any generic bus error coming from the bus itself, although
-we can usually tell the difference between them.&lt;/p&gt;
-
-&lt;p&gt;This watchdog capability is handled in the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/wbubus.v&quot;&gt;top
-level&lt;/a&gt; of the UART
-to wishbone bridge.&lt;/p&gt;
-
-&lt;h2 id=&quot;performance&quot;&gt;Performance&lt;/h2&gt;
-
-&lt;p&gt;Since this bus communicates reads and writes of 32–bit words packed into
-six 8-bit bytes and transmitted over an 8-bit channel, it takes 60 UART baud
-cycles (8N1 encoding) to write one word across the bus (ignoring compression).&lt;/p&gt;
-
-&lt;p&gt;If you switch to 7N1 encoding, you can increase your speed by about 10%,
-since we were only ever using 7-bits of an 8-bit interface.&lt;/p&gt;
-
-&lt;p&gt;Stick with us and we’ll try to beat this number.  Specifically, if we abandon a
-6-bits within 8-bit interface and switch to a full 8-bit interface, we should
-be able to get down to about 46 baud per word–a 30% speed increase.&lt;/p&gt;
-
-&lt;p&gt;On the other hand, if we wish to multiplex a console port onto the channel,
-we may need to stick with a 7-bit interface.  In that case, perhaps we can
-use all seven bits, instead of only 65 of the 128 values?&lt;/p&gt;
-
-&lt;h2 id=&quot;not-shown&quot;&gt;Not Shown&lt;/h2&gt;
-
-&lt;p&gt;What isn’t shown in this diagram is the structure of the &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/sw/host/ttybus.cpp&quot;&gt;C++
-software&lt;/a&gt;
-necessary to encode and decode words to send across this bus.&lt;/p&gt;
-
-&lt;p&gt;Still, if we can keep the interface to any redesigned bus as simple as the
-&lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/sw/host/devbus.h&quot;&gt;devbus
-interface&lt;/a&gt;
-that all of our interface software uses, then any software we’ve already
-written to use that interface will need to be relinked with the new interface
-library, but no other changes will be required.&lt;/p&gt;
-
-&lt;h2 id=&quot;a-minimal-interface&quot;&gt;A minimal interface&lt;/h2&gt;
-
-&lt;p&gt;On this blog, we’re going to rebuild this interface.  Our goal will be to
-design it in a manner so simple that any college student can build one.
-This may mean that we throw out any unused or unnecessary parts and pieces.
-We’ll also see if we can’t get our newer, better interface to run faster
-than this current one.&lt;/p&gt;
-
-&lt;p&gt;The result should be a simpler WB to UART bridge, such as the one shown in
-Fig 2.&lt;/p&gt;
-
-&lt;table style=&quot;float: left&quot;&gt;&lt;caption&gt;Fig 2: WB-UART Simplified&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Before we can build one of these, though, we’re going to need to spend some
-time learning how to build a wishbone bus master — similar to the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v&quot;&gt;last
-one&lt;/a&gt;,
-but simpler.  Simple enough that it can be understood by the student,
-and simple enough that it requires very few hardware resources.  That lesson
-will then inform the rest our work redesigning the interface itself.&lt;/p&gt;
-</description>
-        <pubDate>Mon, 05 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/05/wb-bridge-overview.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/05/wb-bridge-overview.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Campus Sidewalks and FPGA Design</title>
-        <description>&lt;p&gt;I once heard a fascinating answer to the question of where to place sidewalks
-on campus after building a new building: Wait a year first.  After a year of
-using the new building, the students and faculty will have created paths
-to and from your new building.  These dirt paths then tell you where to
-build your official sidewalks.&lt;/p&gt;
-
-&lt;p&gt;This has been my experience with the &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed wishbone
-scope&lt;/a&gt; I built
-years ago.&lt;/p&gt;
-
-&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed 
-scope&lt;/a&gt;
-wasn’t my first bus scope.  The &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v&quot;&gt;first
-scope&lt;/a&gt; was more of
-a traditional scope that captured every sample based upon a trigger.  It’s
-designed to be a slave on a &lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone
-bus&lt;/a&gt;, and so it fits nicely as a
-component of a design.&lt;/p&gt;
-
-&lt;p&gt;With just a touch of logic, it wasn’t very hard to add a &lt;a href=&quot;https://en.wikipedia.org/wiki/Run-length_encoding&quot;&gt;run-length
-compression&lt;/a&gt;
-feature to the front end of the &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v&quot;&gt;traditional
-scope&lt;/a&gt;.
-Although this worked okay, it didn’t handle the trigger properly.  I
-ignored this problem, and used the compressed scope anyway.&lt;/p&gt;
-
-&lt;p&gt;I used it to debug a &lt;a href=&quot;http://store.digilentinc.com/pmod-gps-gps-receiver/&quot;&gt;GPS
-interface&lt;/a&gt;, looking
-for where the PPS signal took place with respect to the UART NMEA stream.&lt;/p&gt;
-
-&lt;p&gt;I used it to debug a &lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt;,
-so I could skip the idle times or even times when the slave I was debugging
-wasn’t selected.&lt;/p&gt;
-
-&lt;p&gt;More recently, I used it to debug the &lt;a href=&quot;https://github.com/ZipCPU/wbi2c&quot;&gt;I2C
-portion&lt;/a&gt; of an HDMI interface.&lt;/p&gt;
-
-&lt;p&gt;In all of these, the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed scope&lt;/a&gt;
-proved its worth particularly for slow
-interfaces where the scope would allow longer snapshots than could fit in block
-memory.  Indeed, I’m not sure I could have debugged these interfaces without a
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed scope&lt;/a&gt;.
-But, now that I’ve done so, I’ve learned enough to go
-back and add in some necessary features.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;scope&lt;/a&gt;
-needs to have a known trigger point.  Given the output stream,
-and the holdoff you configured the scope with, you should be able to know
-exactly where the trigger will be in that output stream.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;If nothing is changing, the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;scope&lt;/a&gt;
-should have a maximum run length, so that
-it doesn’t lock up and give you no information.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The last piece of memory within the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;scope&lt;/a&gt;’s
-buffer must be a data point, even if it was part of a run.  It cannot be
-left as part of a run.  This is a necessary part of knowing exactly where,
-within the buffer, the trigger took place.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;As with the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v&quot;&gt;regular scope&lt;/a&gt;,
-the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed scope&lt;/a&gt;
-should have the option for working off of both a data clock and a bus clock.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Timing is important.  Working at high speed is valuable.  The debugger
-(i.e. scope) must be able to keep up with your logic when your logic is at
-high speed.  This means that all debug/scope logic should be broken up into
-pieces small enough to run at the highest speed necessary.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Hence, I just laid my metaphorical sidewalks, and rebuilt the 
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed scope&lt;/a&gt;
-according to my needs–now that I knew what they were.&lt;/p&gt;
-
-&lt;p&gt;If you have a &lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt; within
-your design, then feel free to try it out and let me know how (or if) it works
-for you.&lt;/p&gt;
-
-&lt;p&gt;If you don’t have a wishbone bus within your design, then &lt;a href=&quot;/topics.html&quot;&gt;stick
-around&lt;/a&gt; and we’ll discuss how to build one.&lt;/p&gt;
-
-</description>
-        <pubDate>Sat, 03 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/03/building-sidewalks.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/03/building-sidewalks.html</guid>
-        
-        
-        <category>blog</category>
         
       </item>
     
