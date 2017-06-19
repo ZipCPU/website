@@ -6,9 +6,176 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 17 Jun 2017 08:35:23 -0400</pubDate>
-    <lastBuildDate>Sat, 17 Jun 2017 08:35:23 -0400</lastBuildDate>
+    <pubDate>Mon, 19 Jun 2017 14:42:40 -0400</pubDate>
+    <lastBuildDate>Mon, 19 Jun 2017 14:42:40 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Sending bus idle notifications down the line</title>
+        <description>&lt;p&gt;If you haven’t been paying attention to how we’ve built our debug bus master
+access into a wishbone device, you might wish to look at some of the other
+posts in this series:&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: WB-UART Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl-2.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;An overview of a UART to wishbone
+bridge&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to build a &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;Simple Wishbone Master&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create bus command words from a 7-bit data stream&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/15/words-back-to-bytes.html&quot;&gt;turn the bus master responses back into a serial stream&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;add interrupts to our interface&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Today, we’re going to add idle notifications to our stream.  These notifications
+will help to identify this stream to you any time it is idle.  The result is
+that, when you connect to one of these busses, you should know you have a valid
+connection once you see the idle character passing through the stream.&lt;/p&gt;
+
+&lt;h2 id=&quot;idle-requirements&quot;&gt;Idle Requirements&lt;/h2&gt;
+
+&lt;p&gt;We want to keep this idle capability simple.  If we draw out the idea of this
+idle capability a little bit, we’ll discover we want the following capabilities
+in this idle component:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;There should never be any idle characters while the interface is busy.  That
+way the idle character won’t slow down any valid transactions.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;An idle character should be sent in the stream somewhere between every
+one and ten seconds, yet at regular intervals.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The first idle following any activity shouldn’t show up until one time
+interval’s distance from the last valid piece of information.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;If the interface is stopped, such as if the bus is commanded via a SPI slave
+port, we shouldn’t accumulate more than a single idle character to be
+returned.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;In sum, if you watch this stream, you should be able to identify this
+stream as a debug controller within a short number of seconds.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-idle-stream-processor&quot;&gt;The idle stream processor&lt;/h2&gt;
+
+&lt;p&gt;This section will walk through an example idle stream processor, showing you
+how to add idle characters (“Z”) into our response stream.&lt;/p&gt;
+
+&lt;p&gt;The first step in any protocol handling is to define the protocol words.
+In this case, we’ll be sending an &lt;strong&gt;IDLE_WORD&lt;/strong&gt; down the line.  This
+will turn into a “Z” when received with the strobe high.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;`define	IDLE_SUB_WORD	5&#39;b11011
+`define	IDLE_WORD	{ `IDLE_SUB_WORD, {(34-5){1&#39;b0}} }&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Knowing when to insert an idle character is pretty simple.  By using the &lt;a href=&quot;/blog/2017/06/02/generating-timing.html&quot;&gt;timing
+techniques shared
+here&lt;/a&gt;, we can
+create a strobe every 2^28 clocks, or about every two and a half seconds.
+By clearing our idle counter on every input command or reset, we’ll guarantee
+that the next idle will be at least two and a half seconds after any
+activity.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	idle_stb      = 0;
+initial	idle_counter  = 0;
+always @(posedge i_clk)
+	if ((i_reset)||(i_cmd_stb))
+		idle_counter &amp;lt;= 0;
+	else
+		{ idle_stb, idle_counter } &amp;lt;= idle_counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now that we know when we wish to insert an idle, the next step is to know
+when to output an idle character.  In our case, we’ll output a character,
+whether idle or not, any time the indication above takes place or any
+time an incoming word takes place.  As a result, this will be a pass-through
+component–and only change the input when nothing’s there.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	o_idl_stb = 1&#39;b0;
+	always @(posedge i_clk)
+		if (i_reset)
+			o_idl_stb &amp;lt;= 1&#39;b0;
+		else if ((i_cmd_stb)&amp;amp;&amp;amp;(!o_idl_busy))
+			o_idl_stb &amp;lt;= 1&#39;b1;
+		else if ((idle_stb)&amp;amp;&amp;amp;(!o_idl_stb))
+			o_idl_stb &amp;lt;= 1&#39;b1;
+		else if (!i_busy)
+			o_idl_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The final component is to settle which word we wish to output.  On any incoming
+request to transmit, we’ll send the incoming word out.  We’ll also need to
+ensure that any incoming word is not over-written until the next word goes
+out.  Finally, if nothing is coming in to go out, we’ll just set our output
+to be the IDLE_WORD.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_idl_word = IDLE_WORD;
+always @(posedge i_clk)
+	if ((i_cmd_stb)&amp;amp;&amp;amp;(!o_idl_busy))
+		o_idl_word &amp;lt;= i_cmd_word;
+	else if (!i_busy)
+		o_idl_word &amp;lt;= IDLE_WORD;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The logic is fairly simple.&lt;/p&gt;
+
+&lt;p&gt;Ok, I’ll admit it, I got this super-simple interface wrong at first.  Worse,
+I had more than one bug within this component.  It got so bad I started to get
+very frustrated with the simulator until I finally found the bug.
+What was it you ask?  I defined the &lt;strong&gt;IDLE_SUB_WORD&lt;/strong&gt; as 5’h11011 instead
+of 5’b11011.  See the difference?  If it hadn’t been for the simulator, I’m
+not sure I ever would’ve found my mistake.&lt;/p&gt;
+
+&lt;h2 id=&quot;future-posts&quot;&gt;Future Posts&lt;/h2&gt;
+
+&lt;p&gt;As with the
+&lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;interrupt capability&lt;/a&gt;,
+adding an idle identifier into our debug
+protocol was fairly easy to do.  Our next post will put the whole interface
+together.  Further posts will include:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Composing the rest of the debug controller&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a simple wishbone interconnect&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a software bus controller&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Adding in FIFO support&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;While we’re going to do better, this simple debugging bus should be enough
+to help you debug quite a few designs.&lt;/p&gt;
+
+</description>
+        <pubDate>Mon, 19 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/19/debug-idles.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/19/debug-idles.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Why Use a Network Interface to your FPGA</title>
@@ -683,7 +850,7 @@ test bench necessary to try this out before deploying it on an actual FPGA.&lt;/
 
 &lt;ul&gt;
   &lt;li&gt;
-    &lt;p&gt;Adding idle notifications to let you know you are connected to the right
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/19/debug-idles.html&quot;&gt;Adding idle notifications&lt;/a&gt; to let you know you are connected to the right
 stream&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
@@ -1064,10 +1231,10 @@ functionality remains missing.  This includes:&lt;/p&gt;
 
 &lt;ul&gt;
   &lt;li&gt;
-    &lt;p&gt;Adding interrupt notifications to the response stream&lt;/p&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;Adding interrupt notifications&lt;/a&gt; to the response stream&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;Adding idle notifications to let you know you are connected to the right
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/19/debug-idles.html&quot;&gt;Adding idle notifications&lt;/a&gt; to let you know you are connected to the right
 stream&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
@@ -2384,711 +2551,6 @@ just stop there.&lt;/p&gt;
         <pubDate>Sat, 10 Jun 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/06/10/lost-college-student.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/10/lost-college-student.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Building a Simple Wishbone Master</title>
-        <description>&lt;p&gt;Explaining how to build a good &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;wishbone controlled debug
-port&lt;/a&gt;
-may take a couple of posts to do right.  Worse, it may take us a couple of
-rounds just to get the logic right, but let’s try anyway.&lt;/p&gt;
-
-&lt;table style=&quot;float: left&quot;&gt;&lt;caption&gt;Fig 1: WB-UART Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;For this post, we’re going to concentrate on the wishbone bus master found
-at the bottom of the simplified UART to wishbone converter, as outlind in
-Fig 1.&lt;/p&gt;
-
-&lt;p&gt;Hence, if the whole capability will eventually look like Fig 1, we’re only
-looking at the component at the very bottom within this post, and even then
-we’re only going to examine a simplified version of it.  We’ll leave the
-implementation of multiple transactions at once for a later date.&lt;/p&gt;
-
-&lt;p&gt;My strategy for this blog post will be to come back and update it later
-with any updates or fixes, so (hopefully) any mistakes will get fixed over
-time.&lt;/p&gt;
-
-&lt;p&gt;We are going to try to take this opportunity to build a simple wishbone bus
-master.  Before starting, you may wish to grab a copy of the
-&lt;a href=&quot;http://opencores.org/opencores,wishbone&quot;&gt;wishbone bus specification&lt;/a&gt; and
-follow along in the
-&lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;B4 version&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;You can find definitions for the various wishbone interface
-wires in chapter two.  We’re going to continue following our practice of
-prepending input wires with &lt;strong&gt;i_…&lt;/strong&gt; and output wires with &lt;strong&gt;o_..&lt;/strong&gt;, even
-though the specification appends similar notes.  We’re also going to add
-the &lt;strong&gt;_wb_&lt;/strong&gt; designator to all of the inputs associated with the wishbone
-bus.  Hence, &lt;strong&gt;i_wb_ack&lt;/strong&gt; will reference the return acknowledgement from
-the slave.&lt;/p&gt;
-
-&lt;p&gt;Chapter three of the 
-&lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;spec&lt;/a&gt; describes how the
-various wishbone wires compose a bus cycle.
-We’ll specifically be implementing the &lt;em&gt;pipelined bus cycle&lt;/em&gt; (not the classic
-bus cycle), and we’re eventually going to build our implementation so that
-it can issue requests across the bus in a pipelined fashion as fast as the
-slave will allow it.&lt;/p&gt;
-
-&lt;p&gt;If you are a visual learner, check out figures 3-6, and 3-8 from
-&lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;the specification&lt;/a&gt;.
-I find these to be the most useful, as I’m explaining how the bus works.
-We’ll reserve the capability shown in Figures 3-11 and 3-13 for a later post.&lt;/p&gt;
-
-&lt;p&gt;For today’s post, we’ll handle a single bus interaction per bus cycle, so
-the CYC line will be lowered between requests.  We’ll revisit this decision
-in a later post so that we can issue multiple requests of the bus at
-one request per clock, but that will be a later discussion.&lt;/p&gt;
-
-&lt;p&gt;Further, you can see the code as we’re building it in the &lt;a href=&quot;https://github.com/ZipCPU/icozip&quot;&gt;ICO Zip
-repository&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/exbus/exsimple.v&quot;&gt;here&lt;/a&gt;.
-Since the &lt;a href=&quot;https://github.com/ZipCPU/icozip&quot;&gt;ICO Zip project&lt;/a&gt; isn’t fully
-functional (yet), we’ll be building on the master branch.  That will also help
-to make sure our link references stay valid over time–even if we need to
-modify our files later.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-control-interface&quot;&gt;The Control Interface&lt;/h2&gt;
-
-&lt;p&gt;The bus master interface we are building will ultimately be commanded from an
-external interface.  We’ve
-&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;already discussed&lt;/a&gt;
-how that one might wish to do this over &lt;a href=&quot;http://icoboard.org&quot;&gt;ICO board&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/pptest&quot;&gt;parallel port&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;UART&lt;/a&gt;, SPI, or
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/jtagser.v&quot;&gt;JTAG&lt;/a&gt;. 
-Exactly which is used will be external to our bus master implementation.&lt;/p&gt;
-
-&lt;p&gt;We’ll have to build up the functionality in our control interface 
-as we build up the whole interface.  The two sort of go together.&lt;/p&gt;
-
-&lt;p&gt;For now, let’s handle all of our communication using 34-bit words.  We’ll use
-the top 2-bits of these 34-bit words for signaling, and then the bottom 32 for
-any values we wish to pass.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;input		i_reset;
-input		i_cmd_stb;
-input	[33:0]	i_cmd_word;
-output	reg	o_cmd_busy;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Our input data word will be valid any time &lt;strong&gt;i_cmd_stb&lt;/strong&gt; is valid, but it will only
-be accepted whenever &lt;strong&gt;o_cmd_busy&lt;/strong&gt; is false.  Hence, when you read the code, you
-may find (&lt;strong&gt;i_stb&lt;/strong&gt;)&amp;amp;&amp;amp;(!&lt;strong&gt;o_cmd_busy&lt;/strong&gt;).  This will be the indication a
-request has been accepted.&lt;/p&gt;
-
-&lt;p&gt;For now, we’ll just set &lt;strong&gt;o_cmd_busy&lt;/strong&gt; to be true any time the bus is active.
-Eventually, we’ll want to take a peek at the next bus request, and drop 
-&lt;strong&gt;o_cmd_busy&lt;/strong&gt; if the next request is one we are interested in.  For example,
-if we are busy doing something and the user requests a bus reset, we’ll
-need to drop the busy line and accept that request.&lt;/p&gt;
-
-&lt;p&gt;For our command words, we’ll use the following definition to define how the
-34-bit control words will be interpreted:&lt;/p&gt;
-
-&lt;table&gt;
-  &lt;thead&gt;
-    &lt;tr&gt;
-      &lt;th&gt;33&lt;/th&gt;
-      &lt;th&gt;32&lt;/th&gt;
-      &lt;th&gt;31 - 0&lt;/th&gt;
-    &lt;/tr&gt;
-  &lt;/thead&gt;
-  &lt;tbody&gt;
-    &lt;tr&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;Read request, ignore the rest of the 32-bits, ACK on output&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;Write request, the 32-bit data contains the word to be written&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;Set an address.  If bit 31 is set, we’ll add this value to the current bus address.  If bit 30 is set, the address will be incremented upon each bus access&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;4’h0, 28’hxx, Bus Reset&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;
-
-&lt;p&gt;Our signaling scheme will allow us to issue a bus reset command, which will
-abruptly cause us to abandon any bus cycle we may be in the middle of.  To
-make this work, the bus reset request will need to override the busy flag.&lt;/p&gt;
-
-&lt;p&gt;This is not the most efficient scheme.  For example, why send 34-bits when
-you are only going to pay attention to two of them (i.e. the read)?  Wouldn’t
-it make more sense to send a smaller number of bits for the read, together with
-the number of items you intend to read?  Yes, it would.  Optimizing this command
-word will be the subject of another post.&lt;/p&gt;
-
-&lt;p&gt;The output of our bus will use (almost) the exact same approach.  We’ll create
-a &lt;strong&gt;o_rsp_stb&lt;/strong&gt; signal that will be true any time the output references a
-valid codeword.  Unlike the input, though, we’ll ignore any flow control on the 
-output.  We can add some amount of flow control back in later with
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbufifo.v&quot;&gt;a FIFO&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;input		o_rsp_stb;
-input		o_rsp_word;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll also borrow from the input codeword encoding for the return trip encoding,
-as shown below:&lt;/p&gt;
-
-&lt;table&gt;
-  &lt;thead&gt;
-    &lt;tr&gt;
-      &lt;th&gt;33&lt;/th&gt;
-      &lt;th&gt;32&lt;/th&gt;
-      &lt;th&gt;31 - 0&lt;/th&gt;
-    &lt;/tr&gt;
-  &lt;/thead&gt;
-  &lt;tbody&gt;
-    &lt;tr&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;Acknowledge a write.  The 32-bit value contains number of writes to acknowledge&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;Read response, the 32 data bits are the word that was read&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;0&lt;/td&gt;
-      &lt;td&gt;Acknowledge an address that has been set, with two zero bits and 30 address bits&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt; &lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;3’h0, 29’hxx, Bus Reset acknowledgement&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;1&lt;/td&gt;
-      &lt;td&gt;3’h1, 29’hxx, Bus Error&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;
-
-&lt;h2 id=&quot;decoding-the-control-interface&quot;&gt;Decoding the Control Interface&lt;/h2&gt;
-
-&lt;p&gt;We have only four different types of command words in our code book.
-In the first section of our simple bus master, we’ll create
-flags to indicate which request is currently being made.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	i_cmd_rd   = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b00);
-assign	i_cmd_wr   = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b01);
-// We&#39;ll use i_cmd_bus to capture whether we have a read or write request
-assign	i_cmd_bus  = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33]    == 1&#39;b0);
-//
-assign	i_cmd_addr = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b10);
-assign	i_cmd_special = (i_cmd_stb)&amp;amp;&amp;amp;(i_cmd_word[33:32] == 2&#39;b11);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You may notice that I have violated my naming convention with these wires:
-I have named locally generated wires with an &lt;strong&gt;i_…&lt;/strong&gt; prefix when they are
-not actual inputs to our bus master module, but rather the results of
-combinatorial logic applied to inputs.  In this case, it tends to work
-out, but it’s not something I’m regularly going to do.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-wishbone-master-interface&quot;&gt;The Wishbone Master Interface&lt;/h2&gt;
-
-&lt;p&gt;This bus controller will have three basic states, as shown in Fig 2.&lt;/p&gt;
-
-&lt;table syle=&quot;float: none; align: center&quot;&gt;&lt;caption&gt;Wishbone Master State Transition Diagram&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-simple-master.svg&quot; alt=&quot;Simple Bus Master state transition diagram&quot; width=&quot;700&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Here’s a quick description of each of those states:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;em&gt;IDLE&lt;/em&gt;: When we are doing nothing, both CYC and STB must be low.  In this
-state, we’ll need to be responsive to incoming requests from the bus.
-Upon a request, we’ll need to set the request direction (&lt;strong&gt;o_wb_we&lt;/strong&gt;),
-the data lines (&lt;strong&gt;o_wb_data&lt;/strong&gt;) and then CYC and STB.&lt;/p&gt;
-
-    &lt;p&gt;We’ll also set our address lines in this state, but without adjusting
-CYC or STB.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;em&gt;BUS REQUEST&lt;/em&gt;: When CYC and STB are both high, a bus request is taking
-place.  This request phase lasts until &lt;strong&gt;i_wb_stall&lt;/strong&gt; goes low, at
-which point our request has been accepted.&lt;/p&gt;
-
-    &lt;p&gt;When we come back to this code later and transition it to handling multiple
-requests, we will transition from one request
-to the next any time &lt;strong&gt;o_wb_stb&lt;/strong&gt; is true and &lt;strong&gt;i_wb_stall&lt;/strong&gt; is false.&lt;/p&gt;
-
-    &lt;p&gt;It is also possible that the acknowledgement might be received on the same
-clock the transaction was requested.  We’ll need to make certain we deal
-with this case.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;em&gt;BUS RESPONSE&lt;/em&gt;: After making a request of the bus, we need to wait until
-the slave acknowledges it.  Every acknowledgement will lead us to sending
-another response across our command interface back up our command stream.
-More importantly, every read response will also need to carry the value
-read from the &lt;strong&gt;i_wb_data&lt;/strong&gt; data lines in its payload.  We’ll need to
-make certain we return those back to the user.&lt;/p&gt;
-
-    &lt;p&gt;Once the last acknowledgement is received, we can transition back to the
-idle state.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;There are a couple of exceptions to this model: if a bus error occurs, we’ll
-simply abandon the current transaction.  This approach has the inherent
-problem in it that acknowledgements may come back later and get mixed with
-another bus request.  For now, we’ll accept that risk and do it anyway,
-since it may be the only way to recover the bus if a peripheral is
-non-responsive.&lt;/p&gt;
-
-&lt;h3 id=&quot;simplified-overview&quot;&gt;Simplified Overview&lt;/h3&gt;
-
-&lt;p&gt;If you’re still somewhat new to digital design and coming from the
-software world, your first approach to building a Wishbone Bus Master might
-look something like the following:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_wb_cyc = 1&#39;b0;
-initial	o_wb_stb = 1&#39;b0;
-initial	newaddr  = 1&#39;b0;
-initial	o_rsp_stb= 1&#39;b0;
-always @(posedge i_clk)
-if ((i_reset)||(i_wb_err))
-begin
-	o_wb_cyc &amp;lt;= 1&#39;b0;
-	o_wb_stb &amp;lt;= 1&#39;b0;
-	o_cmd_busy   &amp;lt;= 1&#39;b0;
-	o_rsp_stb    &amp;lt;= 1&#39;b1;
-	newaddr &amp;lt;= 0;
-
-	// Return over the command interface that we just had an error,
-	// or a bus reset
-	if (i_reset)
-		o_rsp_word &amp;lt;= `RSP_RESET;
-	else
-		o_rsp_word &amp;lt;= `RSP_BUS_ERROR;
-end else if ((i_cmd_stb)&amp;amp;&amp;amp;(!o_cmd_busy))
-begin
-	//
-	// In the idle state
-	//
-	newaddr &amp;lt;= 0;
-	if (i_cmd_addr)
-	begin
-		if (!i_cmd_word[1])
-			o_wb_addr &amp;lt;= i_cmd_word[29:0];
-		else
-			o_wb_addr &amp;lt;= i_cmd_word[29:0] + o_wb_addr;
-
-		inc &amp;lt;= !i_cmd_word[0];
-
-		// Acknowledge the new address -- on the next clock
-		// (after the add has completed)
-		newaddr &amp;lt;= 1&#39;b1;
-	end
-
-	if (newaddr)
-	begin
-		o_rsp_stb &amp;lt;= 1&#39;b1;
-		o_rsp_word &amp;lt;= { `RSP_SUB_ADDR, o_wb_addr, 1&#39;b0, !inc };
-	end
-
-	o_wb_we &amp;lt;= (i_cmd_wr);
-
-	// On a read or write request, activate the bus and go to the bus
-	// request state
-	if (i_cmd_bus)
-	begin
-		o_wb_cyc &amp;lt;= 1&#39;b1;
-		o_wb_stb &amp;lt;= 1&#39;b1;
-		o_cmd_busy   &amp;lt;= 1&#39;b1;
-	end
-
-	if (i_cmd_wr)
-		o_wb_data &amp;lt;= i_cmd_word[31:0];
-end else if (o_wb_stb)
-begin
-	newaddr &amp;lt;= 1&#39;b0;
-	//
-	// BUS REQUEST state
-	//
-	// In the state where we are commanding the bus, and waiting for
-	// the bus request to be accepted
-	//
-	// o_wb_cyc will also be true here, since we cannot allow
-	// o_wb_stb to be true if o_wb_cyc is not true.  (Too many
-	// peripherals depend upon this bus simplification ...)
-	//
-	if (!i_wb_stall)
-	begin
-		// The request has been accepted, don&#39;t request again.
-		o_wb_stb  &amp;lt;= 1&#39;b0;
-		o_wb_addr &amp;lt;= o_wb_addr + inc;
-
-		// If we get an ack on the same cycle as the request,
-		// quietly transition back to idle.
-		if (i_wb_ack)
-		begin
-			o_wb_cyc &amp;lt;= 1&#39;b0;
-			o_rsp_stb &amp;lt;= 1&#39;b1;
-			if (o_wb_we)
-				o_rsp_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
-			else
-				o_rsp_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
-		end
-	end
-end else if (o_wb_cyc)
-begin
-	newaddr &amp;lt;= 1&#39;b0;
-	if (i_wb_ack)
-	begin
-		o_wb_cyc &amp;lt;= 1&#39;b0;
-		o_cmd_busy &amp;lt;= 1&#39;b0;
-		o_rsp_stb &amp;lt;= 1&#39;b1;
-		if (o_wb_we)
-			o_rsp_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
-		else
-			o_rsp_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
-	end
-end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;From this view, the three states of the controller should be readily
-apparent.  The controller starts out idle, CYC=STB=0. 
-Once the controller receives a command, it
-moves to a bus request state to issue the command, CYC=STB=1.  Once the
-command has been issued, but before any response, it is in a bus wait state
-with CYC=1, STB=0.  When the final ACK comes back, we’ll go back to idle,
-CYC=STB=0.&lt;/p&gt;
-
-&lt;p&gt;That’s how a wishbone master works.&lt;/p&gt;
-
-&lt;p&gt;When I first sketch out a design, it often looks very similar to this giant
-always block above.  Perhaps it’s my software background.  I like to build
-one big always block with all the parts and pieces within it.  Indeed, my
-&lt;a href=&quot;http://opencores.org/project,qspiflash&quot;&gt;flash controller&lt;/a&gt; is still built in
-this fashion, with one giant always block.&lt;/p&gt;
-
-&lt;p&gt;Now that I’ve been doing this for a while, I’ve learned that breaking the
-big always block up into little blocks is easier on the FPGA.  For example,
-in this case, why should the address lines only get set when the new address
-command shows up &lt;em&gt;and&lt;/em&gt; the reset is clear?&lt;/p&gt;
-
-&lt;p&gt;For this reason, we’ll split up the always block into parts and pieces.&lt;/p&gt;
-
-&lt;h3 id=&quot;the-cyc-and-stb-lines&quot;&gt;The CYC and STB Lines&lt;/h3&gt;
-
-&lt;p&gt;The wishbone CYC and STB lines are so integrally connected, they
-tend to remain together no matter how the interface gets broken up.  Indeed,
-these two wires alone define which state we are in within our state space.
-Further, in the big always block above, few lines actually depend upon
-the reset line.  Hence, we’ll build their state diagram like this:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_wb_cyc = 1&#39;b0;
-initial	o_wb_stb = 1&#39;b0;
-always @(posedge i_clk)
-	if ((i_reset)||((i_wb_err)&amp;amp;&amp;amp;(o_wb_cyc)))
-	begin
-		// On any error or reset, then clear the bus.
-		o_wb_cyc &amp;lt;= 1&#39;b0;
-		o_wb_stb &amp;lt;= 1&#39;b0;
-	end else if (o_wb_stb)
-	begin
-		//
-		// BUS REQUEST state
-		//
-		if (!i_wb_stall)
-			// If we are only going to do one transaction,
-			// then as soon as the stall line is lowered, we are
-			// done.
-			o_wb_stb &amp;lt;= 1&#39;b0;
-
-		// While not likely, it is possible that a slave might ACK
-		// our request on the same clock it is received.  In that
-		// case, drop the CYC line.
-		//
-		// We gate this with the stall line in case we receive an
-		// ACK while our request has yet to go out.  This may make
-		// more sense later, when we are sending multiple back to back
-		// requests across the bus, but we&#39;ll leave this gate here
-		// as a placeholder until then.
-		if ((!i_wb_stall)&amp;amp;&amp;amp;(i_wb_ack))
-			o_wb_cyc &amp;lt;= 1&#39;b0;
-	end else if (o_wb_cyc)
-	begin
-		//
-		// BUS WAIT
-		//
-		if (i_wb_ack)
-			// Once the slave acknowledges our request, we are done.
-			o_wb_cyc &amp;lt;= 1&#39;b0;
-	end else begin
-		//
-		// IDLE state
-		//
-		if (i_cmd_bus)
-		begin
-			// We&#39;ve been asked to start a bus cycle from our
-			// command word, either RD or WR
-			o_wb_cyc &amp;lt;= 1&#39;b1;
-			o_wb_stb &amp;lt;= 1&#39;b1;
-		end
-	end
-
-	// For now, we&#39;ll use the bus cycle line as an indication of whether
-	// or not we are too busy to accept anything else from the command
-	// port.  This will change if we want to accept multiple write
-	// commands per bus cycle, but that will be a bus master that&#39;s
-	// not nearly so simple.
-	assign	o_cmd_busy = o_wb_cyc;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;h3 id=&quot;the-write-line&quot;&gt;The write line&lt;/h3&gt;
-&lt;p&gt;We can significantly simplify the output bus write enable line.  Since we only
-accept commands when we are in the idle state, and we only transition to
-the bus request state on a read (or write) command, we can just simply leave
-this as:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-		if (!o_wb_cyc)
-			o_wb_we &amp;lt;= (i_cmd_wr);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Notice how much we just simplified this.&lt;/p&gt;
-
-&lt;p&gt;The consequence of this simplification (and the many others like it) is that
-our code will be harder to read.
-The positive: because this line now uses fewer FPGA resources, there will
-be less logic between clocks, allowing you to (possibly) run your clock a 
-touch faster, and there will be fewer LUTs used to generate this line, allowing
-you to place more of what you care about onto your FPGA.&lt;/p&gt;
-
-&lt;h3 id=&quot;the-address-lines&quot;&gt;The Address Lines&lt;/h3&gt;
-
-&lt;p&gt;We remove the address lines from the big block simply because there’s no reason
-why the address line logic needs to depend upon the reset line.  On reset, we
-can allow the address (and the increment) to both come up undefined.  We’ll
-also keep our own internal new address variable in this block as well.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	//
-	// The bus ADDRESS lines
-	//
-	initial	newaddr = 1&#39;b0;
-	always @(posedge i_clk)
-	begin
-		if ((i_cmd_addr)&amp;amp;&amp;amp;(!o_cmd_busy))
-		begin
-			// If we are in the idle state, we accept address
-			// setting commands.  Specifically, we&#39;ll allow the
-			// user to either set the address, or add a difference
-			// to our address.  The difference may not make sense
-			// now, but if we ever wish to compress our command bus,
-			// sending an address difference can drastically cut
-			// down the number of bits required in a set address
-			// request.
-			if (!i_cmd_word[1])
-				o_wb_addr &amp;lt;= i_cmd_word[31:2];
-			else
-				o_wb_addr &amp;lt;= i_cmd_word[31:2] + o_wb_addr;
-
-			//
-			// We&#39;ll allow that bus requests can either increment
-			// the address, or leave it the same.  One bit in the
-			// command word will tell us which, and we&#39;ll set this
-			// bit on any set address command.
-			inc &amp;lt;= !i_cmd_word[0];
-		end else if ((o_wb_stb)&amp;amp;&amp;amp;(!i_wb_stall))
-			// The address lines are used while the bus is active,
-			// and referenced any time STB &amp;amp;&amp;amp; !STALL are true.
-			//
-			// However, once STB and !STALL are both true, then the
-			// bus is ready to move to the next request.  Hence,
-			// we add our increment (one or zero) here.
-			o_wb_addr &amp;lt;= o_wb_addr + , inc};
-
-
-		// We&#39;d like to respond to the bus with any address we just
-		// set.  The goal here is that, upon any read from the bus,
-		// we should be able to know what address the bus was set to.
-		// For this reason, we want to return the bus address up the
-		// command stream.
-		//
-		// The problem is that the add (above) when setting the address
-		// takes a clock to do.  Hence, we&#39;ll use &quot;newaddr&quot; as a flag
-		// that o_wb_addr has a new value in it that needs to be
-		// returned via the command link.
-		newaddr &amp;lt;= ((i_cmd_addr)&amp;amp;&amp;amp;(!o_cmd_busy));
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;h3 id=&quot;the-output-data-lines&quot;&gt;The output data lines&lt;/h3&gt;
-
-&lt;p&gt;Those output data lines can be set just like the write enable line.  Only,
-this time, we don’t care what the lines are set to when we are reading.
-Hence, we’ll set them upon any request.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	begin
-		// This may look a touch confusing ... what&#39;s important is that:
-		//
-		// 1. No one cares what the bus data lines are, unless we are
-		//	in the middle of a write cycle.
-		// 2. Even during a write cycle, these lines are don&#39;t cares
-		//	if the STB line is low, indicating no more requests
-		// 3. When a request is received to write, and so we transition
-		//	to a bus write cycle, that request will come with data.
-		// 4. Hence, we set the data words in the IDLE state on the
-		//	same clock we go to BUS REQUEST.  While in BUS REQUEST,
-		//	these lines cannot change until the slave has accepted
-		//	our inputs.
-		//
-		// Thus we force these lines to be constant any time STB and
-		// STALL are both true, but set them otherwise.
-		//
-		if ((!o_wb_stb)||(!i_wb_stall))
-			o_wb_data &amp;lt;= i_cmd_word[31:0];
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Since we are setting 32 outputs, the logic savings is much greater than the
-savings from simplifying just the one &lt;strong&gt;o_wb_we&lt;/strong&gt; line.&lt;/p&gt;
-
-&lt;h3 id=&quot;the-output-result&quot;&gt;The output result&lt;/h3&gt;
-
-&lt;p&gt;We also need to return a result back up the command chain.  This result will
-be dependent upon what has taken place.  It could be:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;An acknowledgement of a bus reset request&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A notification of a bus error&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;An acknowledgement of a new address, or a value that has been written&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Or (finally) the result of any data  read from the bus.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Because of all of these possibilities, it takes a bit of logic to set this
-right.  Remember, &lt;strong&gt;o_rsp_stb&lt;/strong&gt; will be true any time &lt;strong&gt;o_rsp_word&lt;/strong&gt; has valid
-information, and that the &lt;strong&gt;o_rsp_word&lt;/strong&gt; wires are don’t cares any time
-&lt;strong&gt;o_rsp_stb&lt;/strong&gt; is low.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-	begin
-		o_rsp_stb &amp;lt;= 1&#39;b1;
-		o_rsp_word &amp;lt;= `RSP_RESET;
-	end else if (i_wb_err)
-	begin
-		o_rsp_stb &amp;lt;= 1&#39;b1;
-		o_rsp_word &amp;lt;= `RSP_BUS_ERROR;
-	end else if (o_wb_cyc) begin
-		//
-		// We&#39;re either in the BUS REQUEST or BUS WAIT states
-		//
-		// Either way, we want to return a response on our command
-		// channel if anything gets ack&#39;d
-		o_rsp_stb &amp;lt;= (i_wb_ack);
-		//
-		//
-		if (o_wb_we)
-			o_rsp_word &amp;lt;= `RSP_WRITE_ACKNOWLEDGEMENT;
-		else
-			o_rsp_word &amp;lt;= { `RSP_SUB_DATA, i_wb_data };
-	end else begin
-		//
-		// We are in the IDLE state.
-		//
-		// Echo any new addresses back up the command chain
-		//
-		o_rsp_stb  &amp;lt;= newaddr;
-		o_rsp_word &amp;lt;= { `RSP_SUB_ADDR, o_wb_addr, 1&#39;b0, !inc };
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;h2 id=&quot;a-not-so-simplified-wishbone-master&quot;&gt;A Not-So Simplified Wishbone Master&lt;/h2&gt;
-
-&lt;p&gt;If you’ve along so far, you may notice we’ve left a lot of capabilities
-we want in our bus master on the floor:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;There’s no means for sending multiple write commands without dropping CYC
-between them.  This will break our flash controller, so we’ll have to come
-back and fix this.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;There’s no means for reading from (or writing to) multiple consecutive
-addresses in one
-transaction.  That’s really useful for getting us on and off the bus
-quickly.  We’ll need to come back to this later.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;There are a lot of times when the bits in our 34-bit codeword are going
-unused.  For example, why transmit 34-bits to our device just to send
-a reset, when only six of those 34 bits are ever used to decode a reset?
-Why send a 30’bit address offset, when you are just adding it to the current
-address?&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;If we want a really good wishbone master interface that’s fully featured,
-we’ll need to come back and fix these things.  For now, let’s move on to the
-next piece in our command wishbone bridge.&lt;/p&gt;
-
-&lt;h2 id=&quot;examples&quot;&gt;Examples&lt;/h2&gt;
-
-&lt;p&gt;Now that you know the basic pieces of any wishbone bus master, here’s a list
-of some example wishbone bus master’s that I’ve built that you might find
-worth referencing:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;Instruction fetch: &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v&quot;&gt;one word at a
-time&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;two at a
-time&lt;/a&gt;, and
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;using a
-cache&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;CPU memory stage: &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/memops.v&quot;&gt;one word at a time
-time&lt;/a&gt;, and
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pipemem.v&quot;&gt;pipelined&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v&quot;&gt;direct memory access (DMA)
-controller&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A [similar UART-WB bridge](
-(https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v).&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;h2 id=&quot;next-steps&quot;&gt;Next Steps&lt;/h2&gt;
-
-&lt;p&gt;You can find prior posts in this series on the &lt;a href=&quot;/topics.html&quot;&gt;site
-topics&lt;/a&gt; page.  You can also see from 
-&lt;a href=&quot;/topics.html&quot;&gt;that page&lt;/a&gt; where I’m hoping to go next.&lt;/p&gt;
-
-</description>
-        <pubDate>Thu, 08 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/08/simple-wb-master.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/08/simple-wb-master.html</guid>
         
         
         <category>blog</category>
