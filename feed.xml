@@ -6,9 +6,241 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 19 Jun 2017 14:42:40 -0400</pubDate>
-    <lastBuildDate>Mon, 19 Jun 2017 14:42:40 -0400</lastBuildDate>
+    <pubDate>Tue, 20 Jun 2017 08:16:36 -0400</pubDate>
+    <lastBuildDate>Tue, 20 Jun 2017 08:16:36 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Putting our Debugging Bus RTL Components Together</title>
+        <description>&lt;p&gt;We’ve slowly but surely now built up all of the pieces necessary to build a
+debugging bus to provide wishbone master access into an FPGA.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: WB-UART Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl-2.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;As we’ve done so, we’ve gone through several posts to get here describing all
+of the various components.  Here’s a list of those previous posts in this
+series, in case you wish to start at the beginning and go through this
+development.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;An overview of a UART to wishbone
+bridge&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to build a &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;Simple Wishbone Master&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create bus command words from a 7-bit data stream&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/15/words-back-to-bytes.html&quot;&gt;turn the bus master responses back into a serial stream&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;add interrupts to our interface&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;Adding idles to our interface&lt;/a&gt;, to help recognize that it is up and running on a given serial port.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Today’s post is about putting all of these components together.  When we are
+done, we’ll have a working debug bus that you can use to read and write from
+a &lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;wishbone bus&lt;/a&gt; within your design.&lt;/p&gt;
+
+&lt;p&gt;In this design, we have very few module level requirements.  Our big goal
+is little more than that we put all the pieces together, as outlined in 
+Fig. 1 above.  Hence we’ll jump right into putting the pieces together.&lt;/p&gt;
+
+&lt;h2 id=&quot;putting-the-pieces-together&quot;&gt;Putting the Pieces Together&lt;/h2&gt;
+
+&lt;p&gt;You can find our various pieces so far
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;As we put these components together, we’ll skip for discussion purposes the
+register and wire definitions, as well as the module interface definition.
+If you’d like to see all of the pieces, including these definitions,
+please feel free to examine the final module code 
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbbus.v&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hbdechex.v&quot;&gt;first
+component&lt;/a&gt; will
+take our incoming stream and turn it into 5-bit data words having a binary
+representation.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;hbdechex dechxi(i_clk, i_rx_stb, i_rx_byte,
+		dec_stb, w_reset, dec_bits);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Note that it takes a module level input, &lt;strong&gt;i_rx_byte&lt;/strong&gt;,
+containing the received byte, together with a strobe, &lt;strong&gt;i_rx_stb&lt;/strong&gt;, which
+will be true for the one clock when &lt;strong&gt;i_rx_byte&lt;/strong&gt; is true.  In a similar
+fashion, the outputs bits will be placed into &lt;strong&gt;dec_bits&lt;/strong&gt;, which will be
+valid any time &lt;strong&gt;dec_stb&lt;/strong&gt; is true.&lt;/p&gt;
+
+&lt;p&gt;One unique feature of this component is the &lt;strong&gt;w_reset&lt;/strong&gt; signal that will be
+true for one clock, on the clock after ‘T’ was received.  We’ll use this
+signal to reset all of our processing components.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hbpack.v&quot;&gt;next
+component&lt;/a&gt; will
+then pack our 4-bit values into a 32-bit word.  It will also keep track of
+word transitions, and note when any new word begins.  Upon the beginning of a
+word, or for that matter any unknown character, the interface will push
+forward any command currently within its buffer.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;hbpack	packxi(i_clk, w_reset,
+	dec_stb, dec_bits, iw_stb, iw_word);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You may have noticed by now that I like to differentiate things by
+prefix.  The ouputs of this module have the &lt;strong&gt;iw_&lt;/strong&gt; prefix, indicating
+that they are the incoming words.&lt;/p&gt;
+
+&lt;p&gt;Had you tried to jump into this whole process at the beginning, without the
+experience of having done all of our work so far, you might’ve thought that
+the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hbexec.v&quot;&gt;bus master&lt;/a&gt;
+component would be the primary component.  The reality is that thus bus master
+function wouldn’t be able to function apart from the other components around it.
+The reason is that &lt;em&gt;something&lt;/em&gt; needs to tell it what addresses to read and
+write from the bus.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;hbexec	wbexec(i_clk, w_reset, iw_stb, iw_word, wb_busy,
+		ow_stb, ow_word,
+		o_wb_cyc, o_wb_stb, o_wb_we, o_wb_addr, o_wb_data,
+			o_wb_sel, i_wb_ack, i_wb_stall, i_wb_err,
+			i_wb_data);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Here, it takes its inputs from the &lt;strong&gt;iw_word&lt;/strong&gt;, initiates a bus command, and
+returns its results in the &lt;strong&gt;ow_word&lt;/strong&gt;.  Both of these words will be true
+on the one clock with their &lt;strong&gt;_stb&lt;/strong&gt; line is true.  The actual bus master
+wires are prefixed with &lt;strong&gt;o_wb_&lt;/strong&gt; if they go from the master to the slave, and
+&lt;strong&gt;i_wb_&lt;/strong&gt; if they are returning values from the slave.  Further, because these
+have the &lt;strong&gt;i_&lt;/strong&gt; and &lt;strong&gt;o_&lt;/strong&gt; prefixes, you can tell (from my own notation
+convention) that these particular values are module level inputs and outputs.&lt;/p&gt;
+
+&lt;p&gt;At this point, our interface changes somewhat.  Prior to this part of our
+design, subsequent modules were required to be prepared for an input that
+could take place at any clock.  The serial port transmitter, however, at the
+other end of this stream cannot handle data at &lt;em&gt;any&lt;/em&gt; rate given to it.  So,
+we’re going to need to slow things down.  We’ll do this with the &lt;strong&gt;_busy&lt;/strong&gt;
+signal.  Each unit in this return chain will accept a &lt;strong&gt;_stb&lt;/strong&gt; word indicating
+that it’s next input word is valid and ready, and it will produce a &lt;strong&gt;_stb&lt;/strong&gt;
+word indicating that it’s output word is valid and ready.  However, to keep
+the interface from moving faster than our resulting transmit transport can
+handle, we’ll insist that transactions only take place when the &lt;strong&gt;_stb&lt;/strong&gt; is
+valid &lt;em&gt;and&lt;/em&gt; the &lt;strong&gt;_busy&lt;/strong&gt; associated with that stage is false.  Hence, once
+the &lt;strong&gt;_stb&lt;/strong&gt; signal is raised, it must remain so and the &lt;strong&gt;_word&lt;/strong&gt; value
+must not change until the &lt;strong&gt;_busy&lt;/strong&gt; line from the receiving entity has dropped.&lt;/p&gt;
+
+&lt;p&gt;This is actually a fairly common protocol, used by busses ranging from
+&lt;a href=&quot;http://www.gstitt.ece.ufl.edu/courses/fall15/eel4720_5721/labs/refs/AXI4_specification.pdf&quot;&gt;AXI&lt;/a&gt;
+to &lt;a href=&quot;https://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;Wishbone&lt;/a&gt; and more.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/addints.v&quot;&gt;first
+component&lt;/a&gt;
+to use this new interface approach is the 
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/addints.v&quot;&gt;addints&lt;/a&gt;
+module that adds interrupt notifications into our stream.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;hbints	addints(i_clk, w_reset, i_interrupt,
+		ow_stb,  ow_word,  int_busy,
+		int_stb, int_word, idl_busy);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This stage also acts like a one-stage FIFO, giving us a little bit of a buffer
+should responses come from the master too fast for us to deal with them.&lt;/p&gt;
+
+&lt;p&gt;You can see the &lt;strong&gt;_busy&lt;/strong&gt; line coming from the next stage on the third
+line, together with the output lines &lt;strong&gt;int_stb&lt;/strong&gt; and &lt;strong&gt;int_word&lt;/strong&gt;.
+The first line contains the &lt;strong&gt;int_busy&lt;/strong&gt; line which would’ve gone to the
+prior stage, had we had one that accepted it.  We’ll leave it here unconnected
+so that we can grab it when we add a FIFO in to this interface later.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/addints.v&quot;&gt;addints&lt;/a&gt;
+module is followed by the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/addidles.v&quot;&gt;debug
+idles&lt;/a&gt; component
+that adds idle words into the output stream.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	hbidle	addidles(i_clk, w_reset,
+			int_stb, int_word, idl_busy,
+			idl_stb, idl_word, hb_busy);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We then &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hbdeword.v&quot;&gt;unpack
+our words&lt;/a&gt; back
+into the five-bit components that had composed them originally on input.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;hbdeword unpackx(i_clk, w_reset,
+		idl_stb, idl_word, hb_busy,
+		hb_stb, hb_bits, hx_busy);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;These 5-bit components then &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hbdeword.v&quot;&gt;get
+converted&lt;/a&gt; into
+bytes for the transport.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	hbgenhex genhex(i_clk, hb_stb, hb_bits, hx_busy,
+			hx_stb, hx_byte, nl_busy);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;If the transport ever clears and becomes idle, we’ll &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/hbnewline.v&quot;&gt;add a carriage return
+linefeed pair&lt;/a&gt;
+to the interface.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;hbnewline addnl(i_clk, w_reset, hx_stb, hx_byte, nl_busy,
+		o_tx_stb, o_tx_byte, i_tx_busy);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;That way any line-based stream logic will know to flush its buffer, since any
+partial response would’ve now been completed.&lt;/p&gt;
+
+&lt;h2 id=&quot;future-posts&quot;&gt;Future Posts&lt;/h2&gt;
+
+&lt;p&gt;Although this concludes the Verilog development of the debug bus we’ve been
+working through, the task isn’t over.  If you have a wishbone bus
+that you would like to experiment with commanding, feel free to fire this up
+and give it a try.  At this point, you have the basics of a capability.&lt;/p&gt;
+
+&lt;p&gt;The basics.  In otherwords, while it’s an RTL bus, it doesn’t do anything yet.
+We can use it to gain access into a system, but we don’t (yet) have any system
+built that we might use this to gain access to.  So, we’re not done yet.&lt;/p&gt;
+
+&lt;p&gt;The next items in this series will discuss:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to create a simple wishbone interconnect&lt;/p&gt;
+
+    &lt;p&gt;This will consist of some “interesting” things that we can put together and
+test.  We’ll use a block RAM component and a &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone
+scope&lt;/a&gt; for this purpose, as well as a
+fairly generic set of simple registers.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
+
+    &lt;p&gt;This will be about building a test bench that we can use to run this whole
+package in Verilator.&lt;/p&gt;
+
+    &lt;p&gt;Once you get this far, you have an example of something that you can put
+in your hardware and try.  But … we’re still not done.  While you may find
+the interface somewhat usable, a software controller would make it much
+easier to use.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Creating a software bus controller&lt;/p&gt;
+
+    &lt;p&gt;That hand-typed interface is going to get old.  We’ll build a software
+interface when we get to this point.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Still, this simple debugging bus is now our first design component, and almost
+a first design.&lt;/p&gt;
+
+</description>
+        <pubDate>Tue, 20 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/20/dbg-put-together.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/20/dbg-put-together.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Sending bus idle notifications down the line</title>
@@ -469,7 +701,7 @@ would take to control an FPGA using this sort of controller.&lt;/p&gt;
 &lt;p&gt;The first step in my idealized world would be to declare a global value
    to hold a pointer to my FPGA’s interface:&lt;/p&gt;
 
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;FPGA&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_fpga&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;FPGA&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;p&gt;Then, somewhere within my main program file, I’d want to connect to my FPGA.
 If the FPGA talks to the computer via a serial port, I might wish to
@@ -2271,286 +2503,6 @@ S6&lt;/a&gt;.&lt;/p&gt;
         <pubDate>Mon, 12 Jun 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/06/12/minimizing-luts.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/12/minimizing-luts.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>A College Student&#39;s Response to the FPGA Design Process</title>
-        <description>&lt;p&gt;I recently had the opportunity to help a college student on his end of term
-project.  The student’s project sounded like a lot of fun to me, but in the
-typical end of term, typical college fashion, I’m not sure it was nearly as
-much fun for him or his teammate.&lt;/p&gt;
-
-&lt;p&gt;When the term was over, I shared with him my &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;blog
-post&lt;/a&gt;,
-describing the difference
-between the student’s design process, the expert’s design process, and the
-actual expert’s design process, and then offered him a chance to respond now
-that his term is over.&lt;/p&gt;
-
-&lt;p&gt;What follows is that he had to say, and then my own thoughts on his
-comments.&lt;/p&gt;
-
-&lt;h2 id=&quot;a-college-students-perspective&quot;&gt;A College Student’s Perspective&lt;/h2&gt;
-
-&lt;p&gt;I really liked &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;your blog
-post&lt;/a&gt;, and I’d like to
-respond to it with my own experience.&lt;/p&gt;
-
-&lt;p&gt;I’ve now finally finished the project, and handed in my final report.&lt;/p&gt;
-
-&lt;p&gt;It is not
-as professionally done as I might like, and it is likely that it may be
-missing some desired info.  However, the main key point I want to bring out
-is that &lt;em&gt;we should have spent more time
-testbenching via simulation on Vivado and creating accurate testbenches, with
-wait times and hold times similar to realistic button presses as well as
-accounting for delay times between components in the FPGA, the
-&lt;a href=&quot;http://store.digilentinc.com/pmod-kypd-16-button-keypad/&quot;&gt;keypad&lt;/a&gt;,
-and the
-&lt;a href=&quot;http://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface/&quot;&gt;LCD&lt;/a&gt;&lt;/em&gt;.
-All of our testbenches were made very simply with a few hundred
-nanosecond wait times at most and hold times of 25-50 ns. This is obviously
-not very realistic in terms of how long a button stays pressed or how long
-it might take for our &lt;a href=&quot;https://en.wikipedia.org/wiki/Double_dabble&quot;&gt;double dabble
-algorithm&lt;/a&gt; to work. In simulation,
-a &lt;a href=&quot;https://en.wikipedia.org/wiki/Double_dabble&quot;&gt;double dabble&lt;/a&gt;
-will occur virtually instantly, but realistically has a much higher latency
-when implemented into the board.&lt;/p&gt;
-
-&lt;p&gt;This was not accounted for in our testbenching nor during the design process,
-which is something that I feel wasn’t pushed hard enough by the curriculum,
-but also might have just been common sense and didn’t hit me until now. However,
-judging by what you wrote in &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;your blog
-post&lt;/a&gt;, it seems
-that creating proper
-testbenches for each and every module doesn’t happen often amongst students,
-and I feel that &lt;em&gt;we are a good example of that, unfortunately&lt;/em&gt;. This just goes
-to show that if I had spent more time creating testbenches for the interfaces
-and tried to figure out ways for the FPGA to tell me what’s going on in all
-that hardware, we might have had more success by the end of the project period.&lt;/p&gt;
-
-&lt;p&gt;It is interesting how you mention getting diagnostics from the FPGA because
-no one ever provided details or instructions on how we should do so or what
-are good methods on communicating with the FPGA and how to know what parts of
-the FPGA we could use to figure out if intermediate steps are working as we
-want.&lt;/p&gt;
-
-&lt;p&gt;I do feel a little scammed knowing that there were techniques out there that,
-with just a couple minutes of explanation, might have saved me hours of
-debugging. 
-This makes me somewhat sad because I feel like I didn’t get
-the experience and fulfillment from the class that I wanted/needed just
-because someone was too tired or didn’t care to explain something to me.
-This is what made me relate to &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;your blog post
-post&lt;/a&gt;
-where you mention in the beginning that the design
-process for a student and a professional are almost two different worlds.&lt;/p&gt;
-
-&lt;p&gt;Of course, my instructor would emphasize making a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Block_diagram&quot;&gt;block diagram&lt;/a&gt;, then going
-into a &lt;a href=&quot;httpw://en.wikipedia.org/wiki/Finite-state_machine&quot;&gt;state machine&lt;/a&gt; and
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Datapath&quot;&gt;datapath&lt;/a&gt; drawing,
-then designing the VHDL code,
-&lt;a href=&quot;https://en.wikipedia.org/Test_bench&quot;&gt;testbenching&lt;/a&gt;, etc.
-However, I feel like during homeworks, lectures, labs, and
-the project period, the aid was almost a bit too lax and every time
-I asked for help on why this warning is popping up or why the output
-wouldn’t be showing on the
-&lt;a href=&quot;http://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface/&quot;&gt;LCD&lt;/a&gt;,
-I would get: “hmmm … I’m not too sure.  I haven’t really dived
-into how the
-&lt;a href=&quot;http://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface/&quot;&gt;LCD&lt;/a&gt;
-works” or “have you tried testbenching it” or “try telling the
-FPGA to give you some info back so you know what’s happening inside.”
-There was never any in-depth discussion or a 
-fulfilling moment where I felt “wow!  Now, I know how to prevent/fix this
-warning or error” or perhaps “Okay, I understand that I may have to adjust my
-design in this way and keep this in mind for the future”. Honestly, I felt
-that I was winging it
-the whole time.  It was frustrating.  Still, for some reason, I feel
-like I still had fun with it. I had fun because it was challenging, it was not
-easy, and every time I made a little bit of noticeable progress I felt like I
-conquered the world. I just wish I didn’t have to conquer the world by myself.&lt;/p&gt;
-
-&lt;p&gt;Enough of the slightly depressing monologue, the key lessons I learned were
-these:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Make accurate testbenches for &lt;em&gt;everything&lt;/em&gt; even the really simple and
-intuitive modules like
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Binary-coded_decimal&quot;&gt;BCD&lt;/a&gt;
-to binary &lt;a href=&quot;https://en.wikipedia.org/wiki/Double_dabble&quot;&gt;converters&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Account for timing delays in the board that pretty much never happen
-in the simulation&lt;/p&gt;
-
-    &lt;p&gt;[Editor’s note: &lt;em&gt;You should test bench your entire design as well, not just
-the components.  This also would’ve helped find out what was going as
-the various components within the design interacted with each other.&lt;/em&gt;]&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The main issue I think we had was that we were sending the outputs from the
-&lt;a href=&quot;http://store.digilentinc.com/pmod-kypd-16-button-keypad/&quot;&gt;keypad&lt;/a&gt;
-to each module simultaneously, and it is likely that the later modules
-were trying to perform calculations or send outputs to the
-&lt;a href=&quot;http://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface/&quot;&gt;LCD&lt;/a&gt;
-before data values were even finished
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Double_dabble&quot;&gt;converting&lt;/a&gt;
-from
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Binary-coded_decimal&quot;&gt;BCD&lt;/a&gt;
-to binary in the very first
-module. Of course, it seems like this problem would fix itself after a few
-cycles, but it was probably not smart to literally not account for timing in
-the physical board.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Always ask for help from a close professional, professor, instructor, or
-even the &lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;friendly Digilent community&lt;/a&gt;. It is
-so hard to do complex projects on
-your own, especially when you have no or extremely minimal programming/coding
-experience (that’s me).
-Even if the instructor didn’t seem interested, I feel
-like I should’ve sucked it up and just asked for help more often.
-My instructor was smart as hell and I still had
-tons of things I definitely did not know how to do without some help.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A big thing in the &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;blog
-post&lt;/a&gt;
-is getting diagnostics and always retracing
-steps. Sometimes the testbench isn’t the problem, it’s the design. For example,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Implementation/why-latches-are-considered-bad/td-p/200291&quot;&gt;latches&lt;/a&gt;,
-time loops, etc. can all be affected my design in ways that I don’t
-understand but are still making it not work the way I want. Pay attention to
-warnings and don’t dismiss anything until you get confirmation or find online
-that the warning doesn’t mean much.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;h2 id=&quot;my-own-thoughts&quot;&gt;My Own Thoughts&lt;/h2&gt;
-
-&lt;p&gt;Perhaps I might pull out of his response some key points worth taking away
-from it.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;… it also might’ve been just common sense and didn’t hit me until now.&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;This is half of the point of any education: to get the student to learn how
-to think about a task in such a way as to make the task simple.
-I’m not talking about the mechanics of the task necessarily, but rather
-how to wrap your mind around the task, so that your mind thinks in the
-language of the task.  The means of achieving this enlightenment is usually
- to give the student one task after another until the student finally learn’s
-how to school his own mind.&lt;/p&gt;
-
-&lt;p&gt;This is also why an employer would be excited to see a large portfolio of
-complex projects you have designed.  It means you understand how to &lt;em&gt;think&lt;/em&gt;
-like a digital designer.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;This makes me somewhat sad because I feel like I didn’t get
-the experience and fulfillment from the class that I wanted/needed just
-because …&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;I think you’ve now learned the lesson the class was trying to teach.  Next
-time, let’s see if we can’t get that lesson across with a little less pain,
-and a better grade.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;Every time I asked for help on why this warning is popping up or why the
-output wouldn’t be showing on the
-&lt;a href=&quot;http://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface/&quot;&gt;LCD&lt;/a&gt;,
-I would get:
-&lt;em&gt;“hmmm … I’m not too sure. I haven’t really dived into how the
-&lt;a href=&quot;http://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface/&quot;&gt;LCD&lt;/a&gt;
-works”&lt;/em&gt;
-or
-&lt;em&gt;“have you tried testbenching it”&lt;/em&gt;
-or
-&lt;em&gt;“try telling the FPGA to give you some info back so you know what’s
-happening inside.”&lt;/em&gt;&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;If I were your instructor, these might be my responses as well.  If you write
-into the &lt;a href=&quot;https://forums.xilinx.com&quot;&gt;Xilinx forums&lt;/a&gt;, you are also likely to
-get similar responses.&lt;/p&gt;
-
-&lt;p&gt;To understand why, think about it from the other side: I’ve now been a mentor
-for many students.  I’ve looked over many pieces of code trying to find their
-bugs.  While I find it a fun challenge, it’s not easy.&lt;/p&gt;
-
-&lt;p&gt;Indeed, finding bugs in my own code is hard enough, finding bugs in someone
-else’s code is a lot harder.
-It can take me between minutes and hours to find the mistake in someone else’s
-code, depending upon the complexity of the code.  (Debouncing
-&lt;a href=&quot;http://store.digilentinc.com/pmod-kypd-16-button-keypad/&quot;&gt;keypad&lt;/a&gt;’s is
-usually quick, debugging &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT&lt;/a&gt;’s is
-hard.)&lt;/p&gt;
-
-&lt;p&gt;To make getting help easier, you must first find out what the issue is.
-The instructor is right in this case, you need to tell “the FPGA to give you
-some info back so you know what’s happening inside.”&lt;/p&gt;
-
-&lt;p&gt;That in itself is one of the ongoing topics of this blog.&lt;/p&gt;
-
-&lt;p&gt;Although it’s a touch off topic: when I studied for my Ph.D., my advisor had
-no background in my field (Digital signal processing as applied to digital
-communications).  He couldn’t help me with any of the details of how to do the
-mechanics of my problem.  Originally, I would’ve thought that this would’ve
-disqualified him from advising me.  In hindsight, I think it worked out to
-everyone’s advantage–because it forced me to finally learn how to
-learn a topic for myself.  At some point, there’s only so much an instructor
-can do.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;There was never any in-depth discussion or a fulfilling moment where I felt
-“wow!  Now, I know how to prevent/fix this warning or error”
-or perhaps
-“Okay, I understand that I may have to adjust my design in this way
-and keep this in mind for the future”.&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;I think our student has now just had his aha moment–only he may not realize
-it yet.&lt;/p&gt;
-
-&lt;p&gt;Stick around.  This is what we are going to try to do here on this blog:
-explain what it takes to keep you from getting stuck in the future!&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;It was frustrating.&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;&lt;a href=&quot;/fpga-hell.html&quot;&gt;FPGA Hell&lt;/a&gt; is &lt;em&gt;always&lt;/em&gt; frustrating.  Let’s
-get you out of &lt;a href=&quot;/fpga-hell.html&quot;&gt;FPGA Hell&lt;/a&gt;, so that you can
-enjoy winging it like the rest of us.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;I had fun because it was challenging, it was not easy, and every time
-I made a little bit of noticeable progress I felt like I conquered the world.&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;This is one of my own personal reasons for doing digital design.&lt;/p&gt;
-
-&lt;p&gt;Can I share a secret with you all?  I keep a copy of the
-&lt;a href=&quot;https://www.youtube.com/watch?v=78N2SP6JFaI&quot;&gt;theme from Superman&lt;/a&gt; lying around,
-just to be able to share the excitement of success with the others in the
-office.  I’ve even bought copies of the theme from &lt;a href=&quot;https://www.youtube.com/watch?v=IgncJgSbbck&quot;&gt;Indiana
-Jones&lt;/a&gt;, from &lt;a href=&quot;https://www.youtube.com/watch?v=4rQSJDLM8ZE&quot;&gt;Star
-Wars&lt;/a&gt;, and … I’d better
-just stop there.&lt;/p&gt;
-
-</description>
-        <pubDate>Sat, 10 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/10/lost-college-student.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/10/lost-college-student.html</guid>
         
         
         <category>blog</category>
