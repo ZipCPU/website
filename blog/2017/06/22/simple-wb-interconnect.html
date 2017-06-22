@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a very simple wishbone interconnect</title>
+  <meta name="description" content="Want to build a scope?  Seriously!  Want to turn your FPGA into a scope thatcan measure anything internal to your logic, and then make that informationavaila...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/22/simple-wb-interconnect.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a very simple wishbone interconnect</h1>
+    <p class="post-meta"><time datetime="2017-06-22T00:00:00-04:00" itemprop="datePublished">Jun 22, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Want to build a scope?  Seriously!  Want to turn your FPGA into a scope that
+can measure anything internal to your logic, and then make that information
+available to you upon request?  Even better, you could use this scope to
+capture samples from an external analog to digital converter if you wanted to.</p>
+
+<p>It’s time to do build the Verilog to do it!</p>
+
+<table style="float: right"><caption>Fig 1: WB-UART Overview</caption><tr><td><img src="/img/wb-uart-smpl-2.svg" alt="Block Diagram of a Simpler Wishbone to UART converter" width="360" /></td></tr></table>
+
+<p>Ok, here’s where we are at in this process: We now have all of the components
+necessary to build a debugging bus interface.  We’ve now built <em>all</em> of the
+components outlined in Fig 1 to the right.</p>
+
+<ul>
+  <li>
+    <p>We’ve presented an <a href="/blog/2017/06/05/wb-bridge-overview.html">overview of a UART to wishbone
+bridge</a>, that
+can be used for debugging.  This overview presented not only how to
+build such a bridge, but also showed examples from a working one that I use.</p>
+  </li>
+  <li>
+    <p>We then jumped to the end to discuss how to build a <a href="/blog/2017/06/08/simple-wb-master.html">Simple Wishbone
+Master</a>.  While the
+principles there can be applied to creating any
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a> master interface,
+we’ve shown how to use the <a href="https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexec.v">code presented
+there</a>
+as part of our own debugging interface.  In particular, it’s the
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a> master
+we’ll use today.</p>
+  </li>
+  <li>
+    <p>We showed how you can use the inputs from a serial port to <a href="/blog/2017/06/14/creating-words-from-bytes.html">create bus
+command words</a>.  That finished out our discussion of the input to this bus.</p>
+  </li>
+  <li>
+    <p>We then showed how to <a href="/blog/2017/06/15/words-back-to-bytes.html">turn the bus master responses back into a serial
+stream</a></p>
+  </li>
+  <li>
+    <p>Before we finished, we added <a href="/blog/2017/06/16/adding-ints.html">interrupt notifications to our
+interface</a></p>
+  </li>
+  <li>
+    <p>And then we <a href="/blog/2017/06/16/adding-ints.html">added an idle indication</a> to the interface as well, so that we can have some confidence
+that the interface is running on any given serial port / transport.</p>
+  </li>
+  <li>
+    <p>The final post in the building the bus master interface was a post
+describing <a href="/blog/2017/06/20/dbg-put-together.html">how to put it all
+together</a></p>
+  </li>
+</ul>
+
+<p>Today, we’re going to build something that this interface can interact with.
+When we’re done, the result won’t (yet) look like something a professional
+tool might produce, but it’ll be enough for a demonstration.  We’ll
+save the professional looking part for another lesson.</p>
+
+<h2 id="our-components">Our Components</h2>
+
+<p>If we want to build a bus that connects things together, the first step is going
+to be collecting the components together that we want to interface with.
+So, I’ve pulled several components from other designs that I have.
+I’ve also adjusted their copyright so that, as part of this project, you can
+have access to these components under the
+<a href="https://https://www.gnu.org/licenses/lgpl-3.0.en.html">LGPL</a>.  These
+components include:</p>
+
+<ol>
+  <li>
+    <p>A <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v">block
+RAM</a>
+  <a href="https://opencores.org/opencores,wishbone">Wishbone</a> memory slave
+drawn from the <a href="https://github.com/ZipCPU/zbasic">zbasic</a>
+<a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a> repository.</p>
+  </li>
+  <li>
+    <p>A <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v">wishbone scope</a>.
+drawn from the <a href="https://github.com/ZipCPU/wbscope">wbscope</a> repository.</p>
+  </li>
+  <li>
+    <p>A simplified UART
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/txuartlite.v">transmitter</a> and
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/rxuartlite.v">receiver</a>,
+drawn from the <a href="https://github.com/ZipCPU/wbuart32">wbaurt32</a> repository.</p>
+  </li>
+</ol>
+
+<p>As a legal note, the RTL designs these examples were taken from still remain
+firmly under the <a href="https://www.gnu.org/licenses/gpl-3.0.en.html">GPL</a>, only
+these specific component files have been given a new copyright.</p>
+
+<table style="float: left; padding: 15px"><caption>Fig 2: System Diagram</caption><tr><td><img src="/img/sample-interconnect.svg" alt="An example WB interconnect" width="420" /></td></tr></table>
+
+<p>Of course, we’ll also be using the <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus debugging
+interface</a> we’ve just
+developed and presented as part of this blog.</p>
+
+<p>The basic design is going to be similar to Fig 1, but with the new components
+added in as part of the bus, as shown in Fig 2.</p>
+
+<p>Of these new components, the only one we haven’t discussed is a simple
+ad hoc component that we’ll discuss below, and that you can use to get access
+to arbitrary values within your design, and so that you have a little bit of
+an example of some of the things that can be done.</p>
+
+<h2 id="connecting-the-components">Connecting the components</h2>
+
+<p>There are three parts to connecting components to a
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a> bus.
+First, you must decode the components’ address, so that only the proper
+component is addressed.
+Second, you must merge the three basic
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+slave outputs back into one
+response to be returned to the master.  These include the <strong>_ack</strong> line,
+the <strong>_stall</strong> line, and the return <strong>_data</strong> line.
+Third, although not required, painful prior errors have taught me to always
+create a <strong>wb_err</strong> return line, and to set that any time a non-existent
+component is addressed.  Further, along those same lines, we’re going to
+make sure that no components occupy the NULL address.</p>
+
+<h3 id="wiring-up-the-bus-master">Wiring up the bus master</h3>
+
+<p>Prior to the first step, though, we’ll need to wire up our UART receiver, our
+debugging bus
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+master, and our UART transmitter.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">rxuartlite #(UARTSETUP) rxtransport(i_clk,
+				i_uart, rx_stb, rx_data);
+
+hbbus	genbus(i_clk,
+	// The receive transport wires
+	rx_stb, rx_data,
+	// The bus control output wires
+	wb_cyc, wb_stb, wb_we, wb_addr, wb_odata, wb_sel,
+	//	The return bus wires
+	  wb_ack, wb_stall, wb_err, wb_idata,
+	// An interrupt line
+	bus_interrupt,
+	// The return transport wires
+	tx_stb, tx_data, tx_busy);
+
+txuartlite #(UARTSETUP) txtransport(i_clk,
+				tx_stb, tx_data, o_uart, tx_busy);</code></pre></figure>
+
+<p>This is primarily an exercise in wire management: the outputs of the
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/rxuartlite.v">receiver</a>
+go into the <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>,
+and the outputs from the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> decoder
+go into the
+<a href="https://github.com/ZipCPU/wbuart32/blob/master/rtl/txuartlite.v">transmitter</a>
+and control the wishbone bus. Still, one particular
+parameter needs some attention: the <strong>UARTSETUP</strong>.  This parameter is
+defined within the <a href="https://github.com/ZipCPU/wbuart32">wbuart32</a> project.
+If we want to communicate using 8-bits per baud, no parity, and one
+stop bit, (8N1) then we can set this parameter simply to the number of clocks
+per baud.  Hence, if we want to run our interface at 4MBaud with a
+100MHz clock, we should set this to (100MHz/4MBaud) or 25.</p>
+
+<h3 id="the-address-select-lines">The address select lines</h3>
+
+<p>Next, let’s handle our address select lines.  We’ll support three basic
+components, and we’ll use the prefixes of <strong>smpl_</strong> (for our ad-hoc
+registers), <strong>mem_</strong> (for our block RAM) and <strong>scop_</strong> to describe them.
+Handling address selection is done in two parts.  For the first part,
+we just test whether or not the
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+address matches the address we’ve given to this component:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// Nothing should be assigned to the null page
+assign	smpl_sel = (wb_addr[29:4] == 26'h081);	// 0x00002040
+assign	scop_sel = (wb_addr[29:4] == 26'h082);	// 0x00002080
+assign	mem_sel  = (wb_addr[29:12] ==18'h1);	// 0x00004000</code></pre></figure>
+
+<p>One caution is in order: our bus address lines reference 32-bit words, not
+octets.   Address 0x810 above references one 32-bit word, while address
+0x811 references
+another 32-bit word.  Most people are more familiar with accessing a bus where
+the address is in units of octets.  For this reason, we’ve written out the
+octet equivalent of each address in the comment to the right.  This equivalent
+is given by shifting the address up by two, as well as by the number of
+unspecified bits (4 or 12) in the address.</p>
+
+<p>This is actually a good time to point out that there’s really a <em>lot</em> more
+work to be done to do address assignment properly than just these simple
+decode lines above.
+A specification document needs to be written outlining what addresses are
+being used for what, the addresses need to be turned into C/C++ address
+references for the <a href="https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp">peek/poke by name
+interface</a> and
+the <a href="https://github.com/ZipCPU/zipcpu">CPU</a>, and more.
+Here, we’re just going to wave our hands and assign these three address groups
+to peripherals.</p>
+
+<p>We’ll probably have to come back and fix this lack in the near future.</p>
+
+<h3 id="bus-errors">Bus Errors</h3>
+
+<p>I usually define a
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+bus error as one of three things.  First, it is an error if <em>nothing is
+selected</em> during a
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+operation.  Second, it is an
+error if <em>more than one</em> thing is ever selected.  Finally, it is an error if
+<em>more than one acknowledgement</em> is returned on any given clock.  For our
+example purposes here, we’ll only set the error is nothing is selected.
+That is, if the <strong>wb_stb</strong> signal is high indicating a
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+request, and yet the address in <strong>wb_addr</strong> doesn’t reference any of our
+components, then a bus error should be returned.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// This will be true if nothing is selected
+assign	none_sel = (!smpl_sel)&amp;&amp;(!scop_sel)&amp;&amp;(!mem_sel);
+
+// The wishbone error signal is true for one clock only, and then it
+// resets itself
+always @(posedge i_clk)
+	wb_err &lt;= (wb_stb)&amp;&amp;(none_sel);</code></pre></figure>
+
+<p>The <a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+<a href="https://opencores.org/cdn/downloads/wbspec_b4.pdf">spec</a>,
+though, isn’t as particular regarding what constitutes a
+bus error, and many masters want any error detected to be aligned with where
+the acknowledgement would’ve come back–so that every request ends in either
+an error or an acknowledgement.  That approach allows both slaves and the
+interconnect to generate errors.  The interconnect we are building today,
+though is simpler, and doesn’t do that.</p>
+
+<p>We’ll do one more thing with the bus error: we’ll grab a copy of any bus
+error address, so we can report back later the bus address associated with
+any error (if necessary):</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (wb_err)
+		bus_err_address &lt;= wb_addr;</code></pre></figure>
+
+<p>We’ll come back to logic required of the interconnect later, once we handle
+the slave produced signals.</p>
+
+<h3 id="slave-response-the-stall-line">Slave response: The stall line</h3>
+
+<p>The first slave response logic we’ll look at is the stall logic.
+The <a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+<a href="https://opencores.org/cdn/downloads/wbspec_b4.pdf">spec</a>,
+recommends that this logic not be clocked, and that it be only combinatorial
+in nature.  In particular, you’ll want to stall the bus any time you are
+trying to make a request of a component whose stall line is high.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	wb_stall = ((smpl_sel)&amp;&amp;(smpl_stall))
+		||((scop_sel)&amp;&amp;(scop_stall))
+		||((mem_sel)&amp;&amp;(mem_stall));</code></pre></figure>
+
+<p>For this particular bus implementation, the stall lines are just a formality.
+None of these <a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+slave’s will ever stall the bus.  This line is therefore 
+ripe for being removed by the optimizer within your toolflow.  Here, we keep
+it in case we need to add components later that might stall the bus.</p>
+
+<h3 id="slave-response-the-acknowledgement">Slave response: The Acknowledgement</h3>
+
+<p>The second slave response line is the acknowledgement line.  This is the line
+that the slave uses to indicate that the data it is providing on its data line
+is valid.  We’ll handle this by creating a clocked line that is simply the <em>or</em>
+of all the acknowledgement lines.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	wb_ack &lt;= (smpl_ack)||(scop_ack)||(mem_ack);</code></pre></figure>
+
+<p>If we use a clock while assigning our data, the two resulting responses,
+both acknowledgement and data, will align as required.</p>
+
+<h3 id="slave-response-return-data">Slave response: Return data</h3>
+
+<p>The final slave responses are the data lines.  These are valid any time the
+acknowledgement is valid.  Indeed, we’ll use the various slave acknowledgement
+lines to know which slave has produced valid data, and thus to know what data
+to return to the
+<a href="https://opencores.org/opencores,wishbone">Wishbone</a> master.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (smpl_ack)
+		wb_idata &lt;= smpl_data;
+	else if (scop_ack)
+		wb_idata &lt;= scop_data;
+	else if (mem_ack)
+		wb_idata &lt;= mem_data;
+	else
+		wb_idata &lt;= 32'h0;</code></pre></figure>
+
+<p>As a touch of flair, we’ll respond with all zeros if nothing acknowledges our
+bus read, although this isn’t required and it can be removed if necessary
+if you are struggling to <a href="/blog/2017/06/12/minimizing-luts.html">minimize your
+logic</a>.</p>
+
+<h3 id="slave-response-interrupts">Slave response: Interrupts</h3>
+
+<p>Although it’s not really a part of connecting a device to a
+<a href="https://opencores.org/opencores,wishbone"><em>Wishbone</em> bus</a>,
+many bus slaves have interrupt lines.  We’ll create an interrupt
+to send back to our debugging bus controller that is simply the <em>or</em> of our
+two interrupt producing components.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	bus_interrupt = (smpl_interrupt) | (scop_int);</code></pre></figure>
+
+<p>Given the way we implemented interrupts within our controller, this will
+trigger on any positive edge–so it’ll need to be reset prior to being
+able to trip again.  While it’s not necessarily the optimal or the best
+approach, it may be sufficient for our purposes here.</p>
+
+<h3 id="connecting-the-pre-existing-components">Connecting the pre-existing components</h3>
+
+<p>We have three components to connect our interface to.  Two of these components
+already exist and only need to be referenced from here as sub-modules.  These
+are the <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v">block
+RAM</a>
+interface, and the <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v">wishbone
+scope</a>.</p>
+
+<p>The <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v">block RAM</a>
+needs very little additional configuration beyond what we’ve
+already done, but it does need to to be told how big its memory area will be. 
+We’ll create our
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v">block RAM</a>
+to have 2^14 octets, hence the <strong>14</strong> parameter below.  We’ll
+also use the select line, that we set above, <strong>mem_sel</strong>, to modify the
+slaves strobe line, so the memory knows that it has been selected–without
+needing to have any more knowledge of any other peripherals that might be
+on the bus.  This is different from the <strong>wb_sel</strong> line which we’ve <a href="/zipcpu/2017/05/29/select-lines.html">used to
+determine which octets in a word will be set in any
+operation</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">memdev	#(14) blkram(i_clk,
+	wb_cyc, (wb_stb)&amp;&amp;(mem_sel), wb_we, wb_addr[11:0],
+		wb_odata, wb_sel,
+	mem_ack, mem_stall, mem_data);</code></pre></figure>
+
+<p>The next item we’ll want to place onto our bus is the
+<a href="https://github.com/ZipCPU/wbscope">wishbone scope</a>.</p>
+
+<p>To use the scope, you must decide on what you wish to examine, and then
+what you want to use to trigger the scope.  In our case, let’s trigger
+off of any <a href="https://opencores.org/opencores,wishbone">Wishbone</a>
+accesses to our block RAM.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	scope_trigger = (mem_sel)&amp;&amp;(wb_stb);</code></pre></figure>
+
+<p>We’ll also select for our scope’s data several of the bus lines.  We’ll save
+for a later date how to turn these wires into a proper VCD file.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	debug_data    = { wb_cyc, wb_stb, wb_we, wb_ack, wb_stall,
+		wb_addr[5:0], 1'b1,
+			wb_odata[9:0],
+			wb_idata[9:0] };</code></pre></figure>
+
+<p>The scope has one more capability: it can sample data based upon a “when data
+is valid” flag.  The flag can be <em>really</em> useful if you are processing a
+signal that isn’t valid on every clock–such as the output of a digitizer as
+an example.  Today, we’ll just set that flag to one so that we can capture
+on every clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	scope_ce = 1'b1;</code></pre></figure>
+
+<p>Now that all of the preliminaries have been taken care of, you can now place
+the scope within our file, and connect it to the bus as well.  As with the
+memory, the biggest part of “hooking it up” is adjusting the strobe line by
+<em>and</em>ing it with the scope select line.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">wbscope	thescope(i_clk, scope_ce, scope_trigger, debug_data,
+	i_clk, wb_cyc, (wb_stb)&amp;&amp;(scop_sel), wb_we, wb_addr[0],wb_odata,
+	scop_ack, scop_stall, scop_data,
+	scop_int);</code></pre></figure>
+
+<p>Other things you might notice are the fact that this scope requires
+two clocks, one for the data and one for the bus.  In this example
+thee two are the same.  It
+also requires the lowest of the address lines.  The result is that address
+<strong>0x02080</strong> will reference the scope control and status register, while
+address <strong>0x2084</strong> will reference the scope data register.</p>
+
+<h3 id="building-an-ad-hoc-slave">Building an Ad-Hoc Slave</h3>
+
+<p>You will very often find that you need to be able to report some logic result
+back up the bus to your debug interface–something that is ad-hoc, and not
+necessarily the part of any well-defined, prebuilt component.  In many ways,
+this seems to be one of the most common requests: how to I get access to
+(whatever) to see what my design has done?  Therefore, let’s make a simple
+ad-hoc slave that does just that.</p>
+
+<p>Our slave will have six registers, although it occupies enough bus space
+that it could have a full sixteen–so there’s plenty of room should you wish
+to expand it.  Any more than that and you’ll need to adjust the address
+decoding logic above.  Laying these registers out, we’ll have:</p>
+
+<ol>
+  <li>
+    <p>A read only date register</p>
+  </li>
+  <li>
+    <p>A simple register that you can set and read back</p>
+  </li>
+  <li>
+    <p>The address of the last bus error</p>
+  </li>
+  <li>
+    <p>A counter that starts from zero on startup</p>
+  </li>
+  <li>
+    <p>An experimental interrupt line, that you can use to turn an interrupt on or
+off, so you can see how our interface deals with an interrupt</p>
+  </li>
+  <li>
+    <p>A GPIO output that you can use to communicate with the
+<a href="https://www.veripool.org/wiki/verilator/">Verilator</a> simulation.
+In this case, we’ll use an <strong>o_halt</strong> flag to indicate that its time for
+the simulation to halt.  You can set that as part of the LSB of this
+register.</p>
+  </li>
+</ol>
+
+<p>Let’s first handle the write request.  On a write, to this peripheral,
+we’ll:</p>
+
+<ol>
+  <li>
+    <p>Handle setting the simple register to whatever input was given</p>
+  </li>
+  <li>
+    <p>Create (or clear) an interrupt depending on the low order bit if writing
+to register four</p>
+  </li>
+  <li>
+    <p>Adjust our <strong>o_halt</strong> GPIO value with the LSB of anything written
+to register five.</p>
+  </li>
+</ol>
+
+<p>Since the other registers are read only, we can ignore them on any write
+request.</p>
+
+<p>This is therefore our write request logic:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	// Determine if a write to this peripheral is taking place
+	if ((wb_stb)&amp;&amp;(smpl_sel)&amp;&amp;(wb_we))
+	begin // Split our logic between the registers
+		case(wb_addr[3:0])
+		4'h1: smpl_register  &lt;= wb_odata;
+		4'h4: smpl_interrupt &lt;= wb_odata[0];
+		4'h5: o_halt         &lt;= wb_odata[0];
+		default: begin end
+		endcase
+	end</code></pre></figure>
+
+<p>In this case, pay close attention to the if at the top, and the case below.
+These should match up with our <a href="/blog/2017/06/21/simple-wb-interconnect.html">lesson on how to build a simple wishbone
+slave</a>.</p>
+
+<p>Before reading back from this interface, let’s deal with the “clocks since
+power up” counter.  We’re going to use the initial command to set this
+register to zero, then while running it will count up.  Once the MSB gets set,
+we’ll leave it set so that we can tell if we’ve ever rolled over.  This will
+give us an ever changing counter that we can use for relative timing, or
+absolute timing if near when the chip starts up.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// Start our clocks since power up counter from zero
+initial power_counter = 0;
+always @(posedge i_clk)
+	// Count up from zero until the top bit is set
+	if (!power_counter[31])
+		power_counter &lt;= power_counter + 1'b1;
+	else // once the top bit is set, keep it set forever
+		power_counter[30:0] &lt;= power_counter[30:0] + 1'b1;</code></pre></figure>
+
+<p>Now that we’ve created that logic, everything is ready for us to read.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	case(wb_addr[3:0])
+	4'h0:    smpl_data &lt;= 32'h20170622;
+	4'h1:    smpl_data &lt;= smpl_register;
+	4'h2:    smpl_data &lt;= { bus_err_address, 2'b00 };
+	4'h3:    smpl_data &lt;= power_counter;
+	4'h4:    smpl_data &lt;= { 31'h0, smpl_interrupt };
+	default: smpl_data &lt;= 32'h00;
+	endcase</code></pre></figure>
+
+<p>Notice that read logic doesn’t depend upon any bus lines other than the
+address.  Indeed, the fact that a read of this device has taken place is in
+many ways irrelevant–only the data being produced is relevant.  We can
+produce the right result for any address in our register space regardless. 
+(This isn’t true for all peripherals.)  The zero address of our peripheral
+returns a constant value (of the day when I posted this).  The first address
+(address 4, really) just returns the register we set above.  The second
+address gives us the address of the last bus error.  The third gives us the
+value of our ticks since startup counter.  The final register, at address
+position four (0x2050), just returns an LSB indicating whether or not our
+interrupt is set.</p>
+
+<p>Since the last address in our interface only contains a halt request
+indicator, it will never read anything but zero, so we’re not going to
+include any special logic to read it.</p>
+
+<p>As a final and required part of our interface, we’ll need to acknowledge the
+response from the bus, and create a stall line to indicate that this ad-hoc
+interface never stalls.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// Decoding an address takes one clock, so set the ACK to be true
+// on the next clock
+always @(posedge i_clk)
+	smpl_ack &lt;= ((wb_stb)&amp;&amp;(smpl_sel));
+
+// This simple interface never stalls
+assign smpl_stall &lt;= 1'b0;</code></pre></figure>
+
+<p>That’s it!  You just connected a (very) simple peripheral to our debugging
+bus!  Indeed, if you wanted, you could now use this approach to
+<a href="/blog/2017/05/29/fft-debugging.html">debug an FFT</a></p>
+
+<h1 id="coming-up">Coming up</h1>
+
+<p>The <a href="https://github.com/ZipCPU/dbgbus">full design</a>, as we’ve now built it
+should run on any FPGA.  A quick test, by giving the device an address and
+read request,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A2040R</code></pre></figure>
+
+<p>or similarly a hex address and a write request,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A4000Wdeadbeef</code></pre></figure>
+
+<p>should work to read or write from your device using this interface.  Further,
+if nothing is going on, you should be able to see “Z”s getting sent to your
+screen.</p>
+
+<p>Not bad.</p>
+
+<p>We could even read from the scope’s control and status register with a
+simple read command:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A2080R</code></pre></figure>
+
+<p>Another read command, such as</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A2085R</code></pre></figure>
+
+<p>will return one data value from our scope.  You might wish to notice that we
+set the LSB in this address.  As a result, subsequent R’s typed into the
+interface will interpreted as read commands from <em>the same</em> 
+“scope data register” address.</p>
+
+<p>Ok, so … this works.  But it’s still really hard to use.  This, then, gives
+us our roadmap forward:</p>
+
+<ul>
+  <li>
+    <p>Building a
+<a href="https://www.veripool.org/wiki/verilator/">Verilator</a> test bench to use to
+experiment with this bus apart from any hardware</p>
+  </li>
+  <li>
+    <p>Building a software software interface to our debugging bus, so we can use
+the host CPU to our advantage when working with the design</p>
+
+    <p>This software interface will also make it easier for us to get the results
+of any scope interactions out of our debugging harness and into a VCD
+type of format that we can then use to examine what was going on within the
+FPGA.</p>
+  </li>
+</ul>
+
+<p>These then will be the topics we will queue up for a later day.</p>
+
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/blog/2017/06/22/simple-wb-interconnect.html";
+  this.page.identifier="/blog/2017/06/22/simple-wb-interconnect";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Therefore thus saith the Lord GOD, Behold, I lay in Zion for a foundation a stone, a precious corner stone, a sure foundation: he that believeth shall not make haste.  (Is 28:16)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
