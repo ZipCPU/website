@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Simulating an FPGA through the debugging interface</title>
+  <meta name="description" content="Today, let’s put some things together.  We’ve already built a debugging busapproach that we can use to interact with anFPGAand draw information out of it.[1]...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/06/26/dbgbus-verilator.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Simulating an FPGA through the debugging interface</h1>
+    <p class="post-meta"><time datetime="2017-06-26T00:00:00-04:00" itemprop="datePublished">Jun 26, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Today, let’s put some things together.  We’ve already built a debugging bus
+approach that we can use to interact with an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+and draw information out of it.
+<a href="/blog/2017/06/05/wb-bridge-overview.html">[1]</a>
+<a href="/blog/2017/06/08/simple-wb-master.html">[2]</a>
+<a href="/blog/2017/06/14/creating-words-from-bytes.html">[3]</a>
+<a href="/blog/2017/06/15/words-back-to-bytes.html">[4]</a>
+<a href="/blog/2017/06/16/adding-ints.html">[5]</a>
+<a href="/blog/2017/06/16/dbg-bus-forest.html">[6]</a>
+<a href="/blog/2017/06/19/debug-idles.html">[7]</a>
+<a href="/blog/2017/06/20/dbg-put-together.html">[8]</a>
+<a href="/blog/2017/06/22/simple-wb-interconnect.html">[9]</a>
+We’ve also talked about 
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+and what 
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+allows us to do in simulation.</p>
+
+<p>Suppose we spend the time today to build a
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+based simulation of our
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+design that can be controlled via this debugging
+bus interface?</p>
+
+<p>While most of the difficult parts have already been accomplished, there are
+still there are three basic components that we are going to need to work on to
+do this.  The first is the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/Makefile">Makefile for our</a>
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v">top level Verilog design</a>.
+The second is the <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp">C++ driver</a> for our test bench.  We already discussed how to
+generate a <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testb.h">generic
+driver</a>
+<a href="/blog/2017/06/21/looking-at-verilator.html">here</a> and our
+debugging philosophy in general
+<a href="/blog/2017/06/23/my-dbg-philosophy.html">here</a>,
+so this discussion will only describe the differences between a <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testb.h">generic test
+bench driver</a>
+and the <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp">one we’re
+building</a>
+for this project.
+The last item we’ll need to figure out is how to build all the pieces
+together–i.e. the final <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/Makefile">simulation
+Makefile</a>.</p>
+
+<p>When we finish, let’s run some tests on our “hardware” and see how it works!</p>
+
+<h2 id="the-rtl-makefile">The RTL Makefile</h2>
+
+<p>The RTL makefile needs to handle two things.  First, it needs to convert our
+our <a href="/blog/2017/06/22/simple-wb-interconnect.html">Verilog test
+bench</a>
+into a C++ class using
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>.  Then, the second step
+directed by the RTL makefile will be to build that C++ class into a library
+that can be linked with our <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp">C++
+testbench</a>
+to create a fully functional simulation.</p>
+
+<p>We’ve <a href="/blog/2017/06/21/looking-at-verilator.html">already
+discussed</a>
+the basics of how to run
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>.
+In quick sum here, you can run
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> on a top level Verilog
+file as in:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">verilate -Wall -trace -cc testbus.v</code></pre></figure>
+
+<p>Today, let’s just highlight some of the neat things that can be placed into
+our rtl/Makefile in order to do it well.</p>
+
+<p>For example, I’d like to be able to use the test bench in the 
+<a href="https://github.com/ZipCPU/dbgbus">dbgbus</a> repository to test several
+different debugging busses.  For this reason, I’m going to add,</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nv">BUS</span> <span class="o">:=</span><span class="err"> hexbus</span></code></pre></figure>
+
+<p>to the Makefile, and -y “../../$(BUS)/rtl” to the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> command line.
+That’ll cause Verilator to look for our sources in the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus/rtl">hexbus</a>
+project subdirectory for any bus sources.</p>
+
+<p>Our top level Verilog file
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbench.v">testbench.v</a>
+includes references to multiple files.  We’d like
+to only re-run Verilator any time these files change.  Is there a way
+to get dependency information for Verilog code in a fashion similar to
+C++ code?  Yes, there is.  For this, we’ll add “–MMD” to the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> command line,
+and include the dependency file it generates at the end of
+our Makefile:</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nv">DEPS</span> <span class="o">:=</span> <span class="err">$</span><span class="o">(</span>wildcard <span class="nv">$(VDIRFB)</span>/<span class="se">\*</span>.d<span class="o">)</span>
+
+<span class="err">ifndeq</span> <span class="err">($(DEPS),)</span>
+<span class="err">include</span> <span class="err">$(DEPS)</span>
+<span class="err">endif</span></code></pre></figure>
+
+<p>We’ll also set two more Makefile variables before we call Verilator.</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nv">VERILATOR</span> <span class="o">?=</span> verilator
+<span class="nv">VFLAGS</span> <span class="o">:=</span> -Wall --MMD -trace -y ../../<span class="nv">$(BUS)</span>/rtl --Mdir <span class="nv">$(VDIRFB)</span><span class="err"> -cc</span></code></pre></figure>
+
+<p>This will do two things.  First, it will allow you to run make with your
+VERILATOR version defined in an environment variable.  Second, it will
+simplify our Verilator call later.</p>
+
+<p>Now that we have these variables defined, we can create the “verilate”
+target.  This target will build the C++ code.  Since the actual name of the
+C++ code is somewhat obtuse, we’ll rename what we are building to “verilate”
+and then forward that to what needs to be built.  Finally, we’ll actually
+run our Verilator call–simplified by the VFLAGS we defined above.</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nl">.PHONY</span><span class="o">:</span> <span class="nf">verilate</span>
+<span class="nl">verilate</span><span class="o">:</span> <span class="nf">$(VDIRFB)/Vtestbus.h</span>
+<span class="nl">$(VDIRFB)/Vtestbus.h</span><span class="o">:</span>
+	<span class="nv">$(VERILATOR)</span> <span class="nv">$(VFLAGS)</span><span class="err"> testbus.v</span></code></pre></figure>
+
+<p>The last step is to build the library.  This step is somewhat anticlimactic,
+since
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+did most of the work for us.  Building the library depends
+upon the source files
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+just built for us.  Making things even easier,
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+just generated its own make file.  Hence,
+we’ll just recursively call make on that make file to build all that’s left.</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nl">.PHONY</span><span class="o">:</span> <span class="nf">library</span>
+<span class="nl">library</span><span class="o">:</span> <span class="nf">$(VDIRFB)/Vtestbus.h</span>
+	<span class="nv">$(SUBMAKE)</span> <span class="nv">$(VDIRFB)</span><span class="err">/ -f Vtestbus.mk</span></code></pre></figure>
+
+<p>This recursively calls make in the $(VDIRFB) subdirectory, and it does so
+with the “-f” argument specifying that it should use as its make file
+$(VDIRFB)/Vtestbus.mk.</p>
+
+<p>That’s about it.  The <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/Makefile">RTL
+Makefile</a>
+also contains a clean target, but in general that’s all that it takes to create
+a Makefile that will run
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+to build a simulatable library.</p>
+
+<h2 id="the-cpp-testbench">The CPP Testbench</h2>
+
+<p>As <a href="/blog/2017/06/21/looking-at-verilator.html">we discussed when
+presenting</a>
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>,
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+needs a small C++ driver program to run the simulation.</p>
+
+<p>The driver we are going to use for this simulation, both the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testb.h">generic one</a>
+and the <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp">specific simulation
+one</a>,
+should look very similar to the ones we built during our <a href="/blog/2017/06/21/looking-at-verilator.html">prior
+discussion</a>.
+Here, we’ll look at two differences.</p>
+
+<p>The first is that we have made the termination criteria a touch more
+general than before.  For this test bench, we’ll terminate our simulation
+either whenever the $final Verilog instruction is reached (which we didn’t
+use in our Verilog code), or whenever the <strong>o_halt</strong> GPIO is asserted.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">bool</span>	<span class="n">TESTBUS_TB</span><span class="o">::</span><span class="n">done</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">m_done</span><span class="p">)</span>
+		<span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
+	<span class="k">else</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">Verilated</span><span class="o">::</span><span class="n">gotFinish</span><span class="p">())</span>
+			<span class="n">m_done</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_halt</span><span class="p">)</span>
+			<span class="n">m_done</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+		<span class="k">return</span> <span class="n">m_done</span><span class="p">;</span>
+	<span class="p">}</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>That’ll allow us to control things from within the simulation (such as by
+CPU software instruction) if we’d like.</p>
+
+<p>The other changes are the necessary parts of putting a UART interface
+onto this test bench.  We’ll do that using the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/uartsim.cpp">uartsim</a>
+simulator found in the
+<a href="https://github.com/ZipCPU/wbuart32">wbuart</a> repository.  There just a couple
+of steps there.</p>
+
+<p>First, we initialize the UART component module with a zero, indicating that
+we want the UART to interact with us using stdin/stdout.  We’ll adjust that
+later so that we can interact over TCP/IP.</p>
+
+<p>Second, the UART simulator needs to know the baud rate we are using to
+communicate with.  This needs to be the same as the UART configuration
+parameter found within our
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v">testbus.v</a>.
+If you wish to run this on your hardware, you may need to
+adjust the parameter in the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v">testbus.v</a>
+top level file, as well as in this file–to make sure you are communicating
+at a common baud rate.  Otherwise, we’ll just assume that one baud is 25 clock
+ticks.  You can check the <a href="https://github.com/ZipCPU/wbuart32/blob/master/doc/spec.pdf">UART component specification
+document</a> for more
+information on how to understand this setup value.</p>
+
+<p>That’s it for setting up the C++ portion of the simulation!  All that’s left
+is to build it and test it.</p>
+
+<h2 id="the-cpp-makefile">The CPP Makefile</h2>
+
+<p>For building our simulation executable, we return to the Makefile necessary
+to do it.  What we want to do is really quite simple.  We’d like to issue
+a command such as,</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nl">testbus_tb</span><span class="o">:</span>
+	<span class="nv">$(CXX)</span> <span class="nv">$(CFLAGS)</span> <span class="nv">$(OBJECTS)</span><span class="err"> -o $@</span></code></pre></figure>
+
+<p>where $(OBJECTS) are the object files we need, and $(CFLAGS) are whatever
+flags we wish to build with.  Our final solution will be just about that simple.</p>
+
+<p>The questions remaining are, what flags, what objects, and how do we build
+those objects.  The
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/Makefile">Makefile</a>
+itself includes dependency generation, but we can leave that as a topic for
+another day or perhaps even for another blog.</p>
+
+<p>For the first question, which flags shall we use, its in many ways up to you.
+We’ll use the “-Og” flag to turn on the optimizer, although any optimizations
+should really also be a flag to
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+as well.  Here, we’ll also use the 
+“-Wall” flag as well to see if we can encourage g++ to find any bugs in our
+code.  We’ll also need to tell
+the C++ compiler to look for the include files found both in our RTL/obj_dir
+directory, as well as those found in the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+root include directory.</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="c"># Show make how to find our compiled verilated output
+</span><span class="nv">RTLD</span>  <span class="o">:=</span> ../rtl
+<span class="nv">VOBJDR</span><span class="o">:=</span> <span class="nv">$(RTLD)</span>/obj_dir
+<span class="c"># Show make how to find Verilators support files
+</span><span class="nv">VROOT</span> <span class="o">:=</span> <span class="nv">$(VERILATOR_ROOT)</span>
+<span class="nv">VINCD</span> <span class="o">:=</span> <span class="nv">$(VROOT)</span>/include
+<span class="c"># Generate a full include list
+</span><span class="nv">INCS</span>  <span class="o">:=</span> -I<span class="nv">$(VINCD)</span> -I<span class="nv">$(VOBJDR)</span>
+<span class="c"># Build our C-Flags
+</span><span class="nv">CFLAGS</span> <span class="o">:=</span> -Og -g -Wall <span class="nv">$(INCS)</span></code></pre></figure>
+
+<p>You might also wish to set the VERILATOR_ROOT directory.  On my system, this
+is found in “/usr/share/verilator”, but that’s not the same among all systems.
+At the encouragement of others who’ve tried my code, I’ve switched to:</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nv">VERILATOR_ROOT</span> <span class="o">?=</span> <span class="nf">$(</span><span class="nb">shell</span> bash -c <span class="s1">'verilator -V|grep VERILATOR_ROOT | head -1 | sed -e " s/^.*=\s*//"'</span><span class="nv">)</span></code></pre></figure>
+
+<p>This will call a shell script, which will run “verilator -V” (try it!).  The
+output is then searched for VERILATOR_ROOT.  Since
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+produces two lines with this value within it, we
+grab the first one and use it.  Further, we’ll only do so if VERILATOR_ROOT
+isn’t already set–perhaps from a parent make file (that’s what the ?= does).</p>
+
+<p>The next question is, what objects do we need to include?  First, there’s
+the obvious one, we’ll need to include testbus_tb.o.  We’ll also want to 
+include the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+class definition library from Vtestbus__ALL.a.
+Going one step further, we’ll want to include our <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/uartsim.cpp">UART
+simulation</a>
+object file, uartsim.o.  Finally, we’ll want to include the tw
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+files, verilated.cpp and verilated_vcd_c.cpp once compiled to object files.
+This is as easy as:</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nv">VSRCRAW</span> <span class="o">:=</span> verilated.cpp verilated_vcd_c.cpp
+<span class="nv">VSRC</span>    <span class="o">:=</span> <span class="err">$</span><span class="o">(</span>addprefix <span class="nv">$(VINCD)</span>/,<span class="nv">$(VSRCRAW)</span><span class="o">)</span>
+<span class="nv">VOBJ</span>    <span class="o">:=</span> <span class="err">$</span><span class="o">(</span>addprefix <span class="nv">$(OBJDIR)</span>/,<span class="err">$</span><span class="o">(</span>subst .cpp,.o,<span class="nv">$(VSRCRAW)</span><span class="o">))</span>
+<span class="nv">SOURCES</span> <span class="o">:=</span> testbus_tb.cpp uartsim.cpp
+<span class="nv">OBJECTS</span> <span class="o">:=</span> <span class="err">$</span><span class="o">(</span>addprefix <span class="nv">$(OBJDIR)</span>/,<span class="err">$</span><span class="o">(</span>subst .cpp,.o,<span class="nv">$(SOURCES)</span><span class="o">))</span> <span class="nv">$(VOBJ)</span></code></pre></figure>
+
+<p>To build the sources into object files, we’ll add two generic build rules.
+The first will apply for the objects built from this directory.</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nl">$(OBJDIR)/%.o</span><span class="o">:</span> <span class="nf">%.cpp</span>
+	<span class="err">$</span><span class="o">(</span>mk-objdir<span class="o">)</span>
+	<span class="nv">$(CXX)</span> <span class="nv">$(CFLAGS)</span><span class="err"> -c $&lt; -o $@</span></code></pre></figure>
+
+<p>If you are not as familiar with make files, the first line specifies a generic
+pattern: files within the current directory and ending with .cpp can be
+turned into object files in the $(OBJDIR)/ directory having the same name but
+the .o suffix instead.</p>
+
+<p>The second line, $(mk-objdir), calls a function
+that we’ll define elsewhere in our makefile that builds our object file
+directory, $(OBJDIR).  While it’s not necessary to place your build products
+in a separate object file directory, I find that it both cleans up the
+main source directory, and it also provides options later in case you need
+to build on multiple systems.</p>
+
+<p>The third line is used to call your C++ compiler,
+to give it the CFLAGS variable, and to ask it to produce an object file (-c)
+rather than a completed program.  Other make file variables include the name
+of the source file that tripped the rule, $&lt;, and tell it to place the output
+(-o) into $@–the result the rule is supposed to produce.</p>
+
+<p>We repeat this for the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+source files in the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+include directory,</p>
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nl">$(OBJDIR)/%.o</span><span class="o">:</span> <span class="nf">$(VIND)/%.cpp</span>
+	<span class="err">$</span><span class="o">(</span>mk-objdir<span class="o">)</span>
+	<span class="nv">$(CXX)</span> <span class="nv">$(CFLAGS)</span><span class="err"> -c $&lt; -o $@</span></code></pre></figure>
+
+<p>Since we’ve already presented the final rule, that’s about all there is to
+the makefile necessary to generate this simulation.</p>
+
+<p>Should you need to build a make file of your own, you might wish to start
+from this one and just change the names of the files necessary to run your
+simulation.</p>
+
+<h2 id="simple-tests">Simple Tests</h2>
+
+<p>We now have a
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/Makefile">Makefile</a> in
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/bench/rtl">bench/rtl</a>
+that will compile our debug bus and a test wishbone interconnect into
+a C++ class.  We also have a
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/Makefile">Makefile</a> in
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/bench/cpp">bench/cpp</a> that can
+then be used to build the project into an executable.  Shall we run our
+executable?</p>
+
+<p>Let’s try it out.  The only caution before starting is that this program as
+written will generate megabytes of trace information very quickly.  That trace
+file, if you aren’t careful, may very well fill up your hard drive.  So, don’t
+leave the simulator running at the end of each test.</p>
+
+<p>With all that said, let’s run the program:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">./testbus_tb</code></pre></figure>
+
+<p>Now that it’s running, it’s waiting for an input.  So, let’s
+try reading our constant address.  If you type,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A2040R</code></pre></figure>
+
+<p>your design will return “A00002040R20170622”.  The first number, A00002040,
+indicates the address that we just changed the interface to.
+The second number (starting with the R)
+indicates the value we just read: 0x20170622.</p>
+
+<p>Let’s try another.  Let’s try reading that counter, and let’s do it
+a couple of times.  The counter itself is at address 0x204c.  However, if you
+remember from <a href="/blog/2017/06/08/simple-wb-master.html">when we built our simple bus
+master</a>
+we chose to use the LSB as indication of whether or not the address should
+increment between reads.  By setting it to zero, we’ll keep the address
+constant between subsequent read commands.  For this reason, we can issue
+an address command, followed by several read commands and they’ll all read
+from the same address:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A204dR
+R
+R
+R</code></pre></figure>
+
+<p>Make sure you type the newlines between the R’s!  This bus isn’t yet robust
+enough to handle more than one command given to it at once.  (It needs FIFO
+support.)  Still, I get the response:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A0000204dR000485b4
+0005234b
+0005cbf1
+00068df3</code></pre></figure>
+
+<p>Not bad.  Looks like we’ve got something working.</p>
+
+<p>Can we trigger an interrupt?  You may remember that we had an interrupt
+tied to the LSB of address 0x2050.  So, let’s write to 0x2051 to trigger,
+clear, and then trigger this interrupt again
+I’ll prefix the commands I typed with a “&lt; “, so you can see the responses
+in line.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">&lt; A2051RW1
+A00002051R00000000K00000000I
+&lt; W0
+K00000000
+&lt; W1
+I
+K00000000
+&lt; W0
+K00000000</code></pre></figure>
+
+<p>Did you see the “I” response?  That tells us we triggered our interrupt
+as desired.</p>
+
+<p>How about the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v">scope</a>
+we put <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v">on
+board</a>?  Can
+we trigger the scope?  Let’s first
+read the scope’s control register, then write to a <a href="https://github.com/ZipCPU/dbgbus/master/bench/rtl/memdev.v">block
+RAM</a> memory address
+(triggering the scope), and then read the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v">scope</a>’s
+control register again:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">&lt; A02080R
+A00002080R12a001fc
+&lt; A4000Wdeadbeef
+A00004000K00000000I
+&lt; A2080R
+Z
+A00002080R72a001fc
+&lt; A4000R
+A00004000Rdeadbeef</code></pre></figure>
+
+<p>The first command (A02080R) reads from the scopes control register.  If you
+look up 0x12a001fc in the <a href="https://github.com/ZipCPU/wbscope/blob/master/doc/spec.pdf">wishbone scope specification
+document</a>, you’ll
+learn several things about the scope’s state as given by this number.  First,
+the high order nibble of ‘1’ indicates that the scope is primed but hasn’t
+triggered yet.  Second, the ‘2’ indicates that the DATA pointer within the
+scope is set to the beginning of the scope’s memory (where we’d expect it). 
+Third, the ‘a’ indicates that the scope has been configured for 2^10 samples of
+memory.  Last, the ending 0x01fc tells us that the scope will wait 0x01fc
+samples after the trigger, placing our event roughly within the center of
+its collection window.</p>
+
+<p>The second command, A4000Wdeadbeef, writes 0xdeadbeef to the first location
+in block RAM (address 0x4000).  Since we are also using wishbone accesses to
+that location to
+trigger our scope, an “I” is also returned together with the acknowledgement
+(‘K’).  Incidentally, we’ll need to reset the scope in order for this interrupt
+to clear, so don’t expect any more interrupt indications for a while.</p>
+
+<p>The third command, “A2080R” reads from the scope control register again.
+It now has a value of 0x72a001fc.  Looking at the top nibble, the ‘7’
+indicates that the scope has not only been triggered, but that it has also
+stopped collecting.</p>
+
+<p>Shall we read from the scope as well?  Let’s read from address 0x2084, with
+the increment bit set to prohibit address increments between reads (i.e.,
+addres 0x2085):</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">&lt; A2080R
+A00002080R12a001fc
+&lt; A4000Wdeadbeef
+A00004000K00000000I
+&lt; A2080R
+A00002080R72a001fc
+&lt; A2085R
+A00002085R001b6c00
+&lt; R
+R001b6c00
+&lt; R
+R001b6c00
+&lt; R
+R001b6c00
+&lt; R
+R001b6c00</code></pre></figure>
+
+<p>We’ve now read our first several values out of the scope!  All three values
+were 0x1b6c00.  Sure, there’s more interesting information within the scope,
+but we’ll have to dig further into the scope to get it.  The big problem
+with getting there, though, is that typing 1024 “R”s to get through all the
+values in this scope is going to get old <em>real fast</em>.</p>
+
+<p>We’ve also found some annoying features in the protocol as well.  For example,
+there’s no reason why a write acknowledgement should produce 8-zeros,
+or why an address response to address 0x2080 should produce the extra four
+leading zeros.  Another <em>really</em> annoying feature of not having a FIFO is that
+we can’t cut/copy/paste into our interface–that would be a nice feature. 
+Still, having valid answers is a good first start!</p>
+
+<p>You can also look in your directory and find a trace.vcd file containing the
+trace information we made.  Feel free to run “gtkwave trace.vcd” and explore
+what took place after each interaction.</p>
+
+<h2 id="next-in-the-series">Next in the Series</h2>
+
+<p>As with many FPGA capabilities, building it just the way you want it can take
+several iterations.  We’ve got some more iterations yet left in this design.</p>
+
+<p>We’re still missing two final capabilities before we put this series to rest
+and move on to other topics.</p>
+
+<ul>
+  <li>
+    <p>We’d like to have a <a href="/blog/2017/06/16/dbg-bus-forest.html">software
+interface</a>
+to debug both our FPGA and our simulation.</p>
+
+    <p>If you haven’t noticed, typing hexadecimal commands and values, and
+interpreting hexadecimal results isn’t very intuitive.  Indeed, it’s
+out right <em>cryptic</em>!  We’ll fix this by switching from this by-hand interface
+to a software interface.</p>
+
+    <p>That software interface has been written, though not yet posted at this time.
+(Any <a href="https://www.patreon.com/ZipCPU">Patreon supporters</a> want to try an
+early version?) You’ll find it a whole lot easier to interact with large
+amounts of data over a software driven interface.</p>
+  </li>
+  <li>
+    <p>We want to be able to debug our simulation just like we would debug the
+hardware, by using a <a href="/blog/why-network-debugging">network enabled
+interface</a>.  The
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/uartsim.cpp">UART simulator</a> has this capability within it already.  Our hardware does not.
+Hence, we’d like to take a program like the
+<a href="https://github.com/ZipCPU/zbasic/blob/master/sw/host/netuart.cpp">netuart</a>
+from the <a href="https://github.com/ZipCPU/zbasic">basic ZipCPU</a> repository and
+incorporate it into this debugging bus.</p>
+  </li>
+</ul>
+
+<p>It may now be time to go back and consider the difference between the
+<a href="/blog/2017/06/02/design-process.html">student’s design process and the expert’s design
+process</a>.  Consider
+how much work it has taken to build this design, and then consider the typical
+student project.  The difference helps to illustrate why what we are building
+is a tool that a professional might use.  The reason is simply that building it
+takes time.  In the case of the professional, the time is spent once, and the
+tool used many times over.  In the case of the student who is trying to build
+a design from start to finish within a semester, the student often doesn’t
+realize the value of the tool he doesn’t have.</p>
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/blog/2017/06/26/dbgbus-verilator.html";
+  this.page.identifier="/blog/2017/06/26/dbgbus-verilator";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>And it shall come to pass in that day, that the remnant of Israel, and such as are escaped of the house of Jacob, shall no more again stay upon him that smote them; but shall stay upon the LORD, the Holy One of Israel, in truth. (Is 10:20)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

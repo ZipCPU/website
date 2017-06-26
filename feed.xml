@@ -6,9 +6,550 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 23 Jun 2017 07:13:01 -0400</pubDate>
-    <lastBuildDate>Fri, 23 Jun 2017 07:13:01 -0400</lastBuildDate>
+    <pubDate>Mon, 26 Jun 2017 09:05:47 -0400</pubDate>
+    <lastBuildDate>Mon, 26 Jun 2017 09:05:47 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Simulating an FPGA through the debugging interface</title>
+        <description>&lt;p&gt;Today, let’s put some things together.  We’ve already built a debugging bus
+approach that we can use to interact with an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+and draw information out of it.
+&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;[1]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;[2]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;[3]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/15/words-back-to-bytes.html&quot;&gt;[4]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;[5]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/16/dbg-bus-forest.html&quot;&gt;[6]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/19/debug-idles.html&quot;&gt;[7]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/20/dbg-put-together.html&quot;&gt;[8]&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;[9]&lt;/a&gt;
+We’ve also talked about 
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+and what 
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+allows us to do in simulation.&lt;/p&gt;
+
+&lt;p&gt;Suppose we spend the time today to build a
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+based simulation of our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+design that can be controlled via this debugging
+bus interface?&lt;/p&gt;
+
+&lt;p&gt;While most of the difficult parts have already been accomplished, there are
+still there are three basic components that we are going to need to work on to
+do this.  The first is the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/Makefile&quot;&gt;Makefile for our&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;top level Verilog design&lt;/a&gt;.
+The second is the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp&quot;&gt;C++ driver&lt;/a&gt; for our test bench.  We already discussed how to
+generate a &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testb.h&quot;&gt;generic
+driver&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;here&lt;/a&gt; and our
+debugging philosophy in general
+&lt;a href=&quot;/blog/2017/06/23/my-dbg-philosophy.html&quot;&gt;here&lt;/a&gt;,
+so this discussion will only describe the differences between a &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testb.h&quot;&gt;generic test
+bench driver&lt;/a&gt;
+and the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp&quot;&gt;one we’re
+building&lt;/a&gt;
+for this project.
+The last item we’ll need to figure out is how to build all the pieces
+together–i.e. the final &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/Makefile&quot;&gt;simulation
+Makefile&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;When we finish, let’s run some tests on our “hardware” and see how it works!&lt;/p&gt;
+
+&lt;h2 id=&quot;the-rtl-makefile&quot;&gt;The RTL Makefile&lt;/h2&gt;
+
+&lt;p&gt;The RTL makefile needs to handle two things.  First, it needs to convert our
+our &lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;Verilog test
+bench&lt;/a&gt;
+into a C++ class using
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;.  Then, the second step
+directed by the RTL makefile will be to build that C++ class into a library
+that can be linked with our &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp&quot;&gt;C++
+testbench&lt;/a&gt;
+to create a fully functional simulation.&lt;/p&gt;
+
+&lt;p&gt;We’ve &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;already
+discussed&lt;/a&gt;
+the basics of how to run
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;.
+In quick sum here, you can run
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt; on a top level Verilog
+file as in:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;verilate -Wall -trace -cc testbus.v&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Today, let’s just highlight some of the neat things that can be placed into
+our rtl/Makefile in order to do it well.&lt;/p&gt;
+
+&lt;p&gt;For example, I’d like to be able to use the test bench in the 
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;dbgbus&lt;/a&gt; repository to test several
+different debugging busses.  For this reason, I’m going to add,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nv&quot;&gt;BUS&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt;&lt;span class=&quot;err&quot;&gt; hexbus&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;to the Makefile, and -y “../../$(BUS)/rtl” to the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt; command line.
+That’ll cause Verilator to look for our sources in the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus/rtl&quot;&gt;hexbus&lt;/a&gt;
+project subdirectory for any bus sources.&lt;/p&gt;
+
+&lt;p&gt;Our top level Verilog file
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbench.v&quot;&gt;testbench.v&lt;/a&gt;
+includes references to multiple files.  We’d like
+to only re-run Verilator any time these files change.  Is there a way
+to get dependency information for Verilog code in a fashion similar to
+C++ code?  Yes, there is.  For this, we’ll add “–MMD” to the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt; command line,
+and include the dependency file it generates at the end of
+our Makefile:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nv&quot;&gt;DEPS&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;wildcard &lt;span class=&quot;nv&quot;&gt;$(VDIRFB)&lt;/span&gt;/&lt;span class=&quot;se&quot;&gt;\*&lt;/span&gt;.d&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+
+&lt;span class=&quot;err&quot;&gt;ifndeq&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;($(DEPS),)&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;include&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;$(DEPS)&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;endif&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll also set two more Makefile variables before we call Verilator.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nv&quot;&gt;VERILATOR&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;?=&lt;/span&gt; verilator
+&lt;span class=&quot;nv&quot;&gt;VFLAGS&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; -Wall --MMD -trace -y ../../&lt;span class=&quot;nv&quot;&gt;$(BUS)&lt;/span&gt;/rtl --Mdir &lt;span class=&quot;nv&quot;&gt;$(VDIRFB)&lt;/span&gt;&lt;span class=&quot;err&quot;&gt; -cc&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This will do two things.  First, it will allow you to run make with your
+VERILATOR version defined in an environment variable.  Second, it will
+simplify our Verilator call later.&lt;/p&gt;
+
+&lt;p&gt;Now that we have these variables defined, we can create the “verilate”
+target.  This target will build the C++ code.  Since the actual name of the
+C++ code is somewhat obtuse, we’ll rename what we are building to “verilate”
+and then forward that to what needs to be built.  Finally, we’ll actually
+run our Verilator call–simplified by the VFLAGS we defined above.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nl&quot;&gt;.PHONY&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;verilate&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;verilate&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;$(VDIRFB)/Vtestbus.h&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;$(VDIRFB)/Vtestbus.h&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
+	&lt;span class=&quot;nv&quot;&gt;$(VERILATOR)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(VFLAGS)&lt;/span&gt;&lt;span class=&quot;err&quot;&gt; testbus.v&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The last step is to build the library.  This step is somewhat anticlimactic,
+since
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+did most of the work for us.  Building the library depends
+upon the source files
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+just built for us.  Making things even easier,
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+just generated its own make file.  Hence,
+we’ll just recursively call make on that make file to build all that’s left.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nl&quot;&gt;.PHONY&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;library&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;library&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;$(VDIRFB)/Vtestbus.h&lt;/span&gt;
+	&lt;span class=&quot;nv&quot;&gt;$(SUBMAKE)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(VDIRFB)&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;/ -f Vtestbus.mk&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This recursively calls make in the $(VDIRFB) subdirectory, and it does so
+with the “-f” argument specifying that it should use as its make file
+$(VDIRFB)/Vtestbus.mk.&lt;/p&gt;
+
+&lt;p&gt;That’s about it.  The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/Makefile&quot;&gt;RTL
+Makefile&lt;/a&gt;
+also contains a clean target, but in general that’s all that it takes to create
+a Makefile that will run
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+to build a simulatable library.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-cpp-testbench&quot;&gt;The CPP Testbench&lt;/h2&gt;
+
+&lt;p&gt;As &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;we discussed when
+presenting&lt;/a&gt;
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;,
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+needs a small C++ driver program to run the simulation.&lt;/p&gt;
+
+&lt;p&gt;The driver we are going to use for this simulation, both the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testb.h&quot;&gt;generic one&lt;/a&gt;
+and the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/testbus_tb.cpp&quot;&gt;specific simulation
+one&lt;/a&gt;,
+should look very similar to the ones we built during our &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;prior
+discussion&lt;/a&gt;.
+Here, we’ll look at two differences.&lt;/p&gt;
+
+&lt;p&gt;The first is that we have made the termination criteria a touch more
+general than before.  For this test bench, we’ll terminate our simulation
+either whenever the $final Verilog instruction is reached (which we didn’t
+use in our Verilog code), or whenever the &lt;strong&gt;o_halt&lt;/strong&gt; GPIO is asserted.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;TESTBUS_TB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;done&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_done&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;Verilated&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;gotFinish&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_done&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_halt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_done&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_done&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;That’ll allow us to control things from within the simulation (such as by
+CPU software instruction) if we’d like.&lt;/p&gt;
+
+&lt;p&gt;The other changes are the necessary parts of putting a UART interface
+onto this test bench.  We’ll do that using the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/uartsim.cpp&quot;&gt;uartsim&lt;/a&gt;
+simulator found in the
+&lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;wbuart&lt;/a&gt; repository.  There just a couple
+of steps there.&lt;/p&gt;
+
+&lt;p&gt;First, we initialize the UART component module with a zero, indicating that
+we want the UART to interact with us using stdin/stdout.  We’ll adjust that
+later so that we can interact over TCP/IP.&lt;/p&gt;
+
+&lt;p&gt;Second, the UART simulator needs to know the baud rate we are using to
+communicate with.  This needs to be the same as the UART configuration
+parameter found within our
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;testbus.v&lt;/a&gt;.
+If you wish to run this on your hardware, you may need to
+adjust the parameter in the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;testbus.v&lt;/a&gt;
+top level file, as well as in this file–to make sure you are communicating
+at a common baud rate.  Otherwise, we’ll just assume that one baud is 25 clock
+ticks.  You can check the &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/master/doc/spec.pdf&quot;&gt;UART component specification
+document&lt;/a&gt; for more
+information on how to understand this setup value.&lt;/p&gt;
+
+&lt;p&gt;That’s it for setting up the C++ portion of the simulation!  All that’s left
+is to build it and test it.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-cpp-makefile&quot;&gt;The CPP Makefile&lt;/h2&gt;
+
+&lt;p&gt;For building our simulation executable, we return to the Makefile necessary
+to do it.  What we want to do is really quite simple.  We’d like to issue
+a command such as,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nl&quot;&gt;testbus_tb&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
+	&lt;span class=&quot;nv&quot;&gt;$(CXX)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(CFLAGS)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(OBJECTS)&lt;/span&gt;&lt;span class=&quot;err&quot;&gt; -o $@&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;where $(OBJECTS) are the object files we need, and $(CFLAGS) are whatever
+flags we wish to build with.  Our final solution will be just about that simple.&lt;/p&gt;
+
+&lt;p&gt;The questions remaining are, what flags, what objects, and how do we build
+those objects.  The
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/Makefile&quot;&gt;Makefile&lt;/a&gt;
+itself includes dependency generation, but we can leave that as a topic for
+another day or perhaps even for another blog.&lt;/p&gt;
+
+&lt;p&gt;For the first question, which flags shall we use, its in many ways up to you.
+We’ll use the “-Og” flag to turn on the optimizer, although any optimizations
+should really also be a flag to
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+as well.  Here, we’ll also use the 
+“-Wall” flag as well to see if we can encourage g++ to find any bugs in our
+code.  We’ll also need to tell
+the C++ compiler to look for the include files found both in our RTL/obj_dir
+directory, as well as those found in the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+root include directory.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;c&quot;&gt;# Show make how to find our compiled verilated output
+&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;RTLD&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; ../rtl
+&lt;span class=&quot;nv&quot;&gt;VOBJDR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(RTLD)&lt;/span&gt;/obj_dir
+&lt;span class=&quot;c&quot;&gt;# Show make how to find Verilators support files
+&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;VROOT&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(VERILATOR_ROOT)&lt;/span&gt;
+&lt;span class=&quot;nv&quot;&gt;VINCD&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(VROOT)&lt;/span&gt;/include
+&lt;span class=&quot;c&quot;&gt;# Generate a full include list
+&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;INCS&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; -I&lt;span class=&quot;nv&quot;&gt;$(VINCD)&lt;/span&gt; -I&lt;span class=&quot;nv&quot;&gt;$(VOBJDR)&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;# Build our C-Flags
+&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;CFLAGS&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; -Og -g -Wall &lt;span class=&quot;nv&quot;&gt;$(INCS)&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You might also wish to set the VERILATOR_ROOT directory.  On my system, this
+is found in “/usr/share/verilator”, but that’s not the same among all systems.
+At the encouragement of others who’ve tried my code, I’ve switched to:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nv&quot;&gt;VERILATOR_ROOT&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;?=&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;$(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;shell&lt;/span&gt; bash -c &lt;span class=&quot;s1&quot;&gt;&#39;verilator -V|grep VERILATOR_ROOT | head -1 | sed -e &quot; s/^.*=\s*//&quot;&#39;&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;)&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This will call a shell script, which will run “verilator -V” (try it!).  The
+output is then searched for VERILATOR_ROOT.  Since
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+produces two lines with this value within it, we
+grab the first one and use it.  Further, we’ll only do so if VERILATOR_ROOT
+isn’t already set–perhaps from a parent make file (that’s what the ?= does).&lt;/p&gt;
+
+&lt;p&gt;The next question is, what objects do we need to include?  First, there’s
+the obvious one, we’ll need to include testbus_tb.o.  We’ll also want to 
+include the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+class definition library from Vtestbus__ALL.a.
+Going one step further, we’ll want to include our &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/uartsim.cpp&quot;&gt;UART
+simulation&lt;/a&gt;
+object file, uartsim.o.  Finally, we’ll want to include the tw
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+files, verilated.cpp and verilated_vcd_c.cpp once compiled to object files.
+This is as easy as:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nv&quot;&gt;VSRCRAW&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; verilated.cpp verilated_vcd_c.cpp
+&lt;span class=&quot;nv&quot;&gt;VSRC&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;addprefix &lt;span class=&quot;nv&quot;&gt;$(VINCD)&lt;/span&gt;/,&lt;span class=&quot;nv&quot;&gt;$(VSRCRAW)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;nv&quot;&gt;VOBJ&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;addprefix &lt;span class=&quot;nv&quot;&gt;$(OBJDIR)&lt;/span&gt;/,&lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;subst .cpp,.o,&lt;span class=&quot;nv&quot;&gt;$(VSRCRAW)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt;
+&lt;span class=&quot;nv&quot;&gt;SOURCES&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; testbus_tb.cpp uartsim.cpp
+&lt;span class=&quot;nv&quot;&gt;OBJECTS&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:=&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;addprefix &lt;span class=&quot;nv&quot;&gt;$(OBJDIR)&lt;/span&gt;/,&lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;subst .cpp,.o,&lt;span class=&quot;nv&quot;&gt;$(SOURCES)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;))&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(VOBJ)&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;To build the sources into object files, we’ll add two generic build rules.
+The first will apply for the objects built from this directory.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nl&quot;&gt;$(OBJDIR)/%.o&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;%.cpp&lt;/span&gt;
+	&lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;mk-objdir&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;nv&quot;&gt;$(CXX)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(CFLAGS)&lt;/span&gt;&lt;span class=&quot;err&quot;&gt; -c $&amp;lt; -o $@&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;If you are not as familiar with make files, the first line specifies a generic
+pattern: files within the current directory and ending with .cpp can be
+turned into object files in the $(OBJDIR)/ directory having the same name but
+the .o suffix instead.&lt;/p&gt;
+
+&lt;p&gt;The second line, $(mk-objdir), calls a function
+that we’ll define elsewhere in our makefile that builds our object file
+directory, $(OBJDIR).  While it’s not necessary to place your build products
+in a separate object file directory, I find that it both cleans up the
+main source directory, and it also provides options later in case you need
+to build on multiple systems.&lt;/p&gt;
+
+&lt;p&gt;The third line is used to call your C++ compiler,
+to give it the CFLAGS variable, and to ask it to produce an object file (-c)
+rather than a completed program.  Other make file variables include the name
+of the source file that tripped the rule, $&amp;lt;, and tell it to place the output
+(-o) into $@–the result the rule is supposed to produce.&lt;/p&gt;
+
+&lt;p&gt;We repeat this for the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+source files in the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+include directory,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-makefile&quot; data-lang=&quot;makefile&quot;&gt;&lt;span class=&quot;nl&quot;&gt;$(OBJDIR)/%.o&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;$(VIND)/%.cpp&lt;/span&gt;
+	&lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;(&lt;/span&gt;mk-objdir&lt;span class=&quot;o&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;nv&quot;&gt;$(CXX)&lt;/span&gt; &lt;span class=&quot;nv&quot;&gt;$(CFLAGS)&lt;/span&gt;&lt;span class=&quot;err&quot;&gt; -c $&amp;lt; -o $@&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Since we’ve already presented the final rule, that’s about all there is to
+the makefile necessary to generate this simulation.&lt;/p&gt;
+
+&lt;p&gt;Should you need to build a make file of your own, you might wish to start
+from this one and just change the names of the files necessary to run your
+simulation.&lt;/p&gt;
+
+&lt;h2 id=&quot;simple-tests&quot;&gt;Simple Tests&lt;/h2&gt;
+
+&lt;p&gt;We now have a
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/Makefile&quot;&gt;Makefile&lt;/a&gt; in
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/bench/rtl&quot;&gt;bench/rtl&lt;/a&gt;
+that will compile our debug bus and a test wishbone interconnect into
+a C++ class.  We also have a
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/Makefile&quot;&gt;Makefile&lt;/a&gt; in
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/bench/cpp&quot;&gt;bench/cpp&lt;/a&gt; that can
+then be used to build the project into an executable.  Shall we run our
+executable?&lt;/p&gt;
+
+&lt;p&gt;Let’s try it out.  The only caution before starting is that this program as
+written will generate megabytes of trace information very quickly.  That trace
+file, if you aren’t careful, may very well fill up your hard drive.  So, don’t
+leave the simulator running at the end of each test.&lt;/p&gt;
+
+&lt;p&gt;With all that said, let’s run the program:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;./testbus_tb&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now that it’s running, it’s waiting for an input.  So, let’s
+try reading our constant address.  If you type,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A2040R&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;your design will return “A00002040R20170622”.  The first number, A00002040,
+indicates the address that we just changed the interface to.
+The second number (starting with the R)
+indicates the value we just read: 0x20170622.&lt;/p&gt;
+
+&lt;p&gt;Let’s try another.  Let’s try reading that counter, and let’s do it
+a couple of times.  The counter itself is at address 0x204c.  However, if you
+remember from &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;when we built our simple bus
+master&lt;/a&gt;
+we chose to use the LSB as indication of whether or not the address should
+increment between reads.  By setting it to zero, we’ll keep the address
+constant between subsequent read commands.  For this reason, we can issue
+an address command, followed by several read commands and they’ll all read
+from the same address:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A204dR
+R
+R
+R&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Make sure you type the newlines between the R’s!  This bus isn’t yet robust
+enough to handle more than one command given to it at once.  (It needs FIFO
+support.)  Still, I get the response:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A0000204dR000485b4
+0005234b
+0005cbf1
+00068df3&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Not bad.  Looks like we’ve got something working.&lt;/p&gt;
+
+&lt;p&gt;Can we trigger an interrupt?  You may remember that we had an interrupt
+tied to the LSB of address 0x2050.  So, let’s write to 0x2051 to trigger,
+clear, and then trigger this interrupt again
+I’ll prefix the commands I typed with a “&amp;lt; “, so you can see the responses
+in line.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;lt; A2051RW1
+A00002051R00000000K00000000I
+&amp;lt; W0
+K00000000
+&amp;lt; W1
+I
+K00000000
+&amp;lt; W0
+K00000000&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Did you see the “I” response?  That tells us we triggered our interrupt
+as desired.&lt;/p&gt;
+
+&lt;p&gt;How about the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v&quot;&gt;scope&lt;/a&gt;
+we put &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;on
+board&lt;/a&gt;?  Can
+we trigger the scope?  Let’s first
+read the scope’s control register, then write to a &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/master/bench/rtl/memdev.v&quot;&gt;block
+RAM&lt;/a&gt; memory address
+(triggering the scope), and then read the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v&quot;&gt;scope&lt;/a&gt;’s
+control register again:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;lt; A02080R
+A00002080R12a001fc
+&amp;lt; A4000Wdeadbeef
+A00004000K00000000I
+&amp;lt; A2080R
+Z
+A00002080R72a001fc
+&amp;lt; A4000R
+A00004000Rdeadbeef&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The first command (A02080R) reads from the scopes control register.  If you
+look up 0x12a001fc in the &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/doc/spec.pdf&quot;&gt;wishbone scope specification
+document&lt;/a&gt;, you’ll
+learn several things about the scope’s state as given by this number.  First,
+the high order nibble of ‘1’ indicates that the scope is primed but hasn’t
+triggered yet.  Second, the ‘2’ indicates that the DATA pointer within the
+scope is set to the beginning of the scope’s memory (where we’d expect it). 
+Third, the ‘a’ indicates that the scope has been configured for 2^10 samples of
+memory.  Last, the ending 0x01fc tells us that the scope will wait 0x01fc
+samples after the trigger, placing our event roughly within the center of
+its collection window.&lt;/p&gt;
+
+&lt;p&gt;The second command, A4000Wdeadbeef, writes 0xdeadbeef to the first location
+in block RAM (address 0x4000).  Since we are also using wishbone accesses to
+that location to
+trigger our scope, an “I” is also returned together with the acknowledgement
+(‘K’).  Incidentally, we’ll need to reset the scope in order for this interrupt
+to clear, so don’t expect any more interrupt indications for a while.&lt;/p&gt;
+
+&lt;p&gt;The third command, “A2080R” reads from the scope control register again.
+It now has a value of 0x72a001fc.  Looking at the top nibble, the ‘7’
+indicates that the scope has not only been triggered, but that it has also
+stopped collecting.&lt;/p&gt;
+
+&lt;p&gt;Shall we read from the scope as well?  Let’s read from address 0x2084, with
+the increment bit set to prohibit address increments between reads (i.e.,
+addres 0x2085):&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;&amp;lt; A2080R
+A00002080R12a001fc
+&amp;lt; A4000Wdeadbeef
+A00004000K00000000I
+&amp;lt; A2080R
+A00002080R72a001fc
+&amp;lt; A2085R
+A00002085R001b6c00
+&amp;lt; R
+R001b6c00
+&amp;lt; R
+R001b6c00
+&amp;lt; R
+R001b6c00
+&amp;lt; R
+R001b6c00&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ve now read our first several values out of the scope!  All three values
+were 0x1b6c00.  Sure, there’s more interesting information within the scope,
+but we’ll have to dig further into the scope to get it.  The big problem
+with getting there, though, is that typing 1024 “R”s to get through all the
+values in this scope is going to get old &lt;em&gt;real fast&lt;/em&gt;.&lt;/p&gt;
+
+&lt;p&gt;We’ve also found some annoying features in the protocol as well.  For example,
+there’s no reason why a write acknowledgement should produce 8-zeros,
+or why an address response to address 0x2080 should produce the extra four
+leading zeros.  Another &lt;em&gt;really&lt;/em&gt; annoying feature of not having a FIFO is that
+we can’t cut/copy/paste into our interface–that would be a nice feature. 
+Still, having valid answers is a good first start!&lt;/p&gt;
+
+&lt;p&gt;You can also look in your directory and find a trace.vcd file containing the
+trace information we made.  Feel free to run “gtkwave trace.vcd” and explore
+what took place after each interaction.&lt;/p&gt;
+
+&lt;h2 id=&quot;next-in-the-series&quot;&gt;Next in the Series&lt;/h2&gt;
+
+&lt;p&gt;As with many FPGA capabilities, building it just the way you want it can take
+several iterations.  We’ve got some more iterations yet left in this design.&lt;/p&gt;
+
+&lt;p&gt;We’re still missing two final capabilities before we put this series to rest
+and move on to other topics.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;We’d like to have a &lt;a href=&quot;/blog/2017/06/16/dbg-bus-forest.html&quot;&gt;software
+interface&lt;/a&gt;
+to debug both our FPGA and our simulation.&lt;/p&gt;
+
+    &lt;p&gt;If you haven’t noticed, typing hexadecimal commands and values, and
+interpreting hexadecimal results isn’t very intuitive.  Indeed, it’s
+out right &lt;em&gt;cryptic&lt;/em&gt;!  We’ll fix this by switching from this by-hand interface
+to a software interface.&lt;/p&gt;
+
+    &lt;p&gt;That software interface has been written, though not yet posted at this time.
+(Any &lt;a href=&quot;https://www.patreon.com/ZipCPU&quot;&gt;Patreon supporters&lt;/a&gt; want to try an
+early version?) You’ll find it a whole lot easier to interact with large
+amounts of data over a software driven interface.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;We want to be able to debug our simulation just like we would debug the
+hardware, by using a &lt;a href=&quot;/blog/why-network-debugging&quot;&gt;network enabled
+interface&lt;/a&gt;.  The
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/cpp/uartsim.cpp&quot;&gt;UART simulator&lt;/a&gt; has this capability within it already.  Our hardware does not.
+Hence, we’d like to take a program like the
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/host/netuart.cpp&quot;&gt;netuart&lt;/a&gt;
+from the &lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;basic ZipCPU&lt;/a&gt; repository and
+incorporate it into this debugging bus.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;It may now be time to go back and consider the difference between the
+&lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;student’s design process and the expert’s design
+process&lt;/a&gt;.  Consider
+how much work it has taken to build this design, and then consider the typical
+student project.  The difference helps to illustrate why what we are building
+is a tool that a professional might use.  The reason is simply that building it
+takes time.  In the case of the professional, the time is spent once, and the
+tool used many times over.  In the case of the student who is trying to build
+a design from start to finish within a semester, the student often doesn’t
+realize the value of the tool he doesn’t have.&lt;/p&gt;
+</description>
+        <pubDate>Mon, 26 Jun 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/06/26/dbgbus-verilator.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/26/dbgbus-verilator.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>My own FPGA debugging philosophy</title>
@@ -773,8 +1314,9 @@ us our roadmap forward:&lt;/p&gt;
 &lt;ul&gt;
   &lt;li&gt;
     &lt;p&gt;Building a
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator/&quot;&gt;Verilator&lt;/a&gt; test bench to use to
-experiment with this bus apart from any hardware&lt;/p&gt;
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator/&quot;&gt;Verilator&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/06/26/dbgbus-verilator.html&quot;&gt;test bench&lt;/a&gt;
+to use to experiment with this bus apart from any hardware&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
     &lt;p&gt;Building a software software interface to our debugging bus, so we can use
@@ -1922,7 +2464,9 @@ scope&lt;/a&gt; for this purpose, as well as a
 fairly generic set of simple registers.&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
+    &lt;p&gt;Creating a &lt;a href=&quot;/blog/2017/06/26/dbgbus-verilator.html&quot;&gt;hand-controlled test
+bench&lt;/a&gt; to prove
+this works&lt;/p&gt;
 
     &lt;p&gt;This will be about building a test bench that we can use to run this whole
 package in Verilator.&lt;/p&gt;
@@ -2097,7 +2641,9 @@ together.  Further posts will include:&lt;/p&gt;
     &lt;p&gt;&lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;Creating a simple wishbone interconnect&lt;/a&gt;&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
+    &lt;p&gt;Creating a &lt;a href=&quot;/blog/2017/06/26/dbgbus-verilator.html&quot;&gt;hand-controlled test
+bench&lt;/a&gt;
+to prove this works&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
     &lt;p&gt;Creating a software bus controller&lt;/p&gt;
@@ -2803,7 +3349,9 @@ stream&lt;/p&gt;
     &lt;p&gt;&lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;Creating a simple wishbone interconnect&lt;/a&gt;&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
-    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
+    &lt;p&gt;Creating a &lt;a href=&quot;/blog/2017/06/26/dbgbus-verilator.html&quot;&gt;hand-controlled test
+bench&lt;/a&gt;
+to prove this works&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
     &lt;p&gt;Creating a software bus controller&lt;/p&gt;
@@ -2826,377 +3374,6 @@ lost.  Perhaps we should add a FIFO to our additional topics list as well, then.
         <pubDate>Fri, 16 Jun 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/06/16/adding-ints.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/16/adding-ints.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>How to send our bus results back out the serial port</title>
-        <description>&lt;p&gt;This post starts to complete the design of a very elementary debug port that
-can be used to command an internal, on-board, wishbone bus.  Other posts in
-this series include:&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: DBG Port Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl-2.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;An overview of a UART to wishbone
-bridge&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;How to build a &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;Simple Wishbone Master&lt;/a&gt;, and&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;How to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create bus command words from a 7-bit data stream&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;We’ve slowly been building up to the implementation of a WB-UART component,
-such as that in Fig 1.&lt;/p&gt;
-
-&lt;p&gt;A this point, we’ve now described how to get a serial port up and running,
-how to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create words from the serial
-stream&lt;/a&gt;, and
-&lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;how to control a simple wishbone bus
-master&lt;/a&gt;
-from the command words running through this stream.  We are very close to having
-a working debug bus–since we can add the FIFOs and interrupts in later if
-we have to.&lt;/p&gt;
-
-&lt;p&gt;This lesson is about what it takes to turn the response words from the bus
-master into a characters that will be sent out the output transport.  The
-output transport, as you will recall, has a functionality similar to a
-serial port.  Indeed, it might be a serial port, although it doesn’t need
-to be.&lt;/p&gt;
-
-&lt;h2 id=&quot;stream-timing&quot;&gt;Stream timing&lt;/h2&gt;
-
-&lt;p&gt;Before we start, though, let’s examine how to handle stream timing.  Our
-problem is that we will be generating words to be sent out of our serial
-port at a rate that is much faster than the port can handle.  We’re going to
-want to make certain that these response words are not lost–in spite of the
-speed differential.&lt;/p&gt;
-
-&lt;p&gt;Earlier, we described &lt;a href=&quot;/blog/2017/06/02/generating-timing.html&quot;&gt;how to build a strobe type of
-signal&lt;/a&gt;.  For our purposes here, the
-strobe signal was one that was valid for a single clock only.  Here, we are
-also going to use a busy signal.  The two signals will work together in the
-following way: the strobe will indicate a desire to send a word downstream,
-while the busy response from the next component will be used to indicate that
-the downstream component is not ready to receive.  To deal with this, once we
-set our strobe we will continue to hold it high (request data be sent)
-until the downstream components busy but is cleared.&lt;/p&gt;
-
-&lt;p&gt;Conditions for moving forward will therefore look something like …&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
-	....&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This condition will be true any time we accept a request to send a word.&lt;/p&gt;
-
-&lt;p&gt;Likewise, there is a similar condition on the downstream side of any stream
-component:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;if ((o_dw_stb)&amp;amp;&amp;amp;(!i_tx_busy))
-	....&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Prefixes will change depending upon which side of the link we are on, or
-which components we are using, but the logic is going to be the same every
-time.&lt;/p&gt;
-
-&lt;p&gt;Now, with that out of the way, we can disassemble our words into a serial
-port output channel.&lt;/p&gt;
-
-&lt;h2 id=&quot;breaking-words-into-nibbles&quot;&gt;Breaking Words into nibbles&lt;/h2&gt;
-
-&lt;p&gt;The trick to making any stream processing work is to only do a little bit of
-processing at each step.  Hence for our first step, we turn our response
-word into bytes.&lt;/p&gt;
-
-&lt;p&gt;There are a couple primary variables to make this work.  The first one is
-the word buffer, &lt;strong&gt;r_word&lt;/strong&gt;.  This buffer holds what is left of our response
-word that has not yet been sent.  The next variable is the &lt;strong&gt;r_len&lt;/strong&gt; word
-that holds how many valid nibbles remain in our &lt;strong&gt;r_word&lt;/strong&gt; register.&lt;/p&gt;
-
-&lt;p&gt;Hence, on any new incoming word, as long as we are not busy, we send
-a nibble noting the top two bits (Read data, write acknowledgement, etc.), and
-we note that the register now has eight
-nibbles within it.  In the case of any special words, we instead send the top
-five bits of the command word and nothing more.  Other protocols would work
-as well, this is just what we are going to choose.&lt;/p&gt;
-
-&lt;p&gt;Here’s the big always blog for what we want to do.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-	begin
-		// On reset, clear our variables
-		r_word &amp;lt;= 0;
-		r_len  &amp;lt;= 0;
-		o_dw_stb  &amp;lt;= 1&#39;b0;
-		o_dw_bits &amp;lt;= 5&#39;h0;
-	end else if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
-	begin			
-		// If we are not busy, then load a new command
-		// into our buffer to be sent
-		r_word &amp;lt;= i_word[31:0];
-		r_len  &amp;lt;= 4&#39;h8;
-
-		o_dw_stb &amp;lt;= 1&#39;b1;
-		o_dw_bits &amp;lt;= { 3&#39;b100, i_word[33:32] };
-		if (i_word[33:32]==2&#39;b11)
-		begin
-			// If this is a special command,
-			// grab all top 5-bits to output
-			// them
-			o_dw_bits &amp;lt;= i_word[33:29];
-			r_len &amp;lt;= 4&#39;h0;
-		end else if (i_word[33:32] == 2&#39;b01)
-		begin // On an ACK, print only the &#39;K&#39;
-			// and nothing more
-			r_len &amp;lt;= 4&#39;h0;
-		end
-	end else if ((o_dw_stb)&amp;amp;&amp;amp;(!i_tx_busy))
-	begin
-		// Our last byte was accepted, move to the next one
-		if (r_len != 4&#39;h0)
-		begin
-			o_dw_stb  &amp;lt;= 1&#39;b1;
-			o_dw_bits &amp;lt;= { 1&#39;b0, r_word[31:28] };
-			r_word &amp;lt;= { r_word[27:0], 4&#39;h0 };
-			r_len  &amp;lt;= r_len - 1&#39;b1;
-		end else
-			o_dw_stb  &amp;lt;= 1&#39;b0;
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll simplify this giant always block by first removing the reset logic
-from it.  Indeed, the only things that need reset logic are the &lt;strong&gt;r_len&lt;/strong&gt;
-and &lt;strong&gt;o_dw_stb&lt;/strong&gt; registers.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-if (i_reset)
-begin
-	r_len &amp;lt;= 0;
-	o_dw_stb &amp;lt;= 0;
-end else if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
-begin
-	o_dw_stb &amp;lt;= 1&#39;b1;
-	if (i_word[33:32]==2&#39;b11)
-		r_len &amp;lt;= 4&#39;h0;
-	else
-		r_len &amp;lt;= 4&#39;h8;
-end else if (!i_tx_busy)
-begin
-	o_dw_stb &amp;lt;= (r_len != 4&#39;h0);
-	if (r_len != 4&#39;h0)
-		r_len &amp;lt;= r_len - 1&#39;b1;
-end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You should find this logic identical to the big always block above.&lt;/p&gt;
-
-&lt;p&gt;The rest of our logic, to include all the various wires associated with
-the word register &lt;strong&gt;r_word&lt;/strong&gt; can then be drastically simplified.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-// No reset logic needed
-if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
-begin
-	// On any new word, set the result
-	r_word &amp;lt;= i_word;
-end else if (!i_tx_busy)
-	// Whenever we aren&#39;t busy, a new nibble is accepted
-	// and the word shifts.  If we never set our output
-	// strobe, this will never become busy, but if the
-	// register isn&#39;t in use, there&#39;s no penalty to clearing
-	// it repeatedly.
-	r_word &amp;lt;= { r_word[27:0], 4&#39;h0 };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Even the outputs may be set quite simply.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-if ((i_stb)&amp;amp;&amp;amp;(!o_dw_busy))
-begin
-	if (i_word[33:32] == 2&#39;b11)
-		o_dw_bits &amp;lt;= i_word[33:29];
-	else
-		o_dw_bits &amp;lt;= { 3&#39;b100, i_word[33:32] };
-end else if (i_tx_busy)
-	o_dw_bits &amp;lt;= { 1&#39;b0, r_word[31:28] };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If you look over the difference between what we started with and where we
-ended up, there’s a lot of differences.  All of these differences translate
-into fewer resources in our output.  They can basically be summarized by this:
-if you don’t care the what the value of a register is under certain conditions,
-then don’t make that register depend upon those conditions.  Remember, the
-resources used by a piece of logic can be (roughly) calculated by the number
-of inputs that piece of logic requires.&lt;/p&gt;
-
-&lt;h2 id=&quot;turning-nibbles-into-characters&quot;&gt;Turning nibbles into characters&lt;/h2&gt;
-
-&lt;p&gt;The next step on the output process is to turn this stream of nibbles into
-output characters.  This is almost a pure lookup table, but the stream
-logic keeps it from being quite that.&lt;/p&gt;
-
-&lt;p&gt;The stream logic consists of paying attention to the busy and strobe flags
-to determine when we have an output to send.  In particular, if we are not
-busy and a request is made of us, we’ll forward it down the line.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if ((i_stb)&amp;amp;&amp;amp;(!o_gx_busy))
-		// On a new request, send it forward
-		o_gx_stb &amp;lt;= 1&#39;b1;
-	else if (!i_busy)
-		o_gx_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Since we don’t have more than a single clock’s worth of processing to do here,
-we can just set the busy bit to be the same as our output strobe bit.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	o_gx_busy = o_gx_stb;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The real work is in the lookup table.  When given a value between 5’h0 and
-5’hf, we just send the hexadecimal output.  Values with the 5’h10 bit set
-indicate we need to send a special character.  You can see the special
-characters we support below.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if ((i_stb)&amp;amp;&amp;amp;(!o_gx_busy))
-	begin
-		case(i_bits)
-		5&#39;h00: o_gx_char &amp;lt;= &quot;0&quot;;
-		5&#39;h01: o_gx_char &amp;lt;= &quot;1&quot;;
-		5&#39;h02: o_gx_char &amp;lt;= &quot;2&quot;;
-		5&#39;h03: o_gx_char &amp;lt;= &quot;3&quot;;
-		5&#39;h04: o_gx_char &amp;lt;= &quot;4&quot;;
-		5&#39;h05: o_gx_char &amp;lt;= &quot;5&quot;;
-		5&#39;h06: o_gx_char &amp;lt;= &quot;6&quot;;
-		5&#39;h07: o_gx_char &amp;lt;= &quot;7&quot;;
-		5&#39;h08: o_gx_char &amp;lt;= &quot;8&quot;;
-		5&#39;h09: o_gx_char &amp;lt;= &quot;9&quot;;
-		5&#39;h0a: o_gx_char &amp;lt;= &quot;a&quot;;
-		5&#39;h0b: o_gx_char &amp;lt;= &quot;b&quot;;
-		5&#39;h0c: o_gx_char &amp;lt;= &quot;c&quot;;
-		5&#39;h0d: o_gx_char &amp;lt;= &quot;d&quot;;
-		5&#39;h0e: o_gx_char &amp;lt;= &quot;e&quot;;
-		5&#39;h0f: o_gx_char &amp;lt;= &quot;f&quot;;
-		//
-		5&#39;h10: o_gx_char &amp;lt;= &quot;R&quot;;	// Read response w/data
-		5&#39;h11: o_gx_char &amp;lt;= &quot;K&quot;;	// Write ACK
-		5&#39;h12: o_gx_char &amp;lt;= &quot;A&quot;;	// Address was set
-		5&#39;h13: o_gx_char &amp;lt;= &quot;S&quot;;	// Special
-		//
-		5&#39;h18: o_gx_char &amp;lt;= &quot;T&quot;;	// reseT
-		5&#39;h19: o_gx_char &amp;lt;= &quot;E&quot;;	// BUS Error
-		5&#39;h1a: o_gx_char &amp;lt;= &quot;I&quot;;	// Interrupt
-		5&#39;h1b: o_gx_char &amp;lt;= &quot;Z&quot;;	// I&#39;m here, but slping
-		default: o_gx_char &amp;lt;= 8&#39;hd;	// Carriage return
-		endcase
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Unknown characters just get quietly turned into carriage returns, which
-the next module turns into carriage return and newline pairs (CR/NL).&lt;/p&gt;
-
-&lt;h2 id=&quot;adding-carriage-returns-and-newlines-to-the-stream&quot;&gt;Adding Carriage Returns and Newlines to the Stream&lt;/h2&gt;
-
-&lt;p&gt;The final step is to add a carriage return/newline pair to our output stream
-any time it becomes idle.  This will assist any buffered software following
-that might depend upon the end of a line before forwarding the data received.&lt;/p&gt;
-
-&lt;p&gt;To do this, we’ll create a new stream component in our processing chain.
-Any characters given to this stream will just send their characters back
-out the port.  But, if the port is idle we’ll insert a carriage return into
-the stream.  Then, any time a carriage return is sent out, we’ll set a register
-&lt;strong&gt;last_cr&lt;/strong&gt; to indicate that we’ve sent one carriage return, and don’t need
-to send it again.  This value will clear upon any new and valid data from
-the port.&lt;/p&gt;
-
-&lt;p&gt;The next state variable we’ll use is &lt;strong&gt;cr_state&lt;/strong&gt;.  This variable will be
-set at anytime &lt;strong&gt;last_cr&lt;/strong&gt; is set, and we’ll clear it upon sending a newline.&lt;/p&gt;
-
-&lt;p&gt;Put together, any time we enter our newline state, we’ll set &lt;strong&gt;last_cr&lt;/strong&gt; and
-set &lt;strong&gt;cr_state&lt;/strong&gt;.  After the carriage return is sent, we’ll send a newline
-and clear &lt;strong&gt;cr_state&lt;/strong&gt;.  We’ll then stay in that state until anything
-else is sent through the port.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-	begin
-		// On reset, act as though we&#39;ve already sent
-		// a CR/NL pair
-		cr_state &amp;lt;= 1&#39;b0;
-		last_cr  &amp;lt;= 1&#39;b0;
-		o_nl_stb &amp;lt;= 1&#39;b0;
-	end else if ((i_stb)&amp;amp;&amp;amp;(!o_nl_busy))
-	begin
-		// On any input, set the last_cr bit if it was
-		// a carriage return, and clear it otherwise. 
-		// Clear the cr_state bit either way.
-		o_nl_stb  &amp;lt;= i_stb;
-		o_nl_byte &amp;lt;= i_byte;
-		cr_state &amp;lt;= 1&#39;b0;
-		last_cr &amp;lt;= (i_byte[7:0] == 8&#39;hd);
-	end else if ((o_nl_busy)&amp;amp;&amp;amp;(!i_busy))
-	begin
-		// If we&#39;ve just sent something, let&#39;s check
-		// if we need to send a cr/newline pair
-		if (!last_cr)
-		begin
-			// We haven&#39;t sent a carriage
-			// return.  So, send it if the
-			// input is idle.
-			cr_state  &amp;lt;= (!i_stb);
-			o_nl_byte &amp;lt;= 8&#39;hd;
-			last_cr   &amp;lt;= (!i_stb);
-			o_nl_stb  &amp;lt;= (!i_stb);
-		end else if (cr_state)
-		begin
-			// We&#39;ve sent the carriage
-			// return, but not the newline.
-			// Send the newline now.
-			cr_state  &amp;lt;= 1&#39;b0;
-			o_nl_byte &amp;lt;= 8&#39;ha;
-			o_nl_stb  &amp;lt;= 1&#39;b1;
-		end else
-			// Idle the channel
-			o_nl_stb  &amp;lt;= 1&#39;b0;
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;h2 id=&quot;future-posts&quot;&gt;Future Posts&lt;/h2&gt;
-
-&lt;p&gt;There, that’s all there is to it!  You now know how to take a response word
-from the wishbone bus master, and how to send that result back out a serial
-port.&lt;/p&gt;
-
-&lt;p&gt;While we’ve just about presented all of the components, and while you almost
-have a usable bus at this point, we’re not there yet.  Some particular
-functionality remains missing.  This includes:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;Adding interrupt notifications&lt;/a&gt; to the response stream&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/19/debug-idles.html&quot;&gt;Adding idle notifications&lt;/a&gt; to let you know you are connected to the right
-stream&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;Creating a simple wishbone interconnect&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Creating a hand-controlled test bench to prove this works&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Creating a software bus controller&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Now that our controller is nearly complete, though, these will be much simpler
-topics.  We’ll come back to them in future posts.&lt;/p&gt;
-</description>
-        <pubDate>Thu, 15 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/15/words-back-to-bytes.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/15/words-back-to-bytes.html</guid>
         
         
         <category>blog</category>
