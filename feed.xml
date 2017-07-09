@@ -6,9 +6,490 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 29 Jun 2017 09:39:58 -0400</pubDate>
-    <lastBuildDate>Thu, 29 Jun 2017 09:39:58 -0400</lastBuildDate>
+    <pubDate>Sat, 08 Jul 2017 21:56:07 -0400</pubDate>
+    <lastBuildDate>Sat, 08 Jul 2017 21:56:07 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Getting Started with the Wishbone Scope</title>
+        <description>&lt;p&gt;Ever found yourself stuck with an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+design that didn’t work and no idea why not?  This seems to be a &lt;a href=&quot;/fpga-hell.html&quot;&gt;common
+problem&lt;/a&gt; within
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+design.  Perhaps
+the design works within a simulator.  Perhaps you don’t know how to simulate
+the hardware component the design is working with.  Either way, you will
+want to know how to somehow draw information out of the broken design to
+see where it fails.&lt;/p&gt;
+
+&lt;p&gt;We’ll show an example of how to do that here, using two primary components to
+make this happen.  The first is any device or simulation imeplementing a
+generic &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/devbus.h&quot;&gt;DEVBUS&lt;/a&gt;
+interface into a wishbone bus implemneted within your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
+If you don’t have such an interface as part of your design, the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;HEXBUS&lt;/a&gt;
+interface should still suite your purposes nicely, although it will require
+a serial port to communicate on.  The second necessary component is a
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt;, which you can access
+using the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/devbus.h&quot;&gt;DEVBUS&lt;/a&gt;
+interface.&lt;/p&gt;
+
+&lt;p&gt;There are two parts required to adding a
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; into your design, the 
+&lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;Verilog
+integration&lt;/a&gt;
+and the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/memscope.cpp&quot;&gt;software
+component&lt;/a&gt;.
+The first part is to connect the scope to your design: both by selecting
+wires from within your design that you wish to examine, as well as identifying
+trigger logic within your design to know when to capture those wires.
+(The block RAM used to capture a trace isn’t unlimited.)
+The second part is the logic necessary to read that capture off of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
+and format it into a &lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;
+that you can use to view your data on a clock for clock basis using
+&lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;gtkwave&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;We’ll walk through the two steps separately, and then show an example
+of using them to view a bus interaction.&lt;/p&gt;
+
+&lt;h2 id=&quot;changes-to-your-design&quot;&gt;Changes to your design&lt;/h2&gt;
+
+&lt;p&gt;There are only four basic changes to your design that you’ll need to make in
+order to connect a
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; into your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt; design.&lt;/p&gt;
+
+&lt;p&gt;First, you’ll need to add the scope to your &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;wishbone
+interconnect&lt;/a&gt;
+within your design.  This involves six basic points of adjustment:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;You’ll need to decode the scope’s address.  I like to create an address
+select line (not to be confused with the byte SELect linse), indicating
+that the current address references the scope.  Make sure that ADDR[0]
+is not a part of this computation, as the scope needs that line to
+determine which internal register is being accessed.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You’ll need to add the scope to the design, and wire the wishbone inputs
+to the scope.  The STB line from the wishbone master needs to be gated
+(anded) with the address select logic result.  The scope requires only
+one ADDR bit, so no others need to be connected.  The wishbone outputs:
+ACK, STALL, and DATA will be declared and connected.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The ACK line needs to be logically OR’d with other ACK lines within your
+design.  This logic should already exist, if you have a working wishbone
+interconnect, so follow along there and see what’s required.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;As with the ACK, the DATA line needs to be integrated into the bus
+data return.  In particular, the bus data return to the master should
+contain the scope’s data anytime time the scope’s ACK line is true.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Because the
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; will never stall the
+bus, you can technically
+ignore the STALL line.  For form and maintainability, though, you’ll
+probably want to use this line to create the wishbone master’s STALL
+return line.  This is usually created by a large OR of every device’s
+address decode line AND’ed with their STALL line.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;I often use a touch of logic to determine whether or not many ACK’s are
+begin returned at once, if more than one device is selected, or if no
+devices are selected.  This logic will need to be adjusted as well.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;If you are going to use the scope that already exists within the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/testbus.v&quot;&gt;DBGBUS&lt;/a&gt;’s
+test infrastructure, all of this logic has already been taken care of for you.
+For more details, we also discussed how to do this in &lt;a href=&quot;/blog/06/22/simple-wb-interconnect.html&quot;&gt;the article on building
+a simple wishbone
+interconnect&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The second step is deciding what you wish to trigger on.  This is as simple
+a piece of logic as you wish.  Within the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/testbus.v&quot;&gt;DBGBUS&lt;/a&gt;’s
+implementation, you’ll find a line that looks like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign scope_trigger = (mem_sel)&amp;amp;&amp;amp;(wb_stb);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This triggers the scope on any attempt to reference the block RAM peripheral
+within the testbus, although what you choose to trigger on is up to you.
+Want to trigger on any time the wishbone error is set as an example?  The
+following logic would do that:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign scope_trigger = (wb_err);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll stick to the former, though.&lt;/p&gt;
+
+&lt;p&gt;Third, you’ll want to select those wires that you want to capture and
+record.  These wires can be anything you are interested in within your design.
+In our case, we’re going to capture some signals from within the
+wishbone bus’s interaction.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	debug_data = { wb_cyc, wb_stb, wb_we, wb_ack, wb_stall,
+		wb_addr[5:0], 1&#39;b1,
+		wb_odata[9:0],
+		wb_idata[9:0] };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt;
+fixes this amount of debug data at 32-bits per clock, otherwise we might have
+grabbed more of this bus interaction.  If you need more, you should be able to
+using multiple &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scopes&lt;/a&gt;
+at the same time to achieve a wider capture.&lt;/p&gt;
+
+&lt;p&gt;As a final step, you can limit the
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt; so that it only captures data any
+time a particular bit is true within your design.  This capability is very
+useful for digital signal processing applications, where the data of interest
+may not exist on every clock.  This is the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt; input to the scope. 
+For this simple example, we’ll keep this set to ‘1’.&lt;/p&gt;
+
+&lt;p&gt;While we aren’t going to reconfigure the basic
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; for this example, there
+are several configuration parameters that can be set.  These parameters
+include:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;The log of the size of the memory within the scope, LGMEM.  By default, this
+is set to 10, so by default the scope will use 2^10 words of block RAM.
+Powers of two from anywhere between 2^2 and 2^31 are possible–with the
+natural consequence being that your actual
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+hardware will limit how memory you can actually use.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Whether or not the scope is synchronous with your wishbone clock or not.
+This is the SYNCHRONOUS flag.  It defaults to true (&lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt;).  If you ever need
+to collect data on one clock and read it on another, then set this to
+zero.  That will trigger the inclusion of a lot of clock transfer logic
+within the design.&lt;/p&gt;
+
+    &lt;p&gt;For our design, we’ll leave this at the default as a synchronous scope,
+but that will also require the same &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clk&lt;/code&gt; parameter being passed to the
+core twice.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The default holdoff parameter sets the initial holdoff of the scope. 
+This holdoff parameter may be changed at a later time by simply writing the
+new holdoff to the control register.  Setting it within a parameter just
+sets the initial value of the holdoff register.&lt;/p&gt;
+
+    &lt;p&gt;If the holdoff is set to zero, the trigger will be aligned with the last
+data sample in the scope’s memory.  As the holdoff time is increased,
+the trigger location will move towards the beginning of the scope’s memory.&lt;/p&gt;
+
+    &lt;p&gt;As another way to put it, once triggered, the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+waits for a number of
+clocks given by the holdoff value before stopping its collect.  Hence, a
+holdoff of zero can be used to capture any logic leading up to an event,
+whereas a holdoff of the size of the buffer will capture any logic
+immediately following an event.&lt;/p&gt;
+
+    &lt;p&gt;The default parameter value for the default holdoff places the trigger
+near the middle of the collect.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;That’s it!  That’s all you need to do to set up a
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; within the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+part of your design.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-software-controller&quot;&gt;The software controller&lt;/h2&gt;
+
+&lt;p&gt;To use the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone scope&lt;/a&gt;, you’ll also
+want to set up a software controller to handle the communication between the
+design, and to reformat the result into whatever you wish it to be.
+This is the purpose of the
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt;
+software controller.  It is also specific to the logic you’ve chosen to
+capture, so this section will show you how to set it up.&lt;/p&gt;
+
+&lt;p&gt;When I initially used the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone scope&lt;/a&gt;
+in my earlier projects, all the scope controller ever did was to check that
+the scope had indeed been triggered, and then dump every piece of data that
+had been collected to the terminal.&lt;/p&gt;
+
+&lt;p&gt;At one time, I wrote a new software controller every time I needed a scope
+within my design.  If you wander through my designs, you can even find
+examples of these older scope controllers, such as &lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/sw/ramscope.cpp&quot;&gt;this
+example&lt;/a&gt;
+ that I used when debugging an &lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbsdram.v&quot;&gt;SDRAM
+controller&lt;/a&gt;.
+These controller’s, though, all had the same logic:&lt;/p&gt;
+
+&lt;p&gt;Step one: Check if the scope is ready to be read, and exit if not.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;readio&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R_SCOPE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mh&quot;&gt;0x60000000&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x60000000&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Scope is not yet ready&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;exit&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Step two: Calculate the size of the scope and allocate a buffer&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;lglen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;20&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x01f&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;scoplen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lgln&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;buf&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;DEVBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BUSW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;scoplen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Step three: Read the scope’s memory from the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
+transferring it from the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+to a buffer on your local computer.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;readz&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;R_SCOPD&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;scoplen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;buf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Step four: Decode the scope’s data&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;scoplen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// Do something to printf buf[i] to the screen
+&lt;/span&gt;	&lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;After a while, though, I found myself cut/copy and pasting the same code
+from one controller to the next. 
+Just the code above created a &lt;em&gt;lot&lt;/em&gt; of boilerplate.&lt;/p&gt;
+
+&lt;p&gt;To help get reduce the amount of boilerplate code, the scope now has a
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;controller scope
+class&lt;/a&gt;.
+Since building that &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;scope control
+class&lt;/a&gt;,
+the scope’s capabilities have
+significantly increased.  For example, the scope controller can now
+create a &lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;.
+It can now identify which sample produced the trigger
+(thanks to some &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/bench/cpp/wbscope_tb.cpp&quot;&gt;bench
+testing&lt;/a&gt;, and so it can place the inferred
+trigger into the &lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;
+as well.  So let’s instead discuss how to interact with this &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;scope controller
+object&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The first step to using this
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;controller&lt;/a&gt;.
+framework is to create your own
+subclass of the
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;controller&lt;/a&gt;.
+to desccibe your particular wire choices within your RTL logic.&lt;/p&gt;
+
+&lt;p&gt;For the example we are working with, we’ll call this controller subclass a
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/memscope.cpp&quot;&gt;MEMSCOPE&lt;/a&gt;–since
+it’s going to look at interactions with the block RAM memory.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt;	&lt;span class=&quot;nc&quot;&gt;MEMSCOPE&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SCOPE&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;public&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;MEMSCOPE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;FPGA&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fpga&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SCOPE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fpga&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{};&lt;/span&gt;
+	&lt;span class=&quot;o&quot;&gt;~&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;MEMSCOPE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{}&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The scope object is created with a pointer to the FPGA object implementing the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/devbus.h&quot;&gt;DEVBUS&lt;/a&gt;
+interface, together with the address of where this scope is within
+our wishbone bus.&lt;/p&gt;
+
+&lt;p&gt;Two virtual methods then need to be overloaded.  The first method, called
+decode(), simply decodes the scope wires onto stdout.  This is where the
+printf() interface I used to use ends up.  The difference, though, is that
+the &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;class&lt;/a&gt;
+takes care of reading from the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt;,
+calculating the memory
+address, as well as marking where the trigger is.  To make this work,
+be careful not to end any of the printf()’s within your decode function
+with a newline.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;MEMSCOPE&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;decode&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DEVBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BUSW&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;val&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;cyc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;stb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;we&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ack&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;stall&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;odata&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;idata&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;cyc&lt;/span&gt;   &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;31&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;stb&lt;/span&gt;   &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;30&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;we&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;29&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;ack&lt;/span&gt;   &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;28&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;stall&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;27&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;addr&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;21&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mh&quot;&gt;0x3f&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;odata&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mh&quot;&gt;0x3ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;idata&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt;      &lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mh&quot;&gt;0x3ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;%s&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;cyc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;?&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;CYC&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;   &quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot; %s&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;stb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;?&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;STB&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;   &quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot; %s&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;we&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;?&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;W&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;R&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;[@....%02x]...%03x-&amp;gt;...%03x&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;addr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;odata&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;idata&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot; %s&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ack&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;?&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ACK&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;   &quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot; %s&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;stall&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;?&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;(STALL)&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;       &quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The second method that needs to be overloaded is the define_traces() method.
+This is where the connection is made between your design and the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;
+the
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;scope object&lt;/a&gt;
+can generate.  To make this possible, the
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;scope object&lt;/a&gt;
+offers a register_trace() function.  register_trace() takes three arguments.
+The first is the name of the wire or trace that’s being defined.
+The second argument specifies how many bits the trace has of the 32 the
+scope has captured.   The third and final argument
+specifies which bit position this value starts at.
+Hence, we can define all of our traces with a simple:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;MEMSCOPE&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;define_traces&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_cyc&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;    &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;31&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_stb&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;    &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;30&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_we&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;     &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;29&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_ack&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;    &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;28&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_stall&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;  &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;27&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_addr&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;   &lt;span class=&quot;mi&quot;&gt;6&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;21&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_odata&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;register_trace&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;wb_idata&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;  &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;All that remains is to create and run this &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/memscope.cpp&quot;&gt;scope
+controller&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Creating it is simple, after connecting to your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+and creating an object supporting the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/devbus.h&quot;&gt;DEVBUS interface&lt;/a&gt;,
+you can just create the new scope from a pointer to the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/devbus.h&quot;&gt;DEVBUS&lt;/a&gt;
+and the &lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+address of &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;the scope&lt;/a&gt;:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;n&quot;&gt;MEMSCOPE&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;scope&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;MEMSCOPE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_fpga&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R_SCOPE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You can check whether or not
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;the scope&lt;/a&gt;
+is ready to be read with a simple&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;scope&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ready&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Scope is not yet ready:&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Otherwise we’ll simply print our results, and write out a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;scope&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;print&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;scope&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;writevcd&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;scopd.vcd&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;That’s it!  That’s all the software required to use
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;the Wishbone scope&lt;/a&gt;
+and to capture and output a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD file&lt;/a&gt;
+containing the scope information.&lt;/p&gt;
+
+&lt;h2 id=&quot;trying-it-out&quot;&gt;Trying it out&lt;/h2&gt;
+
+&lt;p&gt;Let’s use this with the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging bus interface&lt;/a&gt; &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;example
+design&lt;/a&gt;,
+and show how we can pull the data we need out of the design.&lt;/p&gt;
+
+&lt;p&gt;You’ll first need to build the example design.  To do this, you’ll need to
+have &lt;a href=&quot;https://gcc.gnu.org&quot;&gt;g++&lt;/a&gt;,
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;,
+&lt;a href=&quot;https://git-scm.com&quot;&gt;git&lt;/a&gt;, and
+&lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt; installed.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;git clone https://github.com/ZipCPU/dbgbus
+&lt;span class=&quot;nb&quot;&gt;cd &lt;/span&gt;dbgbus
+make&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll demonstrate grabbing
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;the scope&lt;/a&gt;’s
+output while running the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;,
+simulation, although you could use this with your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+just as well.
+Indeed, if your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+is connected to the TCP/IP port that our
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;,
+simulation is using, then you can interact with your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+with no changes.
+The first step will be to start the simulation in one window:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;nb&quot;&gt;cd &lt;/span&gt;bench/cpp
+./testbus_tb&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Were you trying to do this on an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
+you’d instead use the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/netuart.cpp&quot;&gt;netuart&lt;/a&gt;
+program to bridge a serial port on your FPGA to the TCP/IP port that our
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/devbus.h&quot;&gt;DEVBUS&lt;/a&gt;
+software interface will interact with.&lt;/p&gt;
+
+&lt;p&gt;Either way, your next step will be to move to another window and interact
+with your &lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
+If you are using the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;DBGBUS
+demo&lt;/a&gt;,
+you’ll need to either read or write from the memory to trigger the scope:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;nb&quot;&gt;cd &lt;/span&gt;sw/
+./wbregs mem 0xdeadbeef&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now that the scope has finished its collection (even in simulation it’s
+pretty quick from trigger to stop), let’s use our &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/sw/memscope.cpp&quot;&gt;scope
+controller&lt;/a&gt;
+to grab the result:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;./memscope&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This will take a couple of moments to read the data from the simulation.
+(It’s a lot faster when using real hardware.)  On my computer it can take
+close to a full minute, but that might be very CPU dependent.&lt;/p&gt;
+
+&lt;p&gt;The result, though, will be a file &lt;code class=&quot;highlighter-rouge&quot;&gt;scopd.vcd&lt;/code&gt;.  To examine this, just type&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;gtkwave scopd.vcd&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;With a little work with gtkwave, here’s what our results look like:&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1: Example Output using MEMSCOPE&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/memscope.png&quot; alt=&quot;Example Scope Output&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;h2 id=&quot;thats-it&quot;&gt;That’s it!&lt;/h2&gt;
+
+&lt;p&gt;Did you see how easy that was?  The only hard part was
+&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;building the means to communicate between the FPGA and your host
+PC&lt;/a&gt;.  After that,
+all that you really needed to do was to add the
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt;
+component to the wishbone bus within your design, and then define the traces
+you wanted to follow in your subclass of the &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/sw/scopecls.cpp&quot;&gt;software scope
+controller&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Stick around, though.  &lt;a href=&quot;/about/gisselquist-technology.html&quot;&gt;Gisselquist
+Technology&lt;/a&gt; is working
+on a simpler way to connect your wishbone device components together using
+&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;autofpga&lt;/a&gt;.&lt;/p&gt;
+
+</description>
+        <pubDate>Sat, 08 Jul 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/07/08/getting-started-with-wbscope.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/07/08/getting-started-with-wbscope.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Finishing off the debugging bus: building a software interface</title>
@@ -3610,27 +4091,6 @@ believer in this method.&lt;/p&gt;
         <pubDate>Sat, 17 Jun 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/06/17/why-network-debugging.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/17/why-network-debugging.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Support me on Patreon</title>
-        <description>&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; blog now has a
-&lt;a href=&quot;https://www.patreon.com/ZipCPU&quot;&gt;Patreon support&lt;/a&gt; page!&lt;/p&gt;
-
-&lt;p&gt;If you like this blog, and you’d like to see it continue, please consider
-donating to this effort via &lt;a href=&quot;https://www.patreon.com/ZipCPU&quot;&gt;Patreon&lt;/a&gt;.  That
-support will go a &lt;em&gt;long&lt;/em&gt; way towards helping me finish blogging about all of
-the &lt;a href=&quot;/topics.html&quot;&gt;topics&lt;/a&gt; I have lined up.&lt;/p&gt;
-
-&lt;p&gt;Thank you!&lt;/p&gt;
-</description>
-        <pubDate>Sat, 17 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/17/patreon.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/17/patreon.html</guid>
         
         
         <category>blog</category>
