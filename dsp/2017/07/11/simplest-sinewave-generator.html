@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>The simplest sine wave generator within an FPGA</title>
+  <meta name="description" content="Ever need a sine wave when working within anFPGA?  Whenyou see the solution to this problem presented below, you may never use acanned digital synthesizer ag...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/07/11/simplest-sinewave-generator.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">The simplest sine wave generator within an FPGA</h1>
+    <p class="post-meta"><time datetime="2017-07-11T00:00:00-04:00" itemprop="datePublished">Jul 11, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Ever need a sine wave when working within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>?  When
+you see the solution to this problem presented below, you may never use a
+canned digital synthesizer again.</p>
+
+<h2 id="digital-oscillator-phase">Digital Oscillator phase</h2>
+
+<p>The first step to building this synthesizer is creating the phase input
+for the sine wave you wish to create.</p>
+
+<p>We’ve already discussed the ideal units for phase within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+<a href="/dsp/2017/06/15/no-pi-for-you.html">here</a>.
+Basically, you’ll want to keep track of phase in a digital unit that
+naturally wraps at your word width, N.  (We’ll arbitrarily choose to use
+<code class="highlighter-rouge">N=32</code> for our examples below.)  To convert from radians to these digital
+units, simply multiple by 2^N and divide by 2PI.  Likewise to convert from
+degrees to these digital units, multiple by 2^N and divide by 360.</p>
+
+<p>Frequency in a digital synthesis system is nothing more than a
+change in phase.  Hence, a phase can change by a small delta on
+every clock cycle to create the frequency you need.  Something
+like the following will work well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">reg [31:0]	phase;
+// The initial value is usually irrelevant
+always @(posedge clock)
+	// Allow for an D/A running at a lower speed from your FPGA
+	if (sample_clock_ce)
+		phase &lt;= phase + frequency_step;</code></pre></figure>
+
+<p>This assumes you have a signal (<code class="highlighter-rouge">sample_clock_ce</code>) that is <code class="highlighter-rouge">1</code> anytime the DAC
+needs an output, and <code class="highlighter-rouge">0</code> otherwise.  This will allow you to work with
+slower signal rates than your system clock rate if necessary.  You can
+also just set the <code class="highlighter-rouge">sample_clock_ce</code>
+value to a constant <code class="highlighter-rouge">1</code> in order process samples at your
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>’s
+clock rate.</p>
+
+<p>The right frequency step will depend upon your sample clock rate.
+Note, this rate may be slower than your
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>’s
+system clock rate.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">frequency_step = 2^N * frequency_hz / sample_clock_rate_hz</code></pre></figure>
+
+<p>To make certain we have the formula right, consider a frequency which is
+at the Nyquist sample rate of one half of your sample clock rate.  This
+frequency should take two steps to wrap back to where it came from.
+Looking at the frequency step above, in this case the frequency step would
+become <code class="highlighter-rouge">2^(N-1)</code> and two steps (<code class="highlighter-rouge">2*frequency_step</code>) would indeed wrap back
+around.  Smaller steps should naturally represent lower frequencies.</p>
+
+<p>Let’s assume a 100MHz sample clock rate for the sake of discussion.</p>
+
+<p>If you choose to represent both phase and frequency step with <code class="highlighter-rouge">N=32</code> bits,
+you can represent any frequency between zero and your sample clock rate
+divided by two, with a precision given by:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">frequency_precision_hz = sample_clock_rate_hz / 2^N</code></pre></figure>
+
+<p>This is nothing more than solving for the frequency associated with the
+difference between two steps.  Equivalently, this is the frequency associated
+with a step of one, or the smallest frequency that this approach can generate.</p>
+
+<p>If our system has a 100MHz sample rate clock, a 32-bit frequency step would
+allow us to represent <em>any</em> frequency between zero and 50MHz in steps of
+about 0.02 Hz.</p>
+
+<p>Not bad, but how about generating a sine wave from this phase?</p>
+
+<h2 id="the-no-more-logic-solution">The “No more logic” Solution</h2>
+
+<p>Since I offered this post as the “Simplest Sine Wave Generator”, I feel
+compelled to provide the following solution:</p>
+
+<p>If you don’t want to use any more logic than your phase generator requires,
+then just output the top bit of the phase accumulator.  That’ll give you a
+square wave at the frequency you want — with 0.02Hz precision.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	sinewave = phase[31];</code></pre></figure>
+
+<p>As this isn’t really much of a sine wave, but rather a square wave, let’s
+continue looking for a better alternative.</p>
+
+<h2 id="digital-oscillator-frequency-output">Digital Oscillator frequency output</h2>
+
+<p>Now that we know the phase of our outgoing digital oscillator, it’s time
+to generate the sine wave itself.  Since an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+offers free lookup tables, let’s use them to generate our sine wave.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge clock)
+	if (sample_clock_ce)
+		sinewave &lt;= sinewave_table[phase[31:24];</code></pre></figure>
+
+<p>Notice that we only used the top 8-bits from the phase.  This keeps our logic
+simple, while still giving you the full 0.02 Hz resolution we had above.  While
+we could use an 8-bit phase accumulator alone, that would’ve only given us
+frequency steps in the 400kHz range.</p>
+
+<p>What happens with the 32-bit phase is that eventually the upper 8-bits will
+repeat or skip steps as necessary to provide the frequency resolution you want.</p>
+
+<p>Gosh, that was so easy, we could end this post right there.  The task is done!</p>
+
+<p>Before leaving the topic, though, let’s examine two more items: First, let’s
+look at the mechanics of setting the sinewave table above, and second let’s
+make some rough estimates as to the cost and performance of the synthesizer.</p>
+
+<h2 id="how-to-set-the-table">How to set the table?</h2>
+
+<p>Since all of the logic is captured within that sinewave table, perhaps we
+should spend some time working out how to set the values of the table.
+In general, there are three basic approaches for setting the values of the
+table.  All three are roughly equivalent in the functionality they will use.</p>
+
+<p>The first approach is to build a giant case statement:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge clock)
+if (sample_clock_ce)
+	case(phase[31:24])
+	8'h00:  sinewave &lt;= 7'h00;
+	8'h01:  sinewave &lt;= 7'h01;
+	8'h02:  sinewave &lt;= 7'h03;
+	...
+	8'h40:  sinewave &lt;= 7'h3f;
+	...
+	8'h80:  sinewave &lt;= 7'h00;
+	...
+	8'hc0:  sinewave &lt;= 7'h41;
+	...
+	8'hfe:  sinewave &lt;= 7'h7d;
+	8'hff:  sinewave &lt;= 7'h7f;
+	endcase</code></pre></figure>
+
+<p>The synthesizer will turn the logic from this case statement into the table
+lookup implementation we want.</p>
+
+<p>The second approach would be to use an actual table read-only register
+array, and to set all of the values of the table with individual values
+of the sine wave as we want it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">reg	[6:0]	table [0:255];
+
+initial table[0] = 7'h00;
+initial table[1] = 7'h01;
+initial table[2] = 7'h03;
+initial table[3] = 7'h04;
+initial table[4] = 7'h06;
+// etc.</code></pre></figure>
+
+<p>This approach, though, get’s old <em>really</em> fast–especially if you are building
+it by hand.  A better approach is to use $readmemh.  (Be aware, in my
+experience Xilinx’s ISE can’t handle $readmemh.)</p>
+
+<p>Using $readmemh, you’ll create a hexadecimal text file first.  In our case,
+it would probably look something like:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@00000000 00 01 03 04 06 07 09 0a 0c 0d 0f 10 12 13 15 16 
+@00000010 18 19 1a 1c 1d 1f 20 21 23 24 25 26 27 29 2a 2b 
+@00000020 2c 2d 2e 2f 30 31 32 33 34 35 36 36 37 38 38 39 
+@00000030 3a 3a 3b 3b 3c 3c 3d 3d 3d 3e 3e 3e 3e 3e 3e 3e 
+@00000040 3f 3e 3e 3e 3e 3e 3e 3e 3d 3d 3d 3c 3c 3b 3b 3a 
+@00000050 3a 39 38 38 37 36 36 35 34 33 32 31 30 2f 2e 2d 
+@00000060 2c 2b 2a 29 27 26 25 24 23 21 20 1f 1d 1c 1a 19 
+@00000070 18 16 15 13 12 10 0f 0d 0c 0a 09 07 06 04 03 01 
+@00000080 00 7f 7d 7c 7a 79 77 76 74 73 71 70 6e 6d 6b 6a 
+@00000090 68 67 66 64 63 61 60 5f 5d 5c 5b 5a 59 57 56 55 
+@000000a0 54 53 52 51 50 4f 4e 4d 4c 4b 4a 4a 49 48 48 47 
+@000000b0 46 46 45 45 44 44 43 43 43 42 42 42 42 42 42 42 
+@000000c0 41 42 42 42 42 42 42 42 43 43 43 44 44 45 45 46 
+@000000d0 46 47 48 48 49 4a 4a 4b 4c 4d 4e 4f 50 51 52 53 
+@000000e0 54 55 56 57 59 5a 5b 5c 5d 5f 60 61 63 64 66 67 
+@000000f0 68 6a 6b 6d 6e 70 71 73 74 76 77 79 7a 7c 7d 7f </code></pre></figure>
+
+<p>The first part of the line indicates where in the array the coming values
+will be placed, whereas the rest of the line consists of values to be placed
+in the array separated by spaces.</p>
+
+<p>Then, to use this approach, you’ll need one more line within your
+Verilog code to read and set your array:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial $readmemh("table.hex", table);</code></pre></figure>
+
+<p>where <code class="highlighter-rouge">table.hex</code> is the name of your hexadecimal text file.</p>
+
+<p>Given that you are trying to make a sine wave, and that a sine is a rather
+complex function, you might want to create this table via a C++ program
+instead of by hand (I did).  Just remember: the maximum sine wave value needs
+to be +/- 63 since it’s the maximum 7-bit value that has an identical positive
+and negative integer value.</p>
+
+<h2 id="estimating-the-cost-of-the-synthesizer">Estimating the Cost of the Synthesizer</h2>
+
+<p>While we’re essentially done here, having presented how to generate a quick
+and simple sine wave, let’s spend another moment or too looking at how many
+table entries we want (32, 64, 128, or 256), as well as how many bits wide
+the elements in the table should be.</p>
+
+<p>In general, this will cost us one look up table per output bit in for each
+output sample our sinewave.
+However, on the Xilinx architecture, two output bits can share a 6-LUT if
+they share the same 5-bit inputs.  Likewise it takes two 6-LUTs to look up
+a seven bit value, and four 6-LUTs to look up an 8-bit value. 
+<a href="/blog/2017/06/12/minimizing-luts.html">[Ref]</a> Let’s examine
+the two ends of these possibilities therefore.</p>
+
+<p>If we were to use 5-bit lookup tables, we’d have only <code class="highlighter-rouge">2^5=32</code> entries to the 
+sine wave table.  A table size of 32 would allow us to divide the unit circle
+up into steps separated by <code class="highlighter-rouge">11 degrees</code>.
+This means that your sinewave would jump by at most <code class="highlighter-rouge">0.195</code> in value from one
+phase to the next.  Representing something with this level of precision only
+takes about 4 bits, so this lookup would cost two 6-LUTs total.</p>
+
+<p>That’s pretty cheap.  The 32-bit phase update logic would likely cost more
+LUTs (16) than that.</p>
+
+<p>At the other end of the spectrum, suppose we wanted to use 8-bits of phase.
+We’d then be able to represent things at <code class="highlighter-rouge">360/2^8=1.4 degree</code> intervals.  The
+biggest jump in the sine wave would be about <code class="highlighter-rouge">0.024</code> units. Representing such
+a number with that level of precision could easily be done with 7 bits. 
+Hence, this approach would cost <code class="highlighter-rouge">28 6-LUTs</code>.  That’s still pretty cheap,
+although now it costs more than phase calculation.</p>
+
+<h2 id="better-approaches-are-available">Better Approaches are Available</h2>
+
+<p>Our focus today has been on what it takes to generate a <em>really</em> cheap and
+simple sine wave within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.
+At <code class="highlighter-rouge">28 LUTs</code> for the synthesizer and <code class="highlighter-rouge">16 LUTs</code> to track phase, I think we did
+just that.</p>
+
+<p>However, if you want to generate a higher quality sine wave, then you
+might wish to switch from a simple table look up to a
+<a href="http://www.andraka.com/files/crdcsrvy.pdf">CORDIC approach</a>.</p>
+
+<p>Perhaps we should come back and discuss that approach later?
+<a href="http://www.andraka.com/files/crdcsrvy.pdf">CORDIC</a>’s
+aren’t that hard to build, and they make an excellent lesson for the
+beginner in how to design
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+based algorithms.</p>
+
+
+  </div>
+
+</article>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>All the rivers run into the sea; yet the sea is not full; unto the place from whence the rivers come, thither they return again. (Eccl 1:7)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
