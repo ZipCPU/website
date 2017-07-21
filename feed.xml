@@ -6,9 +6,283 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 19 Jul 2017 08:13:27 -0400</pubDate>
-    <lastBuildDate>Wed, 19 Jul 2017 08:13:27 -0400</lastBuildDate>
+    <pubDate>Fri, 21 Jul 2017 07:00:08 -0400</pubDate>
+    <lastBuildDate>Fri, 21 Jul 2017 07:00:08 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Bit growth in FPGA arithmetic</title>
+        <description>&lt;p&gt;We just started a discussion of
+&lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear-upsampling&lt;/a&gt;.
+In many ways the &lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear-upsampling&lt;/a&gt;
+algorithm is much like &lt;em&gt;any&lt;/em&gt; DSP algorithm: samples come in, multiplies, adds,
+and subtracts get applied, and samples go out.
+Like any other algorithm using these operations, every add or multiply
+will increase the number of bits required to represent the result.
+So it seems only fitting to look at bit growth, so we can know how many bits
+to allocate for our internal results.&lt;/p&gt;
+
+&lt;p&gt;Since dropping bits, once grown, is even more complicated than just tracking
+bit growth, we’ll save that discussion for it’s own post later.&lt;/p&gt;
+
+&lt;p&gt;If you’ve never dealt with, or heard of, bit growth before then it can be
+confusing.  It doesn’t need to be so.  As we’ll show here, there are only
+two rules you need to keep track of.  Follow the two basic rules, and you
+should be okay.  That said, we’ll present three rules today.&lt;/p&gt;
+
+&lt;p&gt;My basic approach for understanding bit growth is to look
+at the extremes of any &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit arithmetic operation, and see how many bits
+it takes to represent that extreme.  Indeed, if you ever get confused, just
+come back to this approach and examine the extremes of the values you
+are calculated within your application.&lt;/p&gt;
+
+&lt;p&gt;Looking at the extremes in the representation, an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number,
+&lt;code class=&quot;highlighter-rouge&quot;&gt;a&lt;/code&gt;, can be any one of a range of signed or unsigned values.  In the
+case of signed, &lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s
+complement&lt;/a&gt;
+values, the range of an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number is given by,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;-2^(N-1) &amp;lt;= a &amp;lt;= 2^(N-1) -1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Hence, a four bit number can represent values between -8 and +7 inclusive.&lt;/p&gt;
+
+&lt;p&gt;Likewise the range of an unsigned value &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bits wide is,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;0 &amp;lt;= a &amp;lt; 2^(N) -1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;and a four bit unsigned number can represent values from 0 to 15.&lt;/p&gt;
+
+&lt;p&gt;If you add, subtract, or multiply numbers at the ends of these ranges,
+by how much must &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; be increased to capture the new result without overflow?&lt;/p&gt;
+
+&lt;p&gt;There are a couple of cases you might not consider along the way, and so I’ll
+note these below and keep this page updated as a reminder of what the corner
+cases are.&lt;/p&gt;
+
+&lt;h2 id=&quot;add-one-bit-on-every-add&quot;&gt;Add one bit on every add&lt;/h2&gt;
+
+&lt;p&gt;The rule for addition is that adding two &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit numbers together requires
+an extra bit to represent the result.  Let’s test this to see if this is
+true:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(2^N-1) + (2^N-1) = 2^(N+1)-2&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;That certainly works for the positive end of the range, what about the negative
+end?&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;-2^N - 2^N = -2^(N+1)&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;So, at the negative end we are good with adding an additional bit as well.&lt;/p&gt;
+
+&lt;p&gt;If you know that the numbers you will be adding will have different signs,
+then no bit growth is needed, since the absolute value of the result will
+tend towards zero rather than increasing.  I’ve just never found an
+application that can use this nuance.&lt;/p&gt;
+
+&lt;p&gt;Unsigned numbers are roughly the same, with exception that you need to be
+careful when subtracting two unsigned numbers.  The problem here being that
+the result might be negative.
+This means that, unless you can guarantee that the result will
+not overflow (i.e. go below zero), you will need to add a sign bit.  Hence,
+again, one bit of growth–but this comes with an &lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;alternate representation
+(two’s complement)&lt;/a&gt; as well.&lt;/p&gt;
+
+&lt;p&gt;So the rule of adding one bit per addition (or) subtraction has special case
+we’ll need to be careful of, where the data representation changes as well,
+but otherwise it holds.&lt;/p&gt;
+
+&lt;p&gt;What if you are adding values with different bit widths?  Suppose you wish to
+add an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number to an &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; bit number?  As before, the answer can be found
+by examining the extremes.  If you add the two positive extremes:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;2^(N-1)-1+2^(M-1)-1 &amp;lt; 2^(N) - 1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;as long as &lt;code class=&quot;highlighter-rouge&quot;&gt;M&amp;lt;N&lt;/code&gt;.  The same is true for the negative extreme.  Here, then,
+the rule is that the output must have one more bit than the widest of the
+two input numbers.&lt;/p&gt;
+
+&lt;p&gt;Now, let’s apply this to bits within an FPGA.  When building DSP algorithms,
+you’ll want to adjust them for the appropriate width &lt;em&gt;later&lt;/em&gt;.  That way you
+can write one routine that works for multiple bit-widths, and may even work
+across multiple projects.  Hence, you’ll want to declare your various bit
+widths as parameters.  We’ll use this approach for our &lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear
+interpolator&lt;/a&gt;,
+as well.)  For example, if you want to add two number, &lt;code class=&quot;highlighter-rouge&quot;&gt;a&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;b&lt;/code&gt;,
+together, you might do something like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;module add(i_clk, a, b, out);
+parameter	AWIDTH=16, BWIDTH=4;
+		// Output width is given by one more than the maximum of A&#39;s
+		// width and B&#39;s width.  Make this a localparam so that
+		// it can&#39;t be overridden
+localparam	OUTWID = (AWIDTH &amp;gt; BWIDTH) ? (AWIDTH + 1) : (BWIDTH+1);
+
+input	wire	[(AWIDTH-1):0]	a;
+input	wire	[(BWIDTH-1):0]	b;
+output	reg	[(OUTWID-1):0]	out;
+
+always @(posedge i_clk)
+	out &amp;lt;= a + b;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This captures all of the logic we just discussed above: adding one bit on
+any addition or subtraction.&lt;/p&gt;
+
+&lt;h2 id=&quot;long-strings-of-addition&quot;&gt;Long strings of addition&lt;/h2&gt;
+
+&lt;p&gt;Since the fundamental DSP operation is a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolution&lt;/a&gt;, and since
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolutions&lt;/a&gt;
+require adding lots of numbers together, this creates a special case of
+bit growth that needs to be discussed.&lt;/p&gt;
+
+&lt;p&gt;Imagine you had &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt; words, &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bits each, that all needed to be added together.
+If you applied the rule above, you might allocate &lt;code class=&quot;highlighter-rouge&quot;&gt;K+N&lt;/code&gt; bits to the result.
+While the result would work, it’s also more bits than you need.&lt;/p&gt;
+
+&lt;p&gt;As before, we’ll look at the extremes.  What happens when you add &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt; extreme
+values together?  We’ll consider only the signed case, since the unsigned
+case is roughly the same:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K * (2^(N-1)-1)&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Before taking the next step, let’s imagine a number of bits, &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt;, that can hold
+the value &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt;, such that:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K &amp;lt;= 2^M&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Further, we want &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; to be the smallest number possible so that this inequality
+holds.  Mathematically, we might say that,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;M = ceil(log(K)/log(2))&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;or equivalently that &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; is the &lt;a href=&quot;https://en.wikipedia.org/wiki/Floor_and_ceiling_functions&quot;&gt;ceiling (smallest integer above or equal
+to)&lt;/a&gt;
+of the base two &lt;a href=&quot;https://en.wikipedia.org/wiki/Logarithm&quot;&gt;logarithm&lt;/a&gt;
+of &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt;.  In simpler terms, it’s just the log (base
+two) of &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt;, rounded up to the nearest integer.&lt;/p&gt;
+
+&lt;p&gt;Now, using this number, we know that&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K &amp;lt;= 2^M&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;and so that,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K * (2^(N-1)-1) &amp;lt;= (2^M)*(2^(N-1)-1) = 2^(M+N-1)-1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;And that’s our defining case.  When adding a large number of values together,
+all having the same bit width, the number of bits required to hold the result
+is given by the original number of bits plus the log, base two, of the
+number of elements added together.&lt;/p&gt;
+
+&lt;p&gt;We’ll save the Verilog example for when we build an FIR filter on this blog.&lt;/p&gt;
+
+&lt;h2 id=&quot;add-the-number-of-bits-on-every-multiply&quot;&gt;Add the number of bits on every multiply&lt;/h2&gt;
+
+&lt;p&gt;Let’s now look at multiplying two numbers.  We’ll start by looking at signed
+multiplication, but then look at unsigned multiplication before finishing.&lt;/p&gt;
+
+&lt;p&gt;Our first step will be to examine
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s complement&lt;/a&gt;
+multiplication.  Suppose we multiply
+a signed &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number with a signed &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; bit number.  If you multiply
+the two largest of these numbers together, the result will fit in &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M-1&lt;/code&gt; bits:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(2^(N-1) -1) * (2^(M-1) -1) = 2^(N+M-2) -2^(M-1) - 2^(N-1) +1 &amp;lt; 2^(N+M-2)-1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Don’t forget to check the other extreme!  Multiplying the two most negative
+numbers together yields a positive result, so this is an important check:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(-2^(N-1)) * (-2^(M-1)) = 2^(N+M-2) &amp;lt; 2^(N+M-1)&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You may note that 2^(N+M-2) just barely doesn’t fit in &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M&lt;/code&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s complement&lt;/a&gt;
+bits, so this becomes the defining case: &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M&lt;/code&gt; bits are required to hold the
+output, although fitting within &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M-1&lt;/code&gt; bits will be more common.&lt;/p&gt;
+
+&lt;p&gt;In Verilog, multiplying two signed numbers together would look like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;module multiply(i_clk, a, b, out);
+parameter	AWIDTH=16, BWIDTH=4;
+		// Output width is given by one more than the maximum of A&#39;s
+		// width and B&#39;s width
+localparam	OUTWID = (AWIDTH + BWIDTH);
+
+input	signed wire	[(AWIDTH-1):0]	a;
+input	signed wire	[(BWIDTH-1):0]	b;
+output	signed reg	[(OUTWID-1):0]	out;
+
+always @(posedge i_clk)
+	out &amp;lt;= a * b;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Notice again that, just like the add, we allow the bit width to be specified
+(and overruled) by a parameter.  This allows us to adjust the bit-width
+later.&lt;/p&gt;
+
+&lt;p&gt;Now let’s consider unsigned multiplication.  In this case, we only need to check
+the positive edge of the interval,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(2^(N) -1) * (2^(M) -1) = 2^(N+M) -2^(M) - 2^(N) +1 &amp;lt; 2^(N+M)-1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As before, &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M&lt;/code&gt; bits are required to hold the product of an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number
+with an &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; bit number.  Indeed, the Verilog code for doing this is the same
+as before, with the only exception that the &lt;code class=&quot;highlighter-rouge&quot;&gt;signed&lt;/code&gt; tag needs to be
+removed to do unsigned multiplication.&lt;/p&gt;
+
+&lt;h2 id=&quot;rules-to-live-by&quot;&gt;Rules to Live By&lt;/h2&gt;
+
+&lt;p&gt;Let’s summarize our rules here:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;When adding two numbers, increase the number of bits in the result by one.&lt;/p&gt;
+
+    &lt;p&gt;Be careful of subtracting unsigned numbers.  Your new bit may change
+you from unsigned to signed &lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s
+complement&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;When adding long strings of numbers, each with an identical number of bits,
+such as you would do when implementing a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolution&lt;/a&gt;
+the bit growth goes as the log of the length of the string, rather than one
+bit per addition.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;When multiplying two numbers, store the output in a register having as many
+bits within it as the two multiplicands had combined.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;We’re not quite ready to finish our lesson on &lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;Linear
+Interpolation&lt;/a&gt;,
+though.  We still need to discuss&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to drop bits when processing signals, and&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;How to debug DSP algorithms.&lt;/p&gt;
+
+    &lt;p&gt;The approach you will need to debug a DSP based algorithm is very distinctly
+different from the tools necessary to debug the rest of your logic.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Then we can come back and finish building our
+&lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear interpolator&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;If you see any mistakes in the rules above, or any rules regarding bit growth
+that I’ve missed, please feel free to comment and note them below.&lt;/p&gt;
+</description>
+        <pubDate>Fri, 21 Jul 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/dsp/2017/07/21/bit-growth.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/07/21/bit-growth.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>A Basic Upsampling Linear Interpolator</title>
@@ -2860,595 +3134,6 @@ tools?  Feel free to post and discuss them below.&lt;/p&gt;
         <pubDate>Fri, 23 Jun 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/06/23/my-dbg-philosophy.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/23/my-dbg-philosophy.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Building a very simple wishbone interconnect</title>
-        <description>&lt;p&gt;Want to build a scope?  Seriously!  Want to turn your FPGA into a scope that
-can measure anything internal to your logic, and then make that information
-available to you upon request?  Even better, you could use this scope to
-capture samples from an external analog to digital converter if you wanted to.&lt;/p&gt;
-
-&lt;p&gt;It’s time to do build the Verilog to do it!&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: WB-UART Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-smpl-2.svg&quot; alt=&quot;Block Diagram of a Simpler Wishbone to UART converter&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Ok, here’s where we are at in this process: We now have all of the components
-necessary to build a debugging bus interface.  We’ve now built &lt;em&gt;all&lt;/em&gt; of the
-components outlined in Fig 1 to the right.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;We’ve presented an &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;overview of a UART to wishbone
-bridge&lt;/a&gt;, that
-can be used for debugging.  This overview presented not only how to
-build such a bridge, but also showed examples from a working one that I use.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;We then jumped to the end to discuss how to build a &lt;a href=&quot;/blog/2017/06/08/simple-wb-master.html&quot;&gt;Simple Wishbone
-Master&lt;/a&gt;.  While the
-principles there can be applied to creating any
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt; master interface,
-we’ve shown how to use the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexec.v&quot;&gt;code presented
-there&lt;/a&gt;
-as part of our own debugging interface.  In particular, it’s the
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt; master
-we’ll use today.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;We showed how you can use the inputs from a serial port to &lt;a href=&quot;/blog/2017/06/14/creating-words-from-bytes.html&quot;&gt;create bus
-command words&lt;/a&gt;.  That finished out our discussion of the input to this bus.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;We then showed how to &lt;a href=&quot;/blog/2017/06/15/words-back-to-bytes.html&quot;&gt;turn the bus master responses back into a serial
-stream&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Before we finished, we added &lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;interrupt notifications to our
-interface&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;And then we &lt;a href=&quot;/blog/2017/06/16/adding-ints.html&quot;&gt;added an idle indication&lt;/a&gt; to the interface as well, so that we can have some confidence
-that the interface is running on any given serial port / transport.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The final post in the building the bus master interface was a post
-describing &lt;a href=&quot;/blog/2017/06/20/dbg-put-together.html&quot;&gt;how to put it all
-together&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Today, we’re going to build something that this interface can interact with.
-When we’re done, the result won’t (yet) look like something a professional
-tool might produce, but it’ll be enough for a demonstration.  We’ll
-save the professional looking part for another lesson.&lt;/p&gt;
-
-&lt;h2 id=&quot;our-components&quot;&gt;Our Components&lt;/h2&gt;
-
-&lt;p&gt;If we want to build a bus that connects things together, the first step is going
-to be collecting the components together that we want to interface with.
-So, I’ve pulled several components from other designs that I have.
-I’ve also adjusted their copyright so that, as part of this project, you can
-have access to these components under the
-&lt;a href=&quot;https://www.gnu.org/licenses/lgpl-3.0.en.html&quot;&gt;LGPL&lt;/a&gt;.  These
-components include:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;A &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v&quot;&gt;block
-RAM&lt;/a&gt;
-  &lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt; memory slave
-drawn from the &lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;zbasic&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; repository.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v&quot;&gt;wishbone scope&lt;/a&gt;.
-drawn from the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wbscope&lt;/a&gt; repository.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A simplified UART
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/txuartlite.v&quot;&gt;transmitter&lt;/a&gt; and
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/rxuartlite.v&quot;&gt;receiver&lt;/a&gt;,
-drawn from the &lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;wbaurt32&lt;/a&gt; repository.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;As a legal note, the RTL designs these examples were taken from still remain
-firmly under the &lt;a href=&quot;https://www.gnu.org/licenses/gpl-3.0.en.html&quot;&gt;GPL&lt;/a&gt;, only
-these specific component files have been given a new copyright.&lt;/p&gt;
-
-&lt;table style=&quot;float: left; padding: 15px&quot;&gt;&lt;caption&gt;Fig 2: System Diagram&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/sample-interconnect.svg&quot; alt=&quot;An example WB interconnect&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Of course, we’ll also be using the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;hexbus debugging
-interface&lt;/a&gt; we’ve just
-developed and presented as part of this blog.&lt;/p&gt;
-
-&lt;p&gt;The basic design is going to be similar to Fig 1, but with the new components
-added in as part of the bus, as shown in Fig 2.&lt;/p&gt;
-
-&lt;p&gt;Of these new components, the only one we haven’t discussed is a simple
-ad hoc component that we’ll discuss below, and that you can use to get access
-to arbitrary values within your design, and so that you have a little bit of
-an example of some of the things that can be done.&lt;/p&gt;
-
-&lt;h2 id=&quot;connecting-the-components&quot;&gt;Connecting the components&lt;/h2&gt;
-
-&lt;p&gt;There are three parts to connecting components to a
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt; bus.
-First, you must decode the components’ address, so that only the proper
-component is addressed.
-Second, you must merge the three basic
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-slave outputs back into one
-response to be returned to the master.  These include the &lt;strong&gt;_ack&lt;/strong&gt; line,
-the &lt;strong&gt;_stall&lt;/strong&gt; line, and the return &lt;strong&gt;_data&lt;/strong&gt; line.
-Third, although not required, painful prior errors have taught me to always
-create a &lt;strong&gt;wb_err&lt;/strong&gt; return line, and to set that any time a non-existent
-component is addressed.  Further, along those same lines, we’re going to
-make sure that no components occupy the NULL address.&lt;/p&gt;
-
-&lt;h3 id=&quot;wiring-up-the-bus-master&quot;&gt;Wiring up the bus master&lt;/h3&gt;
-
-&lt;p&gt;Prior to the first step, though, we’ll need to wire up our UART receiver, our
-debugging bus
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-master, and our UART transmitter.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;rxuartlite #(UARTSETUP) rxtransport(i_clk,
-				i_uart, rx_stb, rx_data);
-
-hbbus	genbus(i_clk,
-	// The receive transport wires
-	rx_stb, rx_data,
-	// The bus control output wires
-	wb_cyc, wb_stb, wb_we, wb_addr, wb_odata, wb_sel,
-	//	The return bus wires
-	  wb_ack, wb_stall, wb_err, wb_idata,
-	// An interrupt line
-	bus_interrupt,
-	// The return transport wires
-	tx_stb, tx_data, tx_busy);
-
-txuartlite #(UARTSETUP) txtransport(i_clk,
-				tx_stb, tx_data, o_uart, tx_busy);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This is primarily an exercise in wire management: the outputs of the
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/master/rtl/rxuartlite.v&quot;&gt;receiver&lt;/a&gt;
-go into the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;hexbus&lt;/a&gt;,
-and the outputs from the
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;hexbus&lt;/a&gt; decoder
-go into the
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/master/rtl/txuartlite.v&quot;&gt;transmitter&lt;/a&gt;
-and control the wishbone bus. Still, one particular
-parameter needs some attention: the &lt;strong&gt;UARTSETUP&lt;/strong&gt;.  This parameter is
-defined within the &lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;wbuart32&lt;/a&gt; project.
-If we want to communicate using 8-bits per baud, no parity, and one
-stop bit, (8N1) then we can set this parameter simply to the number of clocks
-per baud.  Hence, if we want to run our interface at 4MBaud with a
-100MHz clock, we should set this to (100MHz/4MBaud) or 25.&lt;/p&gt;
-
-&lt;h3 id=&quot;the-address-select-lines&quot;&gt;The address select lines&lt;/h3&gt;
-
-&lt;p&gt;Next, let’s handle our address select lines.  We’ll support three basic
-components, and we’ll use the prefixes of &lt;strong&gt;smpl_&lt;/strong&gt; (for our ad-hoc
-registers), &lt;strong&gt;mem_&lt;/strong&gt; (for our block RAM) and &lt;strong&gt;scop_&lt;/strong&gt; to describe them.
-Handling address selection is done in two parts.  For the first part,
-we just test whether or not the
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-address matches the address we’ve given to this component:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// Nothing should be assigned to the null page
-assign	smpl_sel = (wb_addr[29:4] == 26&#39;h081);	// 0x00002040
-assign	scop_sel = (wb_addr[29:4] == 26&#39;h082);	// 0x00002080
-assign	mem_sel  = (wb_addr[29:12] ==18&#39;h1);	// 0x00004000&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;One caution is in order: our bus address lines reference 32-bit words, not
-octets.   Address 0x810 above references one 32-bit word, while address
-0x811 references
-another 32-bit word.  Most people are more familiar with accessing a bus where
-the address is in units of octets.  For this reason, we’ve written out the
-octet equivalent of each address in the comment to the right.  This equivalent
-is given by shifting the address up by two, as well as by the number of
-unspecified bits (4 or 12) in the address.&lt;/p&gt;
-
-&lt;p&gt;This is actually a good time to point out that there’s really a &lt;em&gt;lot&lt;/em&gt; more
-work to be done to do address assignment properly than just these simple
-decode lines above.
-A specification document needs to be written outlining what addresses are
-being used for what, the addresses need to be turned into C/C++ address
-references for the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/host/wbregs.cpp&quot;&gt;peek/poke by name
-interface&lt;/a&gt; and
-the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;CPU&lt;/a&gt;, and more.
-Here, we’re just going to wave our hands and assign these three address groups
-to peripherals.&lt;/p&gt;
-
-&lt;p&gt;We’ll probably have to come back and fix this lack in the near future.&lt;/p&gt;
-
-&lt;h3 id=&quot;bus-errors&quot;&gt;Bus Errors&lt;/h3&gt;
-
-&lt;p&gt;I usually define a
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-bus error as one of three things.  First, it is an error if &lt;em&gt;nothing is
-selected&lt;/em&gt; during a
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-operation.  Second, it is an
-error if &lt;em&gt;more than one&lt;/em&gt; thing is ever selected.  Finally, it is an error if
-&lt;em&gt;more than one acknowledgement&lt;/em&gt; is returned on any given clock.  For our
-example purposes here, we’ll only set the error is nothing is selected.
-That is, if the &lt;strong&gt;wb_stb&lt;/strong&gt; signal is high indicating a
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-request, and yet the address in &lt;strong&gt;wb_addr&lt;/strong&gt; doesn’t reference any of our
-components, then a bus error should be returned.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// This will be true if nothing is selected
-assign	none_sel = (!smpl_sel)&amp;amp;&amp;amp;(!scop_sel)&amp;amp;&amp;amp;(!mem_sel);
-
-// The wishbone error signal is true for one clock only, and then it
-// resets itself
-always @(posedge i_clk)
-	wb_err &amp;lt;= (wb_stb)&amp;amp;&amp;amp;(none_sel);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The &lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-&lt;a href=&quot;https://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;spec&lt;/a&gt;,
-though, isn’t as particular regarding what constitutes a
-bus error, and many masters want any error detected to be aligned with where
-the acknowledgement would’ve come back–so that every request ends in either
-an error or an acknowledgement.  That approach allows both slaves and the
-interconnect to generate errors.  The interconnect we are building today,
-though is simpler, and doesn’t do that.&lt;/p&gt;
-
-&lt;p&gt;We’ll do one more thing with the bus error: we’ll grab a copy of any bus
-error address, so we can report back later the bus address associated with
-any error (if necessary):&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (wb_err)
-		bus_err_address &amp;lt;= wb_addr;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll come back to logic required of the interconnect later, once we handle
-the slave produced signals.&lt;/p&gt;
-
-&lt;h3 id=&quot;slave-response-the-stall-line&quot;&gt;Slave response: The stall line&lt;/h3&gt;
-
-&lt;p&gt;The first slave response logic we’ll look at is the stall logic.
-The &lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-&lt;a href=&quot;https://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;spec&lt;/a&gt;,
-recommends that this logic not be clocked, and that it be only combinatorial
-in nature.  In particular, you’ll want to stall the bus any time you are
-trying to make a request of a component whose stall line is high.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	wb_stall = ((smpl_sel)&amp;amp;&amp;amp;(smpl_stall))
-		||((scop_sel)&amp;amp;&amp;amp;(scop_stall))
-		||((mem_sel)&amp;amp;&amp;amp;(mem_stall));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;For this particular bus implementation, the stall lines are just a formality.
-None of these &lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-slave’s will ever stall the bus.  This line is therefore 
-ripe for being removed by the optimizer within your toolflow.  Here, we keep
-it in case we need to add components later that might stall the bus.&lt;/p&gt;
-
-&lt;h3 id=&quot;slave-response-the-acknowledgement&quot;&gt;Slave response: The Acknowledgement&lt;/h3&gt;
-
-&lt;p&gt;The second slave response line is the acknowledgement line.  This is the line
-that the slave uses to indicate that the data it is providing on its data line
-is valid.  We’ll handle this by creating a clocked line that is simply the &lt;em&gt;or&lt;/em&gt;
-of all the acknowledgement lines.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	wb_ack &amp;lt;= (smpl_ack)||(scop_ack)||(mem_ack);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If we use a clock while assigning our data, the two resulting responses,
-both acknowledgement and data, will align as required.&lt;/p&gt;
-
-&lt;h3 id=&quot;slave-response-return-data&quot;&gt;Slave response: Return data&lt;/h3&gt;
-
-&lt;p&gt;The final slave responses are the data lines.  These are valid any time the
-acknowledgement is valid.  Indeed, we’ll use the various slave acknowledgement
-lines to know which slave has produced valid data, and thus to know what data
-to return to the
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt; master.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (smpl_ack)
-		wb_idata &amp;lt;= smpl_data;
-	else if (scop_ack)
-		wb_idata &amp;lt;= scop_data;
-	else if (mem_ack)
-		wb_idata &amp;lt;= mem_data;
-	else
-		wb_idata &amp;lt;= 32&#39;h0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As a touch of flair, we’ll respond with all zeros if nothing acknowledges our
-bus read, although this isn’t required and it can be removed if necessary
-if you are struggling to &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;minimize your
-logic&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h3 id=&quot;slave-response-interrupts&quot;&gt;Slave response: Interrupts&lt;/h3&gt;
-
-&lt;p&gt;Although it’s not really a part of connecting a device to a
-&lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;&lt;em&gt;Wishbone&lt;/em&gt; bus&lt;/a&gt;,
-many bus slaves have interrupt lines.  We’ll create an interrupt
-to send back to our debugging bus controller that is simply the &lt;em&gt;or&lt;/em&gt; of our
-two interrupt producing components.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	bus_interrupt = (smpl_interrupt) | (scop_int);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Given the way we implemented interrupts within our controller, this will
-trigger on any positive edge–so it’ll need to be reset prior to being
-able to trip again.  While it’s not necessarily the optimal or the best
-approach, it may be sufficient for our purposes here.&lt;/p&gt;
-
-&lt;h3 id=&quot;connecting-the-pre-existing-components&quot;&gt;Connecting the pre-existing components&lt;/h3&gt;
-
-&lt;p&gt;We have three components to connect our interface to.  Two of these components
-already exist and only need to be referenced from here as sub-modules.  These
-are the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v&quot;&gt;block
-RAM&lt;/a&gt;
-interface, and the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/wbscope.v&quot;&gt;wishbone
-scope&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v&quot;&gt;block RAM&lt;/a&gt;
-needs very little additional configuration beyond what we’ve
-already done, but it does need to to be told how big its memory area will be. 
-We’ll create our
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/memdev.v&quot;&gt;block RAM&lt;/a&gt;
-to have 2^14 octets, hence the &lt;strong&gt;14&lt;/strong&gt; parameter below.  We’ll
-also use the select line, that we set above, &lt;strong&gt;mem_sel&lt;/strong&gt;, to modify the
-slaves strobe line, so the memory knows that it has been selected–without
-needing to have any more knowledge of any other peripherals that might be
-on the bus.  This is different from the &lt;strong&gt;wb_sel&lt;/strong&gt; line which we’ve &lt;a href=&quot;/zipcpu/2017/05/29/select-lines.html&quot;&gt;used to
-determine which octets in a word will be set in any
-operation&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;memdev	#(14) blkram(i_clk,
-	wb_cyc, (wb_stb)&amp;amp;&amp;amp;(mem_sel), wb_we, wb_addr[11:0],
-		wb_odata, wb_sel,
-	mem_ack, mem_stall, mem_data);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The next item we’ll want to place onto our bus is the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;To use the scope, you must decide on what you wish to examine, and then
-what you want to use to trigger the scope.  In our case, let’s trigger
-off of any &lt;a href=&quot;https://opencores.org/opencores,wishbone&quot;&gt;Wishbone&lt;/a&gt;
-accesses to our block RAM.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	scope_trigger = (mem_sel)&amp;amp;&amp;amp;(wb_stb);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll also select for our scope’s data several of the bus lines.  We’ll save
-for a later date how to turn these wires into a proper VCD file.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	debug_data    = { wb_cyc, wb_stb, wb_we, wb_ack, wb_stall,
-		wb_addr[5:0], 1&#39;b1,
-			wb_odata[9:0],
-			wb_idata[9:0] };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The scope has one more capability: it can sample data based upon a “when data
-is valid” flag.  The flag can be &lt;em&gt;really&lt;/em&gt; useful if you are processing a
-signal that isn’t valid on every clock–such as the output of a digitizer as
-an example.  Today, we’ll just set that flag to one so that we can capture
-on every clock.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	scope_ce = 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Now that all of the preliminaries have been taken care of, you can now place
-the scope within our file, and connect it to the bus as well.  As with the
-memory, the biggest part of “hooking it up” is adjusting the strobe line by
-&lt;em&gt;and&lt;/em&gt;ing it with the scope select line.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;wbscope	thescope(i_clk, scope_ce, scope_trigger, debug_data,
-	i_clk, wb_cyc, (wb_stb)&amp;amp;&amp;amp;(scop_sel), wb_we, wb_addr[0],wb_odata,
-	scop_ack, scop_stall, scop_data,
-	scop_int);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Other things you might notice are the fact that this scope requires
-two clocks, one for the data and one for the bus.  In this example
-thee two are the same.  It
-also requires the lowest of the address lines.  The result is that address
-&lt;strong&gt;0x02080&lt;/strong&gt; will reference the scope control and status register, while
-address &lt;strong&gt;0x2084&lt;/strong&gt; will reference the scope data register.&lt;/p&gt;
-
-&lt;h3 id=&quot;building-an-ad-hoc-slave&quot;&gt;Building an Ad-Hoc Slave&lt;/h3&gt;
-
-&lt;p&gt;You will very often find that you need to be able to report some logic result
-back up the bus to your debug interface–something that is ad-hoc, and not
-necessarily the part of any well-defined, prebuilt component.  In many ways,
-this seems to be one of the most common requests: how to I get access to
-(whatever) to see what my design has done?  Therefore, let’s make a simple
-ad-hoc slave that does just that.&lt;/p&gt;
-
-&lt;p&gt;Our slave will have six registers, although it occupies enough bus space
-that it could have a full sixteen–so there’s plenty of room should you wish
-to expand it.  Any more than that and you’ll need to adjust the address
-decoding logic above.  Laying these registers out, we’ll have:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;A read only date register&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A simple register that you can set and read back&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The address of the last bus error&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A counter that starts from zero on startup&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;An experimental interrupt line, that you can use to turn an interrupt on or
-off, so you can see how our interface deals with an interrupt&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A GPIO output that you can use to communicate with the
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator/&quot;&gt;Verilator&lt;/a&gt; simulation.
-In this case, we’ll use an &lt;strong&gt;o_halt&lt;/strong&gt; flag to indicate that its time for
-the simulation to halt.  You can set that as part of the LSB of this
-register.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Let’s first handle the write request.  On a write, to this peripheral,
-we’ll:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Handle setting the simple register to whatever input was given&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Create (or clear) an interrupt depending on the low order bit if writing
-to register four&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Adjust our &lt;strong&gt;o_halt&lt;/strong&gt; GPIO value with the LSB of anything written
-to register five.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Since the other registers are read only, we can ignore them on any write
-request.&lt;/p&gt;
-
-&lt;p&gt;This is therefore our write request logic:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	// Determine if a write to this peripheral is taking place
-	if ((wb_stb)&amp;amp;&amp;amp;(smpl_sel)&amp;amp;&amp;amp;(wb_we))
-	begin // Split our logic between the registers
-		case(wb_addr[3:0])
-		4&#39;h1: smpl_register  &amp;lt;= wb_odata;
-		4&#39;h4: smpl_interrupt &amp;lt;= wb_odata[0];
-		4&#39;h5: o_halt         &amp;lt;= wb_odata[0];
-		default: begin end
-		endcase
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;In this case, pay close attention to the if at the top, and the case below.
-These should match up with our &lt;a href=&quot;/blog/2017/06/21/simple-wb-interconnect.html&quot;&gt;lesson on how to build a simple wishbone
-slave&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Before reading back from this interface, let’s deal with the “clocks since
-power up” counter.  We’re going to use the initial command to set this
-register to zero, then while running it will count up.  Once the MSB gets set,
-we’ll leave it set so that we can tell if we’ve ever rolled over.  This will
-give us an ever changing counter that we can use for relative timing, or
-absolute timing if near when the chip starts up.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// Start our clocks since power up counter from zero
-initial power_counter = 0;
-always @(posedge i_clk)
-	// Count up from zero until the top bit is set
-	if (!power_counter[31])
-		power_counter &amp;lt;= power_counter + 1&#39;b1;
-	else // once the top bit is set, keep it set forever
-		power_counter[30:0] &amp;lt;= power_counter[30:0] + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Now that we’ve created that logic, everything is ready for us to read.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	case(wb_addr[3:0])
-	4&#39;h0:    smpl_data &amp;lt;= 32&#39;h20170622;
-	4&#39;h1:    smpl_data &amp;lt;= smpl_register;
-	4&#39;h2:    smpl_data &amp;lt;= { bus_err_address, 2&#39;b00 };
-	4&#39;h3:    smpl_data &amp;lt;= power_counter;
-	4&#39;h4:    smpl_data &amp;lt;= { 31&#39;h0, smpl_interrupt };
-	default: smpl_data &amp;lt;= 32&#39;h00;
-	endcase&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Notice that read logic doesn’t depend upon any bus lines other than the
-address.  Indeed, the fact that a read of this device has taken place is in
-many ways irrelevant–only the data being produced is relevant.  We can
-produce the right result for any address in our register space regardless. 
-(This isn’t true for all peripherals.)  The zero address of our peripheral
-returns a constant value (of the day when I posted this).  The first address
-(address 4, really) just returns the register we set above.  The second
-address gives us the address of the last bus error.  The third gives us the
-value of our ticks since startup counter.  The final register, at address
-position four (0x2050), just returns an LSB indicating whether or not our
-interrupt is set.&lt;/p&gt;
-
-&lt;p&gt;Since the last address in our interface only contains a halt request
-indicator, it will never read anything but zero, so we’re not going to
-include any special logic to read it.&lt;/p&gt;
-
-&lt;p&gt;As a final and required part of our interface, we’ll need to acknowledge the
-response from the bus, and create a stall line to indicate that this ad-hoc
-interface never stalls.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// Decoding an address takes one clock, so set the ACK to be true
-// on the next clock
-always @(posedge i_clk)
-	smpl_ack &amp;lt;= ((wb_stb)&amp;amp;&amp;amp;(smpl_sel));
-
-// This simple interface never stalls
-assign smpl_stall &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;That’s it!  You just connected a (very) simple peripheral to our debugging
-bus!  Indeed, if you wanted, you could now use this approach to
-&lt;a href=&quot;/blog/2017/05/29/fft-debugging.html&quot;&gt;debug an FFT&lt;/a&gt;&lt;/p&gt;
-
-&lt;h1 id=&quot;coming-up&quot;&gt;Coming up&lt;/h1&gt;
-
-&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;full design&lt;/a&gt;, as we’ve now built it
-should run on any FPGA.  A quick test, by giving the device an address and
-read request,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A2040R&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;or similarly a hex address and a write request,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A4000Wdeadbeef&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;should work to read or write from your device using this interface.  Further,
-if nothing is going on, you should be able to see “Z”s getting sent to your
-screen.&lt;/p&gt;
-
-&lt;p&gt;Not bad.&lt;/p&gt;
-
-&lt;p&gt;We could even read from the scope’s control and status register with a
-simple read command:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A2080R&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Another read command, such as&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;A2085R&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;will return one data value from our scope.  You might wish to notice that we
-set the LSB in this address.  As a result, subsequent R’s typed into the
-interface will interpreted as read commands from &lt;em&gt;the same&lt;/em&gt; 
-“scope data register” address.&lt;/p&gt;
-
-&lt;p&gt;Ok, so … this works.  But it’s still really hard to use.  This, then, gives
-us our roadmap forward:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;Building a
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator/&quot;&gt;Verilator&lt;/a&gt;
-&lt;a href=&quot;/blog/2017/06/26/dbgbus-verilator.html&quot;&gt;test bench&lt;/a&gt;
-to use to experiment with this bus apart from any hardware&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Building a &lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;software interface&lt;/a&gt; to our debugging bus, so we can use
-the host CPU to our advantage when working with the design&lt;/p&gt;
-
-    &lt;p&gt;This software interface will also make it easier for us to get the results
-of any scope interactions out of our debugging harness and into a VCD
-type of format that we can then use to examine what was going on within the
-FPGA.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;These then will be the topics we will queue up for a later day.&lt;/p&gt;
-
-</description>
-        <pubDate>Thu, 22 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/22/simple-wb-interconnect.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/22/simple-wb-interconnect.html</guid>
         
         
         <category>blog</category>

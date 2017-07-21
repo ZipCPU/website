@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Bit growth in FPGA arithmetic</title>
+  <meta name="description" content="We just started a discussion oflinear-upsampling.In many ways the linear-upsamplingalgorithm is much like any DSP algorithm: samples come in, multiplies, add...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/07/21/bit-growth.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Bit growth in FPGA arithmetic</h1>
+    <p class="post-meta"><time datetime="2017-07-21T00:00:00-04:00" itemprop="datePublished">Jul 21, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>We just started a discussion of
+<a href="/dsp/2017/07/19/linear-upsampling.html">linear-upsampling</a>.
+In many ways the <a href="/dsp/2017/07/19/linear-upsampling.html">linear-upsampling</a>
+algorithm is much like <em>any</em> DSP algorithm: samples come in, multiplies, adds,
+and subtracts get applied, and samples go out.
+Like any other algorithm using these operations, every add or multiply
+will increase the number of bits required to represent the result.
+So it seems only fitting to look at bit growth, so we can know how many bits
+to allocate for our internal results.</p>
+
+<p>Since dropping bits, once grown, is even more complicated than just tracking
+bit growth, we’ll save that discussion for it’s own post later.</p>
+
+<p>If you’ve never dealt with, or heard of, bit growth before then it can be
+confusing.  It doesn’t need to be so.  As we’ll show here, there are only
+two rules you need to keep track of.  Follow the two basic rules, and you
+should be okay.  That said, we’ll present three rules today.</p>
+
+<p>My basic approach for understanding bit growth is to look
+at the extremes of any <code class="highlighter-rouge">N</code> bit arithmetic operation, and see how many bits
+it takes to represent that extreme.  Indeed, if you ever get confused, just
+come back to this approach and examine the extremes of the values you
+are calculated within your application.</p>
+
+<p>Looking at the extremes in the representation, an <code class="highlighter-rouge">N</code> bit number,
+<code class="highlighter-rouge">a</code>, can be any one of a range of signed or unsigned values.  In the
+case of signed, <a href="https://en.wikipedia.org/wiki/Two's_complement">two’s
+complement</a>
+values, the range of an <code class="highlighter-rouge">N</code> bit number is given by,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">-2^(N-1) &lt;= a &lt;= 2^(N-1) -1</code></pre></figure>
+
+<p>Hence, a four bit number can represent values between -8 and +7 inclusive.</p>
+
+<p>Likewise the range of an unsigned value <code class="highlighter-rouge">N</code> bits wide is,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">0 &lt;= a &lt; 2^(N) -1</code></pre></figure>
+
+<p>and a four bit unsigned number can represent values from 0 to 15.</p>
+
+<p>If you add, subtract, or multiply numbers at the ends of these ranges,
+by how much must <code class="highlighter-rouge">N</code> be increased to capture the new result without overflow?</p>
+
+<p>There are a couple of cases you might not consider along the way, and so I’ll
+note these below and keep this page updated as a reminder of what the corner
+cases are.</p>
+
+<h2 id="add-one-bit-on-every-add">Add one bit on every add</h2>
+
+<p>The rule for addition is that adding two <code class="highlighter-rouge">N</code> bit numbers together requires
+an extra bit to represent the result.  Let’s test this to see if this is
+true:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">(2^N-1) + (2^N-1) = 2^(N+1)-2</code></pre></figure>
+
+<p>That certainly works for the positive end of the range, what about the negative
+end?</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">-2^N - 2^N = -2^(N+1)</code></pre></figure>
+
+<p>So, at the negative end we are good with adding an additional bit as well.</p>
+
+<p>If you know that the numbers you will be adding will have different signs,
+then no bit growth is needed, since the absolute value of the result will
+tend towards zero rather than increasing.  I’ve just never found an
+application that can use this nuance.</p>
+
+<p>Unsigned numbers are roughly the same, with exception that you need to be
+careful when subtracting two unsigned numbers.  The problem here being that
+the result might be negative.
+This means that, unless you can guarantee that the result will
+not overflow (i.e. go below zero), you will need to add a sign bit.  Hence,
+again, one bit of growth–but this comes with an <a href="https://en.wikipedia.org/wiki/Two's_complement">alternate representation
+(two’s complement)</a> as well.</p>
+
+<p>So the rule of adding one bit per addition (or) subtraction has special case
+we’ll need to be careful of, where the data representation changes as well,
+but otherwise it holds.</p>
+
+<p>What if you are adding values with different bit widths?  Suppose you wish to
+add an <code class="highlighter-rouge">N</code> bit number to an <code class="highlighter-rouge">M</code> bit number?  As before, the answer can be found
+by examining the extremes.  If you add the two positive extremes:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">2^(N-1)-1+2^(M-1)-1 &lt; 2^(N) - 1</code></pre></figure>
+
+<p>as long as <code class="highlighter-rouge">M&lt;N</code>.  The same is true for the negative extreme.  Here, then,
+the rule is that the output must have one more bit than the widest of the
+two input numbers.</p>
+
+<p>Now, let’s apply this to bits within an FPGA.  When building DSP algorithms,
+you’ll want to adjust them for the appropriate width <em>later</em>.  That way you
+can write one routine that works for multiple bit-widths, and may even work
+across multiple projects.  Hence, you’ll want to declare your various bit
+widths as parameters.  We’ll use this approach for our <a href="/dsp/2017/07/19/linear-upsampling.html">linear
+interpolator</a>,
+as well.)  For example, if you want to add two number, <code class="highlighter-rouge">a</code> and <code class="highlighter-rouge">b</code>,
+together, you might do something like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">module add(i_clk, a, b, out);
+parameter	AWIDTH=16, BWIDTH=4;
+		// Output width is given by one more than the maximum of A's
+		// width and B's width.  Make this a localparam so that
+		// it can't be overridden
+localparam	OUTWID = (AWIDTH &gt; BWIDTH) ? (AWIDTH + 1) : (BWIDTH+1);
+
+input	wire	[(AWIDTH-1):0]	a;
+input	wire	[(BWIDTH-1):0]	b;
+output	reg	[(OUTWID-1):0]	out;
+
+always @(posedge i_clk)
+	out &lt;= a + b;</code></pre></figure>
+
+<p>This captures all of the logic we just discussed above: adding one bit on
+any addition or subtraction.</p>
+
+<h2 id="long-strings-of-addition">Long strings of addition</h2>
+
+<p>Since the fundamental DSP operation is a
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>, and since
+<a href="https://en.wikipedia.org/wiki/Convolution">convolutions</a>
+require adding lots of numbers together, this creates a special case of
+bit growth that needs to be discussed.</p>
+
+<p>Imagine you had <code class="highlighter-rouge">K</code> words, <code class="highlighter-rouge">N</code> bits each, that all needed to be added together.
+If you applied the rule above, you might allocate <code class="highlighter-rouge">K+N</code> bits to the result.
+While the result would work, it’s also more bits than you need.</p>
+
+<p>As before, we’ll look at the extremes.  What happens when you add <code class="highlighter-rouge">K</code> extreme
+values together?  We’ll consider only the signed case, since the unsigned
+case is roughly the same:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">K * (2^(N-1)-1)</code></pre></figure>
+
+<p>Before taking the next step, let’s imagine a number of bits, <code class="highlighter-rouge">M</code>, that can hold
+the value <code class="highlighter-rouge">K</code>, such that:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">K &lt;= 2^M</code></pre></figure>
+
+<p>Further, we want <code class="highlighter-rouge">M</code> to be the smallest number possible so that this inequality
+holds.  Mathematically, we might say that,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">M = ceil(log(K)/log(2))</code></pre></figure>
+
+<p>or equivalently that <code class="highlighter-rouge">M</code> is the <a href="https://en.wikipedia.org/wiki/Floor_and_ceiling_functions">ceiling (smallest integer above or equal
+to)</a>
+of the base two <a href="https://en.wikipedia.org/wiki/Logarithm">logarithm</a>
+of <code class="highlighter-rouge">K</code>.  In simpler terms, it’s just the log (base
+two) of <code class="highlighter-rouge">K</code>, rounded up to the nearest integer.</p>
+
+<p>Now, using this number, we know that</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">K &lt;= 2^M</code></pre></figure>
+
+<p>and so that,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">K * (2^(N-1)-1) &lt;= (2^M)*(2^(N-1)-1) = 2^(M+N-1)-1</code></pre></figure>
+
+<p>And that’s our defining case.  When adding a large number of values together,
+all having the same bit width, the number of bits required to hold the result
+is given by the original number of bits plus the log, base two, of the
+number of elements added together.</p>
+
+<p>We’ll save the Verilog example for when we build an FIR filter on this blog.</p>
+
+<h2 id="add-the-number-of-bits-on-every-multiply">Add the number of bits on every multiply</h2>
+
+<p>Let’s now look at multiplying two numbers.  We’ll start by looking at signed
+multiplication, but then look at unsigned multiplication before finishing.</p>
+
+<p>Our first step will be to examine
+<a href="https://en.wikipedia.org/wiki/Two's_complement">two’s complement</a>
+multiplication.  Suppose we multiply
+a signed <code class="highlighter-rouge">N</code> bit number with a signed <code class="highlighter-rouge">M</code> bit number.  If you multiply
+the two largest of these numbers together, the result will fit in <code class="highlighter-rouge">N+M-1</code> bits:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">(2^(N-1) -1) * (2^(M-1) -1) = 2^(N+M-2) -2^(M-1) - 2^(N-1) +1 &lt; 2^(N+M-2)-1</code></pre></figure>
+
+<p>Don’t forget to check the other extreme!  Multiplying the two most negative
+numbers together yields a positive result, so this is an important check:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">(-2^(N-1)) * (-2^(M-1)) = 2^(N+M-2) &lt; 2^(N+M-1)</code></pre></figure>
+
+<p>You may note that 2^(N+M-2) just barely doesn’t fit in <code class="highlighter-rouge">N+M</code>
+<a href="https://en.wikipedia.org/wiki/Two's_complement">two’s complement</a>
+bits, so this becomes the defining case: <code class="highlighter-rouge">N+M</code> bits are required to hold the
+output, although fitting within <code class="highlighter-rouge">N+M-1</code> bits will be more common.</p>
+
+<p>In Verilog, multiplying two signed numbers together would look like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">module multiply(i_clk, a, b, out);
+parameter	AWIDTH=16, BWIDTH=4;
+		// Output width is given by one more than the maximum of A's
+		// width and B's width
+localparam	OUTWID = (AWIDTH + BWIDTH);
+
+input	signed wire	[(AWIDTH-1):0]	a;
+input	signed wire	[(BWIDTH-1):0]	b;
+output	signed reg	[(OUTWID-1):0]	out;
+
+always @(posedge i_clk)
+	out &lt;= a * b;</code></pre></figure>
+
+<p>Notice again that, just like the add, we allow the bit width to be specified
+(and overruled) by a parameter.  This allows us to adjust the bit-width
+later.</p>
+
+<p>Now let’s consider unsigned multiplication.  In this case, we only need to check
+the positive edge of the interval,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">(2^(N) -1) * (2^(M) -1) = 2^(N+M) -2^(M) - 2^(N) +1 &lt; 2^(N+M)-1</code></pre></figure>
+
+<p>As before, <code class="highlighter-rouge">N+M</code> bits are required to hold the product of an <code class="highlighter-rouge">N</code> bit number
+with an <code class="highlighter-rouge">M</code> bit number.  Indeed, the Verilog code for doing this is the same
+as before, with the only exception that the <code class="highlighter-rouge">signed</code> tag needs to be
+removed to do unsigned multiplication.</p>
+
+<h2 id="rules-to-live-by">Rules to Live By</h2>
+
+<p>Let’s summarize our rules here:</p>
+
+<ol>
+  <li>
+    <p>When adding two numbers, increase the number of bits in the result by one.</p>
+
+    <p>Be careful of subtracting unsigned numbers.  Your new bit may change
+you from unsigned to signed <a href="https://en.wikipedia.org/wiki/Two's_complement">two’s
+complement</a></p>
+  </li>
+  <li>
+    <p>When adding long strings of numbers, each with an identical number of bits,
+such as you would do when implementing a
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+the bit growth goes as the log of the length of the string, rather than one
+bit per addition.</p>
+  </li>
+  <li>
+    <p>When multiplying two numbers, store the output in a register having as many
+bits within it as the two multiplicands had combined.</p>
+  </li>
+</ol>
+
+<p>We’re not quite ready to finish our lesson on <a href="/dsp/2017/07/19/linear-upsampling.html">Linear
+Interpolation</a>,
+though.  We still need to discuss</p>
+
+<ul>
+  <li>
+    <p>How to drop bits when processing signals, and</p>
+  </li>
+  <li>
+    <p>How to debug DSP algorithms.</p>
+
+    <p>The approach you will need to debug a DSP based algorithm is very distinctly
+different from the tools necessary to debug the rest of your logic.</p>
+  </li>
+</ul>
+
+<p>Then we can come back and finish building our
+<a href="/dsp/2017/07/19/linear-upsampling.html">linear interpolator</a>.</p>
+
+<p>If you see any mistakes in the rules above, or any rules regarding bit growth
+that I’ve missed, please feel free to comment and note them below.</p>
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/dsp/2017/07/21/bit-growth.html";
+  this.page.identifier="/dsp/2017/07/21/bit-growth";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>And the child grew, and waxed strong in spirit, and was in the deserts till the day of his shewing unto Israel. (Luke 1:80)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
