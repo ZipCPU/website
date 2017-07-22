@@ -6,9 +6,288 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 21 Jul 2017 07:00:08 -0400</pubDate>
-    <lastBuildDate>Fri, 21 Jul 2017 07:00:08 -0400</lastBuildDate>
+    <pubDate>Sat, 22 Jul 2017 07:18:44 -0400</pubDate>
+    <lastBuildDate>Sat, 22 Jul 2017 07:18:44 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>Rounding Numbers without Adding a Bias</title>
+        <description>&lt;p&gt;Every time I’ve built a signal processing system, I’ve struggled with bit-width.
+&lt;a href=&quot;/dsp/2017/07/21/bit-growth.html&quot;&gt;Bit width grows&lt;/a&gt; when you
+apply a filter.  It grows when you add two streams together.  It grows when
+you multiply your signal by an sine wave or a complex exponential.  Indeed,
+&lt;a href=&quot;/dsp/2017/07/21/bit-growth.html&quot;&gt;bit growth&lt;/a&gt; alone can be
+a challenge to keep track of.&lt;/p&gt;
+
+&lt;p&gt;If you are not careful, you will make the problem worse like I first did when
+you try to deal with it.&lt;/p&gt;
+
+&lt;p&gt;You see, on my first
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt; &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;Digital
+Signal Processing (DSP)&lt;/a&gt;
+project, I just got rid of the bits I didn’t need by simply dropping them.  I’d
+take the result of whatever arithmetic I had accomplished, and I’d only keep
+the top &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bits.  Problem solved, right?&lt;/p&gt;
+
+&lt;p&gt;Not quite.  While that approach kept the number of bits I was using in
+bounds, it also created artifacts at DC that confused both myself and the
+team of individuals I was working with.  Did the system really have an
+uncontrolled DC bias?  Where did this bias come from?  Did we need better
+analog filtering?  Better bias control up front?&lt;/p&gt;
+
+&lt;p&gt;The answer was none of the above.  The problem was that I had not properly
+handled dropping bits, although it took building
+&lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;my own&lt;/a&gt; &lt;a href=&quot;https://en.wikipedia.org/wiki/Fast_Fourier_transform&quot;&gt;Fast Fourier Transform
+(FFT)&lt;/a&gt; to realize I
+had a problem.&lt;/p&gt;
+
+&lt;p&gt;So let’s examine how to round numbers within an FPGA.
+We’ll examine several forms of rounding, and look at how each of these
+forms biases the result one way or another from true. Along the way, we’ll
+use consider diagrams, similar Fig 1 below, to explain what’s happening.&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1: The need for Rounding&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/rounding-tbd.svg&quot; alt=&quot;Outlining the rounding discussion&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This figure shows a series of numbers, and a series of boxes.  The boxes
+represent the incoming values, and the numbers above represent the possible
+output values.  They are placed above the box where the operation would be
+exact.&lt;/p&gt;
+
+&lt;p&gt;If you look closer, you’ll notice that there are eight boxes per output
+integer.  The boxes that line up exactly are under the arrows, and they are
+also shown in color, to representing the integer they are assigned to. 
+This leaves seven boxes between exact results that need to be determined.&lt;/p&gt;
+
+&lt;p&gt;This is the issue of rounding.  When given a value (represented by one of
+these boxes) between two integers, how shall it be mapped to one of the
+integers above?  We’ll represent individual chosen mappings via color below,
+so you can see and get a feel the concept.&lt;/p&gt;
+
+&lt;p&gt;With this background, we can return to our question: how to go from
+too many bits, to just the right number?&lt;/p&gt;
+
+&lt;h1 id=&quot;go-for-easy-truncation&quot;&gt;Go for easy: truncation&lt;/h1&gt;
+
+&lt;p&gt;The first way of dropping bits may be the easiest … just get rid of any
+excess bits.  This was what I had done originally.  Consider, if you have
+a data values &lt;code class=&quot;highlighter-rouge&quot;&gt;i_data&lt;/code&gt; coming in with &lt;code class=&quot;highlighter-rouge&quot;&gt;IWID&lt;/code&gt; (input width) bits, and you want
+to create a data value with &lt;code class=&quot;highlighter-rouge&quot;&gt;OWID&lt;/code&gt; bits, why not just grab the top &lt;code class=&quot;highlighter-rouge&quot;&gt;OWID&lt;/code&gt; bits?&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign o_truncate = i_data[(IWID-1):(IWID-OWID)];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;If you just want something quick and simple, this approach works.&lt;/p&gt;
+
+&lt;p&gt;Well, sort of.&lt;/p&gt;
+
+&lt;p&gt;Maybe not really.&lt;/p&gt;
+
+&lt;p&gt;It’s what I used before I started working on an &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT
+algorithm&lt;/a&gt;.  When I built my testbench
+for the &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT&lt;/a&gt;, one of my inputs would
+be a sine wave.  I expected as an output a single non-zero value at or near the
+frequency of the sine wave.  While I got the value I was looking for at the
+frequency of the sine wave, I also kept getting values at DC that didn’t make
+sense to me.&lt;/p&gt;
+
+&lt;p&gt;When I dug into this, I discovered that dropping bits in this fashion biases
+the result by about a half of a bit in the negative direction.  If you consider
+Fig 1 below, you can see this effect since it shows how the area covered by
+each number is biased to the right of the number.&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2: Truncation effects&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/rounding-bytruncation.svg&quot; alt=&quot;Effect of dropping bits by truncation&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;So it was working on this &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT algorithm&lt;/a&gt;
+that sent me looking for alternatives.  The best explanation I found of the
+various alternatives was on &lt;a href=&quot;https://en.wikipedia.org/wiki/Rounding&quot;&gt;wikipedia’s rounding
+page&lt;/a&gt;.  Here, we’ll just explain
+the types of rounding discussed &lt;a href=&quot;https://en.wikipedia.org/wiki/Rounding&quot;&gt;there&lt;/a&gt;,
+and show some Verilog examples of how to do each.&lt;/p&gt;
+
+&lt;h1 id=&quot;basic-rounding-round-half-up&quot;&gt;Basic rounding: Round half up&lt;/h1&gt;
+
+&lt;p&gt;My next approach to dropping bits was to add a half.  This was the type of
+rounding I learned to do as a child in grade school. 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rounding&quot;&gt;Wikipedia calls this&lt;/a&gt;
+“round half up”.&lt;/p&gt;
+
+&lt;p&gt;The Verilog code for doing this is nice, in that it only needs &lt;code class=&quot;highlighter-rouge&quot;&gt;OWID+1&lt;/code&gt; bits
+to work on.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	w_halfup = i_data[(IWID-1):0]
+		+ { {(OWID){1&#39;b0}}, 1&#39;b1, {(IWID-OWID-1){1&#39;b0}} };
+always @(posedge i_clk)
+	o_halfup &amp;lt;= w_halfup[(IWID-1):(IWID-OWID)];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Many of the other approaches we’ll discuss will require adding numbers to all
+&lt;code class=&quot;highlighter-rouge&quot;&gt;IWID&lt;/code&gt; bits, so this approach turns out to be simpler than the other
+rounding approaches below.&lt;/p&gt;
+
+&lt;p&gt;While this approach worked a lot better, it still leaves a bias within the data
+values.&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3: Round Half-Up&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/rounding-halfup.svg&quot; alt=&quot;Round Half-Up&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;To understand what the problem is, consider the bins around our output numbers,
+as shown in Fig 4 below:&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4: Illustrating the problem with rounding&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/rounding-problem.svg&quot; alt=&quot;Illustrating the problem(s) with rounding&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;We might argue that every bin should be attached to the output value “nearest”
+to it.&lt;/p&gt;
+
+&lt;p&gt;That leaves the bins or boxes in the exact center, exactly located between
+any two integer values.&lt;/p&gt;
+
+&lt;p&gt;If you connect all those between bins to the integers
+on the right, you’ll create the bias we saw in Fig 3.  Sure, it’s less than
+the bias in Fig 2, bit its still a bias.&lt;/p&gt;
+
+&lt;p&gt;On the other hand, if you connect all these in-between bins to the integer
+values on the left (round half down), you’ll create a similar bias–only
+in the other direction.&lt;/p&gt;
+
+&lt;p&gt;Several types of rounding will fix this.&lt;/p&gt;
+
+&lt;h1 id=&quot;round-towards-zero&quot;&gt;Round towards zero&lt;/h1&gt;
+
+&lt;p&gt;One unbiased method of rounding is to round towards zero, shown in Fig 5 below.&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5: Rounding towards zero&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/rounding-tozero.svg&quot; alt=&quot;Rounding towards zero&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In this case, we select the integer nearest zero for our midpoint.&lt;/p&gt;
+
+&lt;p&gt;Doing this in Verilog is simple, too:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	w_tozero = i_data[(IWID-1):0] + , i_data[(IWID-1)],
+			{(IWID-OWID-1){!i_data[(IWID-1)]}}};
+always @(posedge i_clk)
+	o_tozero &amp;lt;= w_tozero[(IWID-1):(IWID-OWID)];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;An almost identical method is to round away from zero.  In this case, the
+mid point values are assigned to the integer nearest them that is farthest
+from zero.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	w_fromzero = i_data[(IWID-1):0] + , !i_data[(IWID-1)],
+			{(IWID-OWID-1){i_data[(IWID-1)]}}};
+always @(posedge i_clk)
+	o_fromzero &amp;lt;= w_fromzero[(IWID-1):(IWID-OWID)];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The problem with these two approaches is that they will subtly change
+the amplitude of your signal.&lt;/p&gt;
+
+&lt;p&gt;Is there a better approach?&lt;/p&gt;
+
+&lt;h1 id=&quot;convergent-rounding-round-half-to-even&quot;&gt;Convergent rounding: Round half to even&lt;/h1&gt;
+
+&lt;p&gt;Thankfully, I didn’t need to invent a better approach.  Several solutions to the
+rounding problem were already listed for me in a 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rounding&quot;&gt;Wikipedia&lt;/a&gt; article.&lt;/p&gt;
+
+&lt;p&gt;The better approach that I have found is called convergent rounding, although
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rounding#Round_half_to_even&quot;&gt;Wikipedia&lt;/a&gt; gives it many other names.
+Perhaps “Round half to even” is the most
+descriptive.  Convergent rounding starts out in an identical fashion to the
+more traditional rounding (round half up), with the exception of when you are
+at the exact half way point.  In that case, convergent rounding rounds towards
+the nearest &lt;em&gt;even&lt;/em&gt; integer, as shown in Fig 6 below.&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6: Convergent Rounding&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/rounding-toeven.svg&quot; alt=&quot;Illustrating convergent rouding&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If you count the number of input bins assigned to each output integer, you’ll
+notice that 0 gets 9 bins, 1 gets 7, 2 gets 9, etc.&lt;/p&gt;
+
+&lt;p&gt;Likewise, the Verilog code to perform this operation is no more difficult
+than rounding towards (or away from) zero.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	w_convergent = i_data[(IWID-1):0] + , i_data[(IWID-OWID)],
+			{(IWID-OWID-1){!i_data[(IWID-OWID)]}}};
+always @(posedge i_clk)
+	o_convergent &amp;lt;= w_convergent[(IWID-1):(IWID-OWID)];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You may notice that these last several forms of rounding required a single clock
+delay to calculate the answer.  That extra clock is required to perform a
+full word’s worth of addition.  This is the addition required to get the carry
+to propagate through the entire input number.&lt;/p&gt;
+
+&lt;p&gt;If you can’t afford the extra clock, consider just dropping the extra bit, as
+in our first example.&lt;/p&gt;
+
+&lt;p&gt;By the way, I’m not the only one who likes this approach.  According to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rounding#Round_half_to_even&quot;&gt;Wikipedia&lt;/a&gt;
+article, it is the “default rounding mode used in &lt;a href=&quot;https://en.wikipedia.org/wiki/IEEE_754&quot;&gt;IEEE
+754&lt;/a&gt; computing functions”.  Recognize
+that standard?  &lt;a href=&quot;https://en.wikipedia.org/wiki/IEEE_754&quot;&gt;IEEE 754&lt;/a&gt; is the
+standard that defines how floating point is done within your computer.&lt;/p&gt;
+
+&lt;h1 id=&quot;the-dblclock-fft&quot;&gt;The DblClock FFT&lt;/h1&gt;
+
+&lt;p&gt;In my motivation above, I mentiond the
+&lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT&lt;/a&gt; I had built earlier.  This
+&lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT&lt;/a&gt; is built a bit differently from a
+lot of the other Verilog cores I’ve worked with and those I’ve come across. 
+In particularly, the &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;dblclockfft&lt;/a&gt;
+project consists not in a Verilog core, but rather the
+&lt;a href=&quot;https://github.com/ZipCPU/dblclockfft/blob/master/sw/fftgen.cpp&quot;&gt;C++ code&lt;/a&gt;
+necessary to build a Verilog core.  This gives it the flexibility to build
+any &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT&lt;/a&gt; size or bit-width you want.&lt;/p&gt;
+
+&lt;p&gt;It’s also a bit of a niche product, since it takes two input samples per clock.&lt;/p&gt;
+
+&lt;p&gt;In other words, &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;dblclockfft&lt;/a&gt; can be
+configured for arbitrary FFT sizes (subject to the amount of logic on your
+device), incoming and outgoing bit widths, as well as the number of hardware
+multiplies used internally.  It also allows you (internally) to configure
+the type of rounding that will be used within the resulting algorithm.&lt;/p&gt;
+
+&lt;p&gt;It was while testing &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;this FFT core&lt;/a&gt;
+that I noticed sinewaves going into the core were producing results on the
+DC bin coming out.  The problem, when fully traced out, came down to rounding.
+Using the &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft/blob/master/sw/fftgen.cpp&quot;&gt;C++ core generator
+program&lt;/a&gt;,
+I then tested and compared multiple rounding
+approaches against each other, and decided upon the convergent rounding
+approach discussed above.  (That’s why the type of rounding can be configured
+internally.)&lt;/p&gt;
+
+&lt;p&gt;As a side note, with just a touch of care and feeding the
+&lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;dblclockfft&lt;/a&gt; could be adjusted to
+meet anyone’s
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Fast_Fourier_transform&quot;&gt;FFT&lt;/a&gt;
+needs.  Want a single sample in per clock?  It’s &lt;em&gt;almost&lt;/em&gt;
+there.  Want a real (vice complex)
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Fast_Fourier_transform&quot;&gt;FFT&lt;/a&gt;?
+It only needs one additional module.
+How about running an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Fast_Fourier_transform&quot;&gt;FFT&lt;/a&gt;?
+in a non-pipelined mode, with only two hardware
+multiplies required &lt;em&gt;in total&lt;/em&gt;, and the size cost turned into a block RAM cost? 
+Most of the pieces are there for that as well.  In other words, with a &lt;a href=&quot;https://www.patreon.com/ZipCPU&quot;&gt;touch
+of support&lt;/a&gt;, that &lt;a href=&quot;https://github.com/ZipCPU/dblclockfft&quot;&gt;FFT
+project&lt;/a&gt; could be made &lt;em&gt;very&lt;/em&gt; generic.&lt;/p&gt;
+
+&lt;h1 id=&quot;next-steps&quot;&gt;Next steps&lt;/h1&gt;
+
+&lt;p&gt;This particular post is actually only one in a series of posts building up to a
+working linear upsampling interpolator.  We’ve already discussed the basic
+&lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;upsampling linear
+interpolator&lt;/a&gt;, and
+&lt;a href=&quot;/dsp/2017/07/21/bit-growth.html&quot;&gt;bit growth&lt;/a&gt; within it. 
+Now that we understand rounding, our next step in building this
+&lt;a href=&quot;https://github.com/ZipCPU/rtl/lininterp/lininterp.v&quot;&gt;interpolator&lt;/a&gt;
+will be to discuss how to debug a DSP algorithm.&lt;/p&gt;
+
+&lt;p&gt;Stick around, debugging the linear upsampler makes a great example of how to
+debug any DSP algorithm.&lt;/p&gt;
+
+</description>
+        <pubDate>Sat, 22 Jul 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/dsp/2017/07/22/rounding.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/07/22/rounding.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>Bit growth in FPGA arithmetic</title>
@@ -532,10 +811,7 @@ for about two days before I eventually got it working.&lt;/p&gt;
 
 &lt;ul&gt;
   &lt;li&gt;
-    &lt;p&gt;Bit growth: how adds and multiplies increase the number of bits in a value&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Signed vs Unsigned multiplication&lt;/p&gt;
+    &lt;p&gt;&lt;a href=&quot;/dsp/2017/07/21/bit-growth.html&quot;&gt;Bit growth&lt;/a&gt;: how adds and multiplies increase the number of bits in a value&lt;/p&gt;
   &lt;/li&gt;
   &lt;li&gt;
     &lt;p&gt;How to drop bits.  In other words, if you have 16-bit samples in, this
@@ -2933,207 +3209,6 @@ realize the value of the tool he doesn’t have.&lt;/p&gt;
         <pubDate>Mon, 26 Jun 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/06/26/dbgbus-verilator.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/26/dbgbus-verilator.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>My own FPGA debugging philosophy</title>
-        <description>&lt;p&gt;Many individuals have read my previous posts and have wondered what my debugging
-philosophy actually is.  They’ve asked me how I would recommend debugging
-a design.  This post attempts to outline the general approaches
-I used to debug &lt;a href=&quot;https://github.com/ZipCPU&quot;&gt;my own FPGA designs&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;In quick sum:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;Simulation&lt;/strong&gt;: I recommend using a simulator that allows allows you to
-simulate all of the external components of your design in a fully
-integrated fashion&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;Hardware testing&lt;/strong&gt;: I recommend including some form of
-integrated logic analyzer or scope within your design when you move
-into hardware.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;While I tend to use open source products, I have nothing against commercial
-products that will help a designer accomplish his purpose.&lt;/p&gt;
-
-&lt;p&gt;That said, let’s take a look at my own debugging philosophy in more detail.&lt;/p&gt;
-
-&lt;h2 id=&quot;simulation&quot;&gt;Simulation&lt;/h2&gt;
-
-&lt;p&gt;Because implementing logic on an FPGA can take so long to do, I am a firm
-believer in using a simulation.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: Simulation&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dbg-by-sim.svg&quot; alt=&quot;Parts of Debugging an FPGA via Simulation&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;FPGA’s often need to communicate with external devices, though, and those
-external devices need to respond to the simulated logic and the test designer
-as though they were present in hardware.&lt;/p&gt;
-
-&lt;p&gt;I recommend, therefore, for those components of an FPGA design that need to
-interact with an external device, that the simulation facility provide an
-external component simulator and interface validator &lt;em&gt;for each external
-component&lt;/em&gt; the digital logic needs to interact with.  By component simulator,
-I mean something that creates inputs and treats outputs like the real hardware
-component would.  By interface validator, I mean something that will quickly
-draw the developer’s attention to any violations in the interface protocol.&lt;/p&gt;
-
-&lt;p&gt;This means that the minimum capability I would require of any simulation
-capability is the ability to simulate &lt;em&gt;all&lt;/em&gt; of the external components on my design.
-Were this a commercial capability, I would want to be able to integrate
-my own external component simulations as well as any external component
-simulations produced by multiple (possibly competing) vendors.&lt;/p&gt;
-
-&lt;table style=&quot;float: left; padding: 15px&quot;&gt;&lt;caption&gt;Fig 2: Integrated Simulation&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dbg-by-integrated-sim.svg&quot; alt=&quot;Integrating Sim Components into a Fullblown Simulator&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;This minimum capability would allow me to simulate my entire, integrated design,
-as shown in Fig 2.  That is, I should be able to integrate all of these
-component simulators into an integrated design simulation.&lt;/p&gt;
-
-&lt;p&gt;Does your design have a &lt;em&gt;UART&lt;/em&gt; within it?  Your simulation should then be able
-to &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/master/bench/cpp/uartsim.cpp&quot;&gt;simulate a
-UART&lt;/a&gt;. 
-Your design should be able to create a UART waveform, and your external
-component simulator should be able to process it and perhaps place the result
-on your simulation terminal.  You should be able to type into that simulation
-terminal anything and have it sent to your external UART simulator. 
-The external component simulator should then translate anything it reads, and
-send it into your design as a proper UART signal.&lt;/p&gt;
-
-&lt;p&gt;Does your design have a flash component within it?  You should be able to start
-up, erase, program, and read from that flash as a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/qspiflashsim.cpp&quot;&gt;part of your
-simulation&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Does your design include &lt;em&gt;buttons or switches&lt;/em&gt;?  You should be able to simulate
-buttons and switches, and your simulations should be good enough to test any
-debouncing capability you might have.&lt;/p&gt;
-
-&lt;p&gt;Does your design have an &lt;em&gt;SD card&lt;/em&gt; within it?  You should be able to
-communicate with the &lt;a href=&quot;https://github.com/ZipCPU/sdspi/blob/master/bench/cpp/sdspisim.cpp&quot;&gt;simulated SD card&lt;/a&gt;, and even have a simulation that can match the
-SD card you wish to use in your design.&lt;/p&gt;
-
-&lt;p&gt;Does your design have a &lt;em&gt;VGA&lt;/em&gt; within it?  Your simulation should then be able
-decode your VGA output, to prove that you are producing the correct
-synchronization signals, and then to draw the pixels to the screen in a way
-that you can verify that your VGA code works.&lt;/p&gt;
-
-&lt;p&gt;Does your design have an &lt;em&gt;EDID component&lt;/em&gt; to it?  Your simulator should &lt;a href=&quot;https://github.com/ZipCPU/wbi2c/blob/master/bench/cpp/i2csim.cpp&quot;&gt;be
-able to communicate EDID
-information&lt;/a&gt;
-to your design over a proper I2C port.&lt;/p&gt;
-
-&lt;p&gt;Does your design have &lt;em&gt;(DDRx) SDRAM&lt;/em&gt; within it?  Your simulator should be able
-to match the &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/sim/verilated/memsim.cpp&quot;&gt;SDRAM’s
-capability&lt;/a&gt; in a clock for clock fashion.  You might even wish to
-debug any &lt;a href=&quot;http://opencores.org/project,wbddr3&quot;&gt;DDR3 SDRAM in detail&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Does your design have a &lt;em&gt;CPU&lt;/em&gt; within it?  Your simulator should be able to
-simulate the CPU, it’s booting process (using flash, if that’s what you have),
-and it should allow you to see what’s going inside the CPU as it boots.
-You should be able to trace the instructions your CPU executes, together with
-any logic used within your design.
-Do you want to be able to run a program on your CPU?  You should be able to
-do that within the CPU, and it should be able to interact with its environment
-in a manner similar to its real environment.&lt;/p&gt;
-
-&lt;p&gt;This is my philosophy on simulation.&lt;/p&gt;
-
-&lt;p&gt;As you can see, I am a firm believer in simulating your &lt;em&gt;whole design&lt;/em&gt;, not
-just the components.&lt;/p&gt;
-
-&lt;p&gt;&lt;a href=&quot;https://www.veripool.org/wiki/verilator/&quot;&gt;Verilator&lt;/a&gt; meets these requirements.
-Do you know of any other capability that can?  Please feel free to comment
-about it in the discussion at the end of this post.&lt;/p&gt;
-
-&lt;h2 id=&quot;hardware-testing&quot;&gt;Hardware Testing&lt;/h2&gt;
-
-&lt;p&gt;I’m also not so naive as to believe that a design will work the first time it’s
-placed in an actual FPGA.  For this reason, I am a firm believer in testing
-on the actual hardware as well.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3: Hardware in the Loop Testing&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dbg-by-hitl.svg&quot; alt=&quot;Parts of Debugging an FPGA via Simulation&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Hardware testing includes both component testing (externally
-directed, often without the CPU), as well as integrated design testing.&lt;/p&gt;
-
-&lt;p&gt;Using your hardware, you should be able to test components by:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Issuing individual commands to them, and verifying that individual
-interactions work&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Then issuing more complex strings of commands&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;In both cases, you should be able to start from a (roughly) known condition,
-command the hardware to begin the test, and then be able to measure the
-results of the test.  Doing this necessitates some form of internal logic
-analyzer, such as the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; that
-I use.&lt;/p&gt;
-
-&lt;p&gt;I like to issue commands over some form of debugging bus, such as the
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus/rtl&quot;&gt;hexbus debugging bus&lt;/a&gt;
-we’ve &lt;a href=&quot;/topics.html&quot;&gt;just built together&lt;/a&gt;.  This allows me
-to command various tests, and to read information and status back out of the
-FPGA.  If you have a CPU on board, such as the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;, you may wish to
-command your tests in a faster and more coordinated fashion from software.&lt;/p&gt;
-
-&lt;p&gt;Trace data itself can be drawn from something as simple as your own
-&lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;user designed scope&lt;/a&gt;, or
-&lt;a href=&quot;/about/gisselquist-technology.html&quot;&gt;Gisselquist Technology&lt;/a&gt;’s
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt;.  We’ll be discussing
-in the near future how you can add the capability to create a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Value_change_dump&quot;&gt;VCD&lt;/a&gt; file to your scope.
-That will finish off the discussion on how to build your own debugging
-facility.&lt;/p&gt;
-
-&lt;p&gt;Commercial products exist that can record trace information from within your
-chip.  &lt;a href=&quot;https://xilinx.com&quot;&gt;Xilinx&lt;/a&gt;, for example, includes their
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/ila/v6_2/pg172-ila.pdf&quot;&gt;Integrated Logic Analyzer (ILA)&lt;/a&gt;
-as part of the &lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado Design
-Suite&lt;/a&gt;.
-You’ll &lt;a href=&quot;https://forums.xilinx.com/t5/Installation-and-Licensing/WebPACK-and-ILA/td-p/558110&quot;&gt;need more than the free webpack
-license&lt;/a&gt;,
-though, in order to use it.  Given how easy such an analyzer is to build,
-it’s probably not work the $3k necessary to pay for a full
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Design Suite&lt;/a&gt;
-license just to use this capability.&lt;/p&gt;
-
-&lt;p&gt;One of the benefits of rolling your own, is that integrating your own logic
-analyzer into your own logic can be done with your favorite interface.
-For example, I’ve often used the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; to trigger the scope or to examine
-the outputs of it.  Further, unlike a commercial scope which may be restricted
-to using the JTAG for control and output, I can get the outputs via whatever
-debugging bus I’m already using.&lt;/p&gt;
-
-&lt;h2 id=&quot;your-own-choices&quot;&gt;Your own choices&lt;/h2&gt;
-
-&lt;p&gt;These two components outline the philosophy I use to debug my own FPGA
-designs.&lt;/p&gt;
-
-&lt;p&gt;I am a firm believer in simulation.&lt;/p&gt;
-
-&lt;p&gt;I grew up testing on the hardware itself, and see no problems with it &lt;em&gt;as long
-as you can get an internal trace from your hardware&lt;/em&gt;.&lt;/p&gt;
-
-&lt;p&gt;Do you have a different debugging philosophy?  Do you know of other or better
-tools?  Feel free to post and discuss them below.&lt;/p&gt;
-</description>
-        <pubDate>Fri, 23 Jun 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/06/23/my-dbg-philosophy.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/06/23/my-dbg-philosophy.html</guid>
         
         
         <category>blog</category>
