@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>How to build a simulation based debugger for your own soft-core CPU</title>
+  <meta name="description" content="So you want to build a soft-core CPU?">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/zipcpu/2017/07/26/cpu-sim-debugger.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Topics</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">How to build a simulation based debugger for your own soft-core CPU</h1>
+    <p class="post-meta"><time datetime="2017-07-26T00:00:00-04:00" itemprop="datePublished">Jul 26, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>So you want to build a soft-core CPU?</p>
+
+<p>Have you given any thought to how you will test that CPU, or <a href="/zipcpu/2017/07/14/cpu-debugging-needs.html">how you will
+debug the
+programs</a>
+you are running within it?</p>
+
+<p>If you know <a href="/blog/2017/06/23/my-dbg-philosophy.html">my debugging
+philosophy</a>, you’ll
+also know that I am a firm believer in simulation.  I like to use not only
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+for simulating my cores, but also printf() and
+<a href="http://gtkwave.sourceforge.net">GTKWave</a>
+for examining the results as I’ve discussed
+<a href="/blog/2017/06/21/looking-at-verilator.html">here</a>.</p>
+
+<p>Somehow, as with <a href="/dsp/2017/07/22/dsp-debugging.html">DSP
+debugging</a>,
+these two approaches are insufficient when it comes to debugging a sort-core
+CPU.  Another approach is needed.</p>
+
+<p>Therefore, this article will present a simpler approach to debugging a CPU
+when using 
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>.
+Sure, it will take a bit more work to set up, but I think you’ll find the result
+well worth the effort when it comes time to debug your own CPU.</p>
+
+<h2 id="debugger-overview">Debugger Overview</h2>
+
+<p>You may remember from our discussion of CPU debuggers what the requirements
+of a debugger in simulation are, shown in Fig 1.</p>
+
+<table style="float: right"><caption>Fig 1: Debugging a CPU in simulation</caption><tr><td><img src="/img/cpu-dbg-simulation.svg" alt="CPU Debugging needs ... in simulation" width="350" /></td></tr></table>
+
+<p>Today, we’ll be focusing our efforts on building the interaction in the
+<em>simulation</em> column.</p>
+
+<p>What makes building a CPU debugger different from any other
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> based
+simulation test harness, is the requirement that you may wish to examine the
+CPU state after every clock tick.  It is this examination
+that will be the primary focus of the discussion today.  Along the way,
+we’ll show how to step the CPU by a single clock tick, as well as how to
+generate trace information.  Stopping on a break point, though,
+will require a handshake between your simulation and your CPU.</p>
+
+<table style="float: left; padding: 15px"><caption>Fig 2: Integrated Debugging</caption><tr><td><img src="/img/dbg-by-integrated-sim.svg" alt="Integrated Debugging" width="300" /></td></tr></table>
+
+<p>We’ll start with the code that we’ve written and 
+<a href="/blog/2017/06/21/looking-at-verilator.html">discussed</a>
+for simulating an FPGA design while also simulating multiple peripherals.
+We <a href="/blog/2017/06/23/my-dbg-philosophy.html">illustrated this concept</a> before using Fig 2.
+If you haven’t already built a simple
+<a href="/blog/2017/06/21/looking-at-verilator.html">test harness</a>
+for your FPGA design,
+you’ll want to put that functionality together before we start.  You don’t
+have to make it work yet.  Building a Verilator based CPU debugger will
+require some other modifications before getting there.</p>
+
+<p>Then, to that basic test harness, we’ll add an
+<a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+display functionality, as outlined in Fig 3. below.  In this case, we’ll break
+up the
+Verilator
+test harness
+while loop, and add an
+<a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+interface to it in order to achieve a debugging capability.</p>
+
+<table style="float: none"><caption>Fig 3: Structure of a Verilator CPU Debugger</caption><tr><td><img src="/img/vlator-debugger.svg" alt="Pictorial image of a Verilaor Debugger" width="780" /></td></tr></table>
+
+<p>If you’ve never used the <a href="https://www.gnu.org/software/ncurses">ncurses library</a>
+before, it’s <a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#WHATIS">really not all that
+hard</a>,
+and it really simplifies building a textual debugger.</p>
+
+<h2 id="loading-your-program">Loading your program</h2>
+
+<p>The <a href="https://www.gnu.org/software/ncurses">ncurses library</a> library is very
+much about textual screen manipulation.  We’ll use that to place register
+values on the screen, and to accept user input to control the simulation.</p>
+
+<p>However, before any screen manipulation, you’ll want to process any command
+line arguments to your test harness program.  This includes finding and loading
+any initial memory, whether into your
+<a href="https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/qspiflashsim.cpp">flash</a> or
+SDRAM simulator or other.</p>
+
+<p>In particular, if there’s any reason why your test program would need to end
+on an error, it helps to find and handle those errors before starting the
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#INIT">ncurses</a>,
+environment.  Once
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html">ncurses</a>,
+starts, we’ll need to be careful to make sure that your program <em>only</em>
+exits by way of the <a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#ABOUT-ENDWIN">ncurses
+endwin</a>,
+function before calling exit.</p>
+
+<h2 id="starting-and-stopping-ncurses">Starting and stopping ncurses</h2>
+
+<p>Once you are sure your test harness is ready to fire up your design,
+then it’s time to start the
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#ABOUTINIT">ncurses</a>
+screen environment.  <a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#ABOUTINIT">Starting up 
+ncurses</a>
+involves calling four basic functions:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="cp">#include &lt;stdio.h&gt;
+#include &lt;ncurses.h&gt;
+</span>
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(...)</span> <span class="p">{</span>
+	<span class="c1">// Process arguments
+</span>	<span class="p">...</span>
+	<span class="c1">// Initialize ncurses
+</span>	<span class="n">initscr</span><span class="p">();</span>
+	<span class="n">raw</span><span class="p">();</span>
+	<span class="n">noecho</span><span class="p">();</span>
+	<span class="n">keypad</span><span class="p">(</span><span class="n">stdscr</span><span class="p">,</span> <span class="nb">true</span><span class="p">);</span>
+	<span class="c1">//
+</span>	<span class="p">...</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>The first of these functions,
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#ABOUT-INITSCR">initscr()</a>,
+just initializes <a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+and starts up the display.</p>
+
+<p>The 
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#RAWCBREAK">raw()</a>
+function tells <a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+that we don’t want any input buffering.  This will become
+important later, as we’d like to be able to step the CPU one clock at a time
+on a keypress, and we don’t want to have to wait for a return key along the way.</p>
+
+<p>If you want to be able to just hit a key and step the CPU, then you aren’t
+really going to want that key displayed to the screen.  That’s the purpose
+of the 
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#ECHONOECHO">noecho()</a> function call.</p>
+
+<p>Finally, the
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#KEYPAD">keypad(stdscr, true)</a>
+command requests that all special characters (function keys, arrows, etc), be
+sent to our processing loop just like everything else.</p>
+
+<p>The other part of the basic
+<a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+setup is stopping your simulation.  Once you finally get
+to the end of your debugging and simulation session, then you are going to want
+to call
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#ABOUT-ENDWIN">endwin</a>
+to return your screen to normal, like it was before you started your simulator.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">endwin</span><span class="p">();</span></code></pre></figure>
+
+<p>If you get in trouble, you may find that typing</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">stty</span> <span class="n">sane</span></code></pre></figure>
+
+<p>helps.  Modern terminals often have a reset terminal button that cna help as
+well.</p>
+
+<p>That’s the basics of getting
+<a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+started, now let’s see if we can’t turn around and use it to help us
+simulate this design.</p>
+
+<h2 id="the-verilator-loop">The Verilator Loop</h2>
+
+<p>Remember the <a href="/blog/2017/06/21/looking-at-verilator.html">previous Verilator test harness loop
+function</a>,
+we built?  It looked something like:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="kt">int</span> <span class="nf">main</span><span class="p">(...)</span> <span class="p">{</span>
+	<span class="c1">// ...
+</span>	<span class="k">while</span><span class="p">(</span><span class="o">!</span><span class="n">done</span><span class="p">())</span> <span class="p">{</span>
+		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">tick</span><span class="p">();</span>
+	<span class="p">}</span>
+	<span class="c1">// ...
+</span><span class="p">}</span></code></pre></figure>
+
+<p>As you <a href="/blog/2017/06/21/looking-at-verilator.html">may recall from the Verilator
+article</a>,
+this function then called a testbench method
+which toggled our clock and provided any peripheral inputs:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">class</span> <span class="nc">CPU</span><span class="n">_TB</span> <span class="p">{</span>
+	<span class="c1">// ...
+</span>	<span class="kt">void</span> <span class="n">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_tickcount</span><span class="o">++</span><span class="p">;</span>
+
+		<span class="c1">// ... Handle peripheral inputs
+</span>
+		<span class="c1">// Allow combinatorial logic to settle before toggling the
+</span>		<span class="c1">// clock
+</span>		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">eval</span><span class="p">();</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_trace</span><span class="p">)</span> <span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span> <span class="o">-</span><span class="mi">2</span><span class="p">);</span>
+
+		<span class="c1">// Simulate the positive edge of the clock
+</span>		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">eval</span><span class="p">();</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_trace</span><span class="p">)</span> <span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="p">);</span>
+
+		<span class="c1">// Simulate the negative edge of the clock
+</span>		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">eval</span><span class="p">();</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_trace</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="o">+</span><span class="mi">5</span><span class="p">);</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">flush</span><span class="p">();</span>
+		<span class="p">}</span>
+		<span class="c1">// ... Handle any debugging output requirements
+</span>	<span class="p">}</span>
+	<span class="c1">// ...
+</span><span class="p">}</span></code></pre></figure>
+
+<p>This is going to be the first thing we’ll need to change.</p>
+
+<p>Specifically, we’re going to rebuild the inner loop portion of <code class="highlighter-rouge">main</code> function.
+The new inner loop is going to read a user keypress, and then its going to
+process that keypress as you would like.  For demonstration purposes, we’ll
+set this up so that:</p>
+
+<ol>
+  <li>
+    <p>If the user types a control-L, the screen will redraw itself</p>
+  </li>
+  <li>
+    <p>If the user types an ‘r’, the CPU will restart</p>
+  </li>
+  <li>
+    <p>If he types a ‘q’, we’ll quit.</p>
+  </li>
+  <li>
+    <p>Finally, if the user types a <code class="highlighter-rouge">t</code>, and only then, will we actually step the
+CPU <em>by one clock only</em>.</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="cp">#define	CTRL(X)	((X)&amp;0x01f)
+</span><span class="p">...</span>
+<span class="k">while</span><span class="p">(</span><span class="o">!</span><span class="n">done</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">// Get a user command
+</span>	<span class="n">chv</span> <span class="o">=</span> <span class="n">getch</span><span class="p">();</span>
+
+	<span class="c1">// Process the user's command
+</span>	<span class="k">switch</span><span class="p">(</span><span class="n">tolower</span><span class="p">(</span><span class="n">chv</span><span class="p">))</span> <span class="p">{</span>
+	<span class="c1">// Place any user keyboard commands you'd like here.
+</span>	<span class="p">...</span>
+	<span class="c1">// Some I use include:
+</span>	<span class="k">case</span> <span class="n">CTRL</span><span class="p">(</span><span class="sc">'L'</span><span class="p">):</span> <span class="c1">// Redraw the screen on control-L
+</span>		<span class="n">redrawwin</span><span class="p">(</span><span class="n">stdscr</span><span class="p">);</span>
+	<span class="k">case</span> <span class="sc">'q'</span><span class="p">:</span> <span class="c1">// Reset the CPU
+</span>		<span class="n">done</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+		<span class="k">break</span><span class="p">;</span>
+	<span class="k">case</span> <span class="sc">'r'</span><span class="p">:</span> <span class="c1">// Reset the CPU
+</span>		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">reset</span><span class="p">();</span>
+		<span class="k">break</span><span class="p">;</span>
+	<span class="k">case</span> <span class="sc">'t'</span><span class="p">:</span> <span class="c1">// Tick the CPU by one clock tick
+</span>		<span class="c1">// tb-&gt;tick() toggles our clock,
+</span>		<span class="c1">// and sends CPU values to a trace file
+</span>		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">tick</span><span class="p">();</span>
+		<span class="k">break</span><span class="p">;</span>
+	<span class="k">default</span><span class="o">:</span>
+		<span class="c1">// Either no keypress was available, or the
+</span>		<span class="c1">// user hit an accidental keypress.
+</span>		<span class="c1">//
+</span>		<span class="c1">// In either case: do nothing
+</span>	<span class="p">}</span>
+
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">show_cpu_state</span><span class="p">();</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>The code above presents a couple of new functions.  These include
+two new ncurses commands,
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#GETCHCLASS">getch()</a>
+and redrawwin(stdscr).  They also include
+some methods to add to our testbench.</p>
+
+<p>The first of these, <a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#GETCHCLASS">getch()</a>, simply returns a character from the terminal.
+This function also hides a beginner bug.  Normally, after any change to the
+screen, ncurses will require you to call
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#MYST-REFRESH">refresh()</a>
+to update the screen.
+The reality of ncurses is that none of the functions that write to the screen
+actually send any output to the screen until
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#MYST-REFRESH">refresh()</a>
+is called.  Hence, if you aren’t familiar with ncurses, you might get frustrated
+when nothing gets written to your screen.
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#GETCHCLASS">getch()</a>
+helps us avoid this error, by quietly calling
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#MYST-REFRESH">refresh()</a>
+for us anytime we call
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#GETCHCLASS">getch()</a>.</p>
+
+<p>The other command, redrawwin(stdscr), repaints the screen from scratch.  It’s
+not normally necessary, but if some other program has written to your screen
+you will enjoy the ability to refresh what’s on it.  Ctrl-L seems to be a
+common key among other programs for this purpose, 
+so we continue that capability here.</p>
+
+<p>You can also get creative in this main loop.  For example, if you know that
+your CPU will have a problem <code class="highlighter-rouge">N</code> clocks after reboot, you can run a simple
+<em>for loop</em> before entering this main while loop in order to skip those
+<code class="highlighter-rouge">N</code> clocks before starting your debugging session.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="c1">//...
+</span><span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">STARTUP_TICKS</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">tick</span><span class="p">();</span>
+<span class="k">while</span><span class="p">(</span><span class="o">!</span><span class="n">done</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">// ...
+</span><span class="p">}</span></code></pre></figure>
+
+<p>For example, you might wish to skip the bootloader that copies data from
+flash to memory, so you can debug your actual program.</p>
+
+<p>All in all, though, this while loop handles the logic necessary to step and
+reset the CPU, as well as the
+logic necessary to quit the simulation from the standpoint of the main loop. 
+The big capability we are missing at this point is how to implement these
+new testbench methods.</p>
+
+<h2 id="the-testbench-class">The Testbench Class</h2>
+
+<p>So let’s look at the test bench methods that will need to change.  From the
+source above, we needed three functions: <code class="highlighter-rouge">reset()</code>, <code class="highlighter-rouge">show_cpu_state()</code>, as
+well as the <code class="highlighter-rouge">tick()</code> function that we’ve already discussed.</p>
+
+<p>Of these three functions, <code class="highlighter-rouge">reset()</code>, is the simplest to implement–assuming
+your CPU has an input for a synchronous reset:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="kt">void</span> <span class="n">CPU_TB</span><span class="o">::</span><span class="n">reset</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_reset</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="n">tick</span><span class="p">();</span>
+	<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_reset</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>Showing the CPU’s state will take a bit more work.  The first step is to
+find the variables and registers within
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>’s
+variable set.  To do this, I usually browse the <code class="highlighter-rouge">*.h</code> file found within the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+output directory.  (This defaults to <code class="highlighter-rouge">obj_dir/</code>).  In the case of the
+<a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a>, the register set
+can be found in
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>’s
+<code class="highlighter-rouge">v__DOT__thecpu__DOT__regset</code> variable.  If you aren’t familiar with
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>’s
+naming scheme, this is the name
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+gives to the <code class="highlighter-rouge">regset</code> array found
+within the <code class="highlighter-rouge">thecpu</code> module found at the top level.  Be aware that
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+has recently changed its naming schemes, so you may have to look a bit.</p>
+
+<p>Now that I know where to find my register array, I can copy it to a local
+variable where I can then use it:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">CPU_TB</span><span class="o">::</span><span class="n">read_state_from_cpu</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">memcpy</span><span class="p">(</span><span class="n">m_state</span><span class="p">.</span><span class="n">r</span><span class="p">,</span> <span class="n">m_core</span><span class="o">-&gt;</span><span class="n">v__DOT__thecpu__DOT__regset</span><span class="p">,</span>
+		<span class="n">NREGS</span> <span class="o">*</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">v__DOT__thecpu__DOT__regset</span><span class="p">[</span><span class="mi">0</span><span class="p">]));</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>Now that we know what our register values are, it’s time to place them onto
+the screen.  The easiest way to do this is with the
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#GETCHCLASS">mvprintw()</a>
+<a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+command.  This command combines screen movement with a printf-like
+interface.  Hence, we can write the values of all our registers to the
+screen, as in:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">CPU_TB</span><span class="o">::</span><span class="n">show_cpu_state</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">read_state_from_cpu</span><span class="p">();</span>
+
+	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="mi">16</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">mvprintw</span><span class="p">((</span><span class="n">i</span><span class="o">/</span><span class="mi">4</span><span class="p">),</span><span class="mi">20</span><span class="o">*</span><span class="p">(</span><span class="n">i</span><span class="o">&amp;</span><span class="mi">3</span><span class="p">),</span> <span class="s">"R%2d: 0x%08x"</span><span class="p">,</span> <span class="n">m_state</span><span class="p">.</span><span class="n">r</span><span class="p">[</span><span class="n">i</span><span class="p">]);</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>Don’t get surprised: the coordinates are not in <code class="highlighter-rouge">x, y</code> order, but rather
+<code class="highlighter-rouge">y, x</code> order.</p>
+
+<p>You can also get as fancy as you want in this step.  For example, I like to
+look up the instruction memory at the program counter, and disassemble
+the instructions in the CPU pipeline.</p>
+
+<p>In my case, it has gotten so that every time I need to debug a register
+within the
+<a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a>, I tend to just add another
+<a href="http://invisible-island.net/ncurses/NCURSES-Programming-HOWTO.html#GETCHCLASS">mvprintw()</a>
+function call to my CPU-state display, so I can see how that new line
+is being adjusted as the CPU runs.  The result looks something like Fig
+4 below.</p>
+
+<table style="float: none"><caption>Fig 4: Debugging the ZipCPU in simulation</caption><tr><td><img src="/img/zipdbg-simtest.png" alt="Snapshot of the ZipCPU simulation debugger" width="780" /></td></tr></table>
+
+<p>Indeed, I have not only register sets and disassembled instruction words,
+but also bus debugging information (<code class="highlighter-rouge">PFCACH</code>, <code class="highlighter-rouge">PF BUS</code>, <code class="highlighter-rouge">MEMBUS</code>, <code class="highlighter-rouge">SYSBSM</code>,
+etc), and pipeline stall information (see the <code class="highlighter-rouge">Ck</code> at the far left).</p>
+
+<p>That’s just about it: you’ve now made all of the modifications you need to make
+to turn your
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/sim/verilator/testb.h">test harness</a> into a <a href="https://github.com/ZipCPU/zipcpu/blob/master/sim/verilator/zippy_tb.cpp">usable CPU debugger</a>.</p>
+
+<h2 id="compiling-with-ncurses">Compiling with ncurses</h2>
+
+<p>Getting this test bench to compile shouldn’t be any more difficult than
+getting any
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+based test bench to compile, but with one significant
+difference: You’ll need to add <code class="highlighter-rouge">-lncurses</code> to your final compile to make
+sure that the
+<a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+library gets included.</p>
+
+<h2 id="the-big-drawback-to-an-ncurses-based-display">The big drawback to an ncurses based display</h2>
+
+<p>Having used a debugger of this form for a couple of years now, I find there
+is one significant drawback to it: once you type ‘t’ and cause the simulator
+to ‘tick’ the clock and step the processor forward by a single clock tick,
+there’s no going back to look at the previous state.</p>
+
+<p>While I’ve dreamed of implementing a ‘back’ key, my
+current approach is to do any further debugging with printf() and
+<a href="http://gtkwave.sourceforge.net">GTKWave</a>.</p>
+
+<p>The problem with printf() based debugging at this point, though, is that
+the screen is already being used.  While I suppose you could pipe the output
+of an <a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a>
+based program into a file, the screen control keys that
+<a href="https://en.wikipedia.org/wiki/Ncurses">ncurses</a> uses
+are likely going to keep it from being very legible.</p>
+
+<p>I get around this problem by adding some debugging functions to the <code class="highlighter-rouge">tick()</code>
+method.  Specifically, between every positive clock edge and the next,
+I will dump any debugging information such as the program counter or register
+set, to a debugging file so that I can look back later and understand
+what just took place.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">CPU_TB</span><span class="o">::</span><span class="n">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">// ...
+</span>	<span class="c1">// Provide any simulated inputs to your core here.
+</span>	<span class="c1">// ...
+</span>
+	<span class="c1">// Tick the clock
+</span>	<span class="c1">// ...
+</span>
+	<span class="c1">// Take a moment to write things to a debugging file, for after
+</span>	<span class="c1">// action tracing.  I just use fprintf's here.
+</span>	<span class="k">if</span> <span class="p">(</span><span class="n">m_dbgfp</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">fprintf</span><span class="p">(</span><span class="n">m_dbgfp</span><span class="p">,</span> <span class="s">"Some useful information</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+	<span class="p">}</span>
+<span class="p">}</span></code></pre></figure>
+
+<h2 id="other-things-you-can-do">Other things you can do</h2>
+
+<p>If you haven’t figured it out yet, the moral of all of this story is that
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+turns an FPGA debugging and development session into any other C++ program.
+You can add functionality to this program just like you would any other.</p>
+
+<p>For example, here are some additional functions that you may find very useful:</p>
+
+<ul>
+  <li>
+    <p>Creating commands to simulate debugging the CPU via your chosen hardware
+debugging interface.</p>
+
+    <p>On the <a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a>, the step command is
+implemented this way.  Typing an ‘s’ will
+“step” the CPU by one instruction, using the same interface that will be
+needed to control the CPU for debugging later.</p>
+  </li>
+  <li>
+    <p>A “Go” until breakpoint command</p>
+  </li>
+</ul>
+
+<p>Perhaps I should describe how to use the
+<a href="https://github.com/ZipCPU/zipcpu">ZipCPU</a> debugging simulator as an example
+of this lesson?
+It’s actually really fun to watch, since you can see what happens on each
+pipeline step, when instructions need to stall, or even how the pipeline
+fills behind a stalled instruction.</p>
+
+<p>Let me know what you think!</p>
+
+  </div>
+
+</article>
+
+
+<div id="disqus_thread"></div>
+<script>
+var disqus_config=function(){
+  this.page.url="http://zipcpu.com/zipcpu/2017/07/26/cpu-sim-debugger.html";
+  this.page.identifier="/zipcpu/2017/07/26/cpu-sim-debugger";
+};
+(function(){
+	var d=document, s=d.createElement('script');
+	s.src = 'https://zipcpu-com.disqus.com/embed.js';
+	s.setAttribute('data-timestamp',+new Date());
+	(d.head||d.body).appendChild(s);
+	})();
+</script>
+<noscript>Please enable JavaScript to view the <A HREF="https://disqus.com/?ref_noscript">comments powered by Disqus.</A></noscript>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>In the morning sow thy seed, and in the evening withhold not thine hand: for thou knowest not whether shall prosper, either this or that, or whether they both shall be alike good.  (Eccl 11:6)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
