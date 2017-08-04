@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>How to eliminate button bounces with digital logic</title>
+  <meta name="description" content="The fundamental way to avoid FPGA Hell isto start from a small design and to build to a more complex design one smallpiece at a time.  You might even call th...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/08/04/debouncing.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">How to eliminate button bounces with digital logic</h1>
+    <p class="post-meta"><time datetime="2017-08-04T00:00:00-04:00" itemprop="datePublished">Aug 4, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>The fundamental way to avoid <a href="/fpga-hell.md">FPGA Hell</a> is
+to start from a small design and to build to a more complex design one small
+piece at a time.  You might even call this <em>good engineering process.</em>  Along
+the way, you’ll want to avoid changing too many things at once.  Lest, if you
+introduce too many changes at the same time, you’ll never know which change
+is keeping your design from working.  Hence, your goal should be to build
+your complex designs from an initial simple design, modified by only simple
+changes.</p>
+
+<p>The corollary to this rule is to make certain that your test and debug
+infrastructure, I like to call this your <em>scaffolding</em>, is never one of
+multiple unknowns within your design.  There is a time for testing the
+scaffolding of your design: <em>before you need it</em>.  You want to be convinced
+in the reliability of your scaffolding before you ever commit your time
+and design to its strength.</p>
+
+<p>This has a particular application when you wish to use the buttons, switches,
+or keypad entry mechanisms to your design.  My advice?  Don’t use them as part
+of your debug infrastructure until you have <em>proven</em> that they work the way
+you want them to work first.  The reason is that buttons bounce, and
+creating a signal that doesn’t bounce requires digital logic.</p>
+
+<p>What makes a button debouncing circuit particularly unique when it comes to
+debugging, is that it is
+difficult to test apart from using a real button.  You just can’t simulate
+an unknown piece of hardware’s response very well.  This is what makes the
+coupling of the <a href="https://github.com/ZipCPU/dbgbus">debugging bus</a> and
+<a href="https://github.com/ZipCPU/wbscope">wishbone scope</a> so powerful: using them,
+you can not only measure what’s going on any time a button gets pressed, but
+you can also measure whether or not your debouncing logic works within that
+context.</p>
+
+<p>In this article, we will examine how to debounce a set of button inputs,
+so that they can then be used as part of your test infrastructure.</p>
+
+<h2 id="generating-events">Generating Events</h2>
+
+<p>User inputs, whether they be button presses, switches, or other, can be a very
+valuable part of your design.  They can be used
+to reset your board, to start a test, or even to enter data into your design.
+Indeed, once you cut the umbilical (<a href="https://en.wikipedia.org/wiki/JTAG">JTAG</a>,
+<a href="https://en.wikipedia.org/wiki/Universal_asynchronous_receiver/transmitter">UART</a>, or
+<a href="https://github.com/ZipCPU/dbgbus/">debugging bus</a>) to your
+board, such inputs may be the only means you have remaining of controlling
+your board.</p>
+
+<p>To understand how valuable these inputs can be, consider the following
+scenarios where student’s have tried to use a button:</p>
+
+<ul>
+  <li>
+    <p>One student thought it would be nice to create a design that prints <a href="https://en.wikipedia.org/wiki/&quot;Hello,_World!&quot;_program">Hello
+World</a>
+anytime a button is pressed.</p>
+
+    <p>This student hadn’t yet gotten his first serial port to work.  By adding
+the button processing to his design, he added an additional unknown to the
+design and was thus unable to discern which piece of logic was failing
+when the whole didn’t work.</p>
+  </li>
+  <li>
+    <p>Another student’s challenge was to increment a counter every time a key was
+pressed.
+<a href="https://forum.digilentinc.com/topic/3992-something-simple-is-apparently-impossible-incrdec-number/">[1]</a></p>
+
+    <p>This sounds easy, right?</p>
+
+    <p>This student was surprised to discover that every time he pressed a button,
+his counter jumped by more than a single count.  He was expecting a single
+state change only.  Indeed, his design depended upon being able to detect
+singular button press events.  The multiple detected events “broke” the
+design he was building.</p>
+  </li>
+</ul>
+
+<p>While both of these applications are valid applications of a button, both
+students ended up stuck with an FPGA design that didn’t work because they
+weren’t aware of the difficulty associated with buttons: they bounce.</p>
+
+<p>Turning a button from a bouncing electrical signal into a useful entry method
+requires some <em>debouncing logic</em>.</p>
+
+<h2 id="metastability-and-avoiding-the-beginners-mistakes">Metastability, and avoiding the beginner’s mistakes</h2>
+
+<p>Before we dig deeply into how to <em>debounce</em> a button, let’s take a quick
+moment to mention how <em>not</em> to work with a button.</p>
+
+<p>The beginner is often enticed by the capabilities of a chip to transition on 
+a positive edge.  Hence, I’ve seen many beginners start their approach with</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	event = 1'b0;
+always @(posedge i_button, posedge i_reset)
+	if (i_reset)
+		// Reset our system whenever i_reset is true
+		event &lt;= 1'b0
+	else
+		event &lt;= 1'b1;</code></pre></figure>
+
+<p>The same mistake can be manifest in an attempt to count events, as in:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	event = 1'b0;
+always @(posedge i_button, posedge i_reset)
+	if (i_reset)
+		counter &lt;= 0;
+	else
+		counter &lt;= counter + 1'b1;</code></pre></figure>
+
+<p>Both of these approaches to measuring buttons are problematic.</p>
+
+<p>Here’s why:</p>
+
+<ul>
+  <li>
+    <p><strong>Timing</strong>: <code class="highlighter-rouge">i_button</code> is not a clock.  Your tool-suite will struggle to
+analyze the timing between when a button press event takes place and
+the rest of the logic within your design.  It’s going to try to optimize
+the distance (in time and space) between the button press logic taking
+place and the logic that depends upon it, and since the button press wasn’t
+a clock the result will be difficult to analyze.  The result will be
+unreliable logic in the rest of your circuit.</p>
+  </li>
+  <li>
+    <p><strong>Asynchronous reset</strong>’s tend to have a propagation delay when they work
+their way through your circuitry.  Therefore, they may reset one portion
+of your circuitry before another.  While this might not be such a problem
+if every part of the circuit gets reset eventually, this doesn’t mitigate
+the exit from the asynchronous reset .  Hence, when using an asynchronous
+reset, you may find some pieces of logic are released from reset before
+other pieces of logic. (This is <em>bad</em>)</p>
+
+    <p>Particularly problematic are spurious reset signals that last for less than
+a clock interval, perhaps created by some radio frequency interference
+within the FPGA board’s environment.  These signals may partially but not
+completely reset an FPGA’s logic.</p>
+
+    <p><strong>The beginner’s reset rule:</strong> Just avoid the asynchronous reset.  This
+is easily done by removing <code class="highlighter-rouge">posedge i_reset</code> from the dependency line in
+the always block.</p>
+  </li>
+</ul>
+
+<p>Given this information, let’s try to build our logic again:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	down  = 1'b0;
+initial	event = 1'b0;
+always @(posedge i_clk)
+	if (i_reset)
+	begin
+		down  &lt;= 0;
+		event &lt;= 0;
+	end else begin
+		down &lt;= i_button;
+		event &lt;= (i_button)&amp;&amp;(!down);
+	end</code></pre></figure>
+
+<p>This approach, while better than the first one, is still problematic.</p>
+
+<p>While this avoids the asynchronous reset, it now has a problem with
+<a href="https://en.wikipedia.org/wiki/Metastability_in_electronics">metastability</a>. 
+Specifically, <code class="highlighter-rouge">i_button</code> may not have settled for enough time prior to the
+clock to create a stable logic signal.  As a result, the <code class="highlighter-rouge">down</code> register may
+be indeterminate. Some parts of your circuitry may decide <code class="highlighter-rouge">down</code> is true,
+while other parts deciding <code class="highlighter-rouge">down</code> is false.  You may get two events in a
+row, or no events at all.</p>
+
+<p>To avoid these problems, stick to these rules:</p>
+
+<ol>
+  <li>
+    <p>Use the positive edge of a single clock for <em>all</em> of your logic.
+I like to use the same basic clock wire, <code class="highlighter-rouge">i_clk</code>, within all my modules
+for this purpose.  The <code class="highlighter-rouge">i_clk</code> signal itself is either externally generated,
+or the result of a PLL applied to an external clock signal.</p>
+  </li>
+  <li>
+    <p>For any logic inputs that are not created synchronously to your clock,
+such as your button inputs, clock them through a pair of flip flops
+(example below).  This applies to all external user input devices, such
+as buttons, switches, and keypad entry.  This rule also applies to all
+of your external asynchronous inputs as well: PS/2 devices, UARTs, or
+indeed any wires coming from external circuits that do not share your clock.</p>
+
+    <p>While this alone doesn’t solve the problem of bouncing, it will make
+actually dealing with it a lot easier.</p>
+  </li>
+</ol>
+
+<p>Using these rules, we can create a clock synchronous button input.  The first
+step is to run the button input through two flip-flops to avoid any
+<a href="https://en.wikipedia.org/wiki/Metastability_in_electronics">metastability</a>
+issues.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	sync_pipe      = 1'b0;
+initial	r_button_state = 1'b0;
+always @(posedge i_clk)
+	{ r_button_state, sync_pipe }
+		&lt;= { sync_pipe, i_button };</code></pre></figure>
+
+<p><code class="highlighter-rouge">r_button_state</code> has now gone through two flip flops from <code class="highlighter-rouge">i_button</code>, and so
+it will be a one or a zero to all logic within your FPGA.  Now that the
+button input has been synchronized to our clock, we can detect when the
+button input changes with such simple code as:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	r_last         = 1'b0;
+initial	r_button_event = 1'b0;
+always @(posedge i_clk)
+begin
+	r_last &lt;= r_button_state;
+	r_button_event &lt;= (r_button_state)&amp;&amp;(!r_last);
+end</code></pre></figure>
+
+<p>The nice part of this technique for generating <code class="highlighter-rouge">r_button_event</code>, is that it
+will only ever be true <em>once</em> for every time the <code class="highlighter-rouge">i_button</code> goes from off to
+on.</p>
+
+<p>The other common piece of logic drawn from an external button input is a
+counter.  Let’s assume that our reset input, <code class="highlighter-rouge">i_reset</code> is synchronous–perhaps
+you created it via the <a href="https://github.com/ZipCPU/dbgbus">dbgbus</a>
+infrastructure <a href="/blog/2017/06/28/dbgbus-goal.html">we’ve already
+built</a>.  We can
+use that input to increment our counter, and then we can use the button event
+we just created to increment a counter:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_reset)
+		counter &lt;= 0;
+	else if (r_button_event)
+		counter &lt;= counter + 1'b1;</code></pre></figure>
+
+<p>At this point we’ve only solved the problems with metastability, the
+asynchronous clock, and synchronizing the button input to our clock.
+Now that we know how to avoid these mistakes, let’s <em>debounce</em> this button.</p>
+
+<h2 id="a-very-simple-debouncer">A Very Simple Debouncer</h2>
+
+<p>The basic approach to debouncing a button is to prevent the button’s output
+from changing more than once every <code class="highlighter-rouge">N</code> clocks.  Hence, we’ll build our
+approach to debouncing around a timer, <code class="highlighter-rouge">timer</code>, that simply counts down to
+zero.  Any time this <code class="highlighter-rouge">timer</code> reaches zero, the current value will be forwarded
+to the output.  Further, we can control the time interval by just adjusting
+the number of bits in the timer.  We’ll call this number of bits <code class="highlighter-rouge">LGWAIT</code>.</p>
+
+<p>Given those goals, here’s the code for a very simple digital logic debouncer:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial timer = {(LGWAIT){1'b1}};
+always @(posedge i_clk)
+	timer &lt;= timer - 1'b1;
+always @(posedge i_clk)
+	if (timer == 0)
+		o_debounced &lt;= r_button_state;</code></pre></figure>
+
+<p>This approach should be good enough for most uses, so if you just want a very
+simple debouncing circuit this one will work.</p>
+
+<p>However, if the latency in reporting the button press is important to you,
+this piece of logic may cause the button press indication to wait for up to
+<code class="highlighter-rouge">2^(LGWAIT)</code> samples before being reported.</p>
+
+<p>So, let’s return to this concept and see if we can’t do any better.</p>
+
+<h2 id="a-debouncer-with-more-immediate-results">A Debouncer with more Immediate Results</h2>
+
+<p>This time, let’s rebuild this debouncing circuit around the idea that a
+pressed button should be reported immediately, but that following changes
+should be held off at least <code class="highlighter-rouge">N=2^(LGWAIT)</code> clocks after that.</p>
+
+<p>Further, we’ll follow some of the lessons from our post on how to <a href="/blog/2017/06/12/minimizing-luts.html">minimize
+logic resources</a>.
+In particular, we’ll use a second register, <code class="highlighter-rouge">ztimer</code>, together with our timer.
+This register will be a single wire only, and we’ll set it to true any time
+<code class="highlighter-rouge">timer</code> is zero.  Finally, as we are going to set this up, any time <code class="highlighter-rouge">ztimer</code>
+is true the circuit will be responsive to a changing signal.</p>
+
+<p>So here’s the code for the <code class="highlighter-rouge">timer</code> and <code class="highlighter-rouge">ztimer</code>:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	ztimer = 1'b1;
+initial	timer  = 0;
+always @(posedge i_clk)
+	if ((ztimer)&amp;&amp;(different))
+	begin
+		timer  &lt;= {(LGWAIT) {1'b1} };
+		ztimer &lt;= 1'b0;
+	end else if (!ztimer)
+	begin
+		timer  &lt;= timer - 1'b1;
+		ztimer &lt;= (timer[(LGWAIT-1):1] == 0);
+	end else begin
+		ztimer &lt;= 1'b1;
+		timer  &lt;= 0;
+	end</code></pre></figure>
+
+<p>The count-down will begin any time the <code class="highlighter-rouge">timer</code> is at zero (<code class="highlighter-rouge">ztimer</code> is high),
+and the inputs are <code class="highlighter-rouge">different</code> from what they were.  (We’ll come back to this
+in a moment.)    Once the timer is running, it will count down to zero.
+When it hits zero, it will hold there until another change has been detected.</p>
+
+<p>As mentioned above, we’ll use the register <code class="highlighter-rouge">different</code> to signal any time the
+input is different from the output of our debouncing circuit.  <code class="highlighter-rouge">different</code>,
+though, will then need to remain true until any ongoing countdown completes.
+Hence, as long as <code class="highlighter-rouge">different</code> gets set, either when the timer isn’t counting
+or between count-downs, <code class="highlighter-rouge">different</code> will make sure that the timer restarts
+again.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	different &lt;= ((different)&amp;&amp;(!ztimer))||(r_in != o_debounced);</code></pre></figure>
+
+<p>We now finally have all the pieces necessary to create our low-latency
+debounced output.  This output will be set to whatever we just finished
+reading, but only ever anytime <code class="highlighter-rouge">ztimer</code> is set.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_debounced = { (NIN) {1'b0} };
+always @(posedge i_clk)
+	if (ztimer)
+		o_debounced &lt;= r_last;</code></pre></figure>
+
+<p>Notice the choice to set <code class="highlighter-rouge">o_debounced</code> any time <code class="highlighter-rouge">ztimer</code> is true, coupled with
+the fact that <code class="highlighter-rouge">ztimer</code> idles at zero.  Because of this, any time a button is
+pressed (or released), while the circuit is idle (<code class="highlighter-rouge">ztimer</code> is true), will
+immediately adjust <code class="highlighter-rouge">o_debounced</code> with the new value.  Subsequent bounces,
+until the signal becomes stable again, will be limited to only change every
+<code class="highlighter-rouge">2^LGWAIT</code> clocks.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>While this post presents <a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v">working debouncing
+logic</a>, the
+task remains far from complete.  For example, how many bits (<code class="highlighter-rouge">LGWAIT</code>) need
+to be allocated to the counter?  Not quite so subtle is the question of how
+shall this capability be proven?  In particular, this logic requires
+an external button input bounce in order to properly verify its functionality.</p>
+
+<p>Our next post, therefore, will focus on how to measure bounces so we can
+tell if a bounce has taken place.  After that, we’ll discuss how to modify
+the debugging bus for this purpose, and to get a trace from within the
+design so we can see what’s going on.  Then we’ll go and move on to the next
+topic.</p>
+
+
+  </div>
+
+</article>
+
+
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    
+    <em>Can the Ethiopian change his skin, or the leopard his spots? then may ye also do good, that are accustomed to do evil. (Jer 13:23)</em>
+    
+
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and CPU design. This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

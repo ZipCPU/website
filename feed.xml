@@ -6,9 +6,358 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 01 Aug 2017 22:07:58 -0400</pubDate>
-    <lastBuildDate>Tue, 01 Aug 2017 22:07:58 -0400</lastBuildDate>
+    <pubDate>Fri, 04 Aug 2017 06:31:40 -0400</pubDate>
+    <lastBuildDate>Fri, 04 Aug 2017 06:31:40 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
+    
+      <item>
+        <title>How to eliminate button bounces with digital logic</title>
+        <description>&lt;p&gt;The fundamental way to avoid &lt;a href=&quot;/fpga-hell.md&quot;&gt;FPGA Hell&lt;/a&gt; is
+to start from a small design and to build to a more complex design one small
+piece at a time.  You might even call this &lt;em&gt;good engineering process.&lt;/em&gt;  Along
+the way, you’ll want to avoid changing too many things at once.  Lest, if you
+introduce too many changes at the same time, you’ll never know which change
+is keeping your design from working.  Hence, your goal should be to build
+your complex designs from an initial simple design, modified by only simple
+changes.&lt;/p&gt;
+
+&lt;p&gt;The corollary to this rule is to make certain that your test and debug
+infrastructure, I like to call this your &lt;em&gt;scaffolding&lt;/em&gt;, is never one of
+multiple unknowns within your design.  There is a time for testing the
+scaffolding of your design: &lt;em&gt;before you need it&lt;/em&gt;.  You want to be convinced
+in the reliability of your scaffolding before you ever commit your time
+and design to its strength.&lt;/p&gt;
+
+&lt;p&gt;This has a particular application when you wish to use the buttons, switches,
+or keypad entry mechanisms to your design.  My advice?  Don’t use them as part
+of your debug infrastructure until you have &lt;em&gt;proven&lt;/em&gt; that they work the way
+you want them to work first.  The reason is that buttons bounce, and
+creating a signal that doesn’t bounce requires digital logic.&lt;/p&gt;
+
+&lt;p&gt;What makes a button debouncing circuit particularly unique when it comes to
+debugging, is that it is
+difficult to test apart from using a real button.  You just can’t simulate
+an unknown piece of hardware’s response very well.  This is what makes the
+coupling of the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging bus&lt;/a&gt; and
+&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; so powerful: using them,
+you can not only measure what’s going on any time a button gets pressed, but
+you can also measure whether or not your debouncing logic works within that
+context.&lt;/p&gt;
+
+&lt;p&gt;In this article, we will examine how to debounce a set of button inputs,
+so that they can then be used as part of your test infrastructure.&lt;/p&gt;
+
+&lt;h2 id=&quot;generating-events&quot;&gt;Generating Events&lt;/h2&gt;
+
+&lt;p&gt;User inputs, whether they be button presses, switches, or other, can be a very
+valuable part of your design.  They can be used
+to reset your board, to start a test, or even to enter data into your design.
+Indeed, once you cut the umbilical (&lt;a href=&quot;https://en.wikipedia.org/wiki/JTAG&quot;&gt;JTAG&lt;/a&gt;,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Universal_asynchronous_receiver/transmitter&quot;&gt;UART&lt;/a&gt;, or
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/&quot;&gt;debugging bus&lt;/a&gt;) to your
+board, such inputs may be the only means you have remaining of controlling
+your board.&lt;/p&gt;
+
+&lt;p&gt;To understand how valuable these inputs can be, consider the following
+scenarios where student’s have tried to use a button:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;One student thought it would be nice to create a design that prints &lt;a href=&quot;https://en.wikipedia.org/wiki/&amp;quot;Hello,_World!&amp;quot;_program&quot;&gt;Hello
+World&lt;/a&gt;
+anytime a button is pressed.&lt;/p&gt;
+
+    &lt;p&gt;This student hadn’t yet gotten his first serial port to work.  By adding
+the button processing to his design, he added an additional unknown to the
+design and was thus unable to discern which piece of logic was failing
+when the whole didn’t work.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Another student’s challenge was to increment a counter every time a key was
+pressed.
+&lt;a href=&quot;https://forum.digilentinc.com/topic/3992-something-simple-is-apparently-impossible-incrdec-number/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
+
+    &lt;p&gt;This sounds easy, right?&lt;/p&gt;
+
+    &lt;p&gt;This student was surprised to discover that every time he pressed a button,
+his counter jumped by more than a single count.  He was expecting a single
+state change only.  Indeed, his design depended upon being able to detect
+singular button press events.  The multiple detected events “broke” the
+design he was building.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;While both of these applications are valid applications of a button, both
+students ended up stuck with an FPGA design that didn’t work because they
+weren’t aware of the difficulty associated with buttons: they bounce.&lt;/p&gt;
+
+&lt;p&gt;Turning a button from a bouncing electrical signal into a useful entry method
+requires some &lt;em&gt;debouncing logic&lt;/em&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;metastability-and-avoiding-the-beginners-mistakes&quot;&gt;Metastability, and avoiding the beginner’s mistakes&lt;/h2&gt;
+
+&lt;p&gt;Before we dig deeply into how to &lt;em&gt;debounce&lt;/em&gt; a button, let’s take a quick
+moment to mention how &lt;em&gt;not&lt;/em&gt; to work with a button.&lt;/p&gt;
+
+&lt;p&gt;The beginner is often enticed by the capabilities of a chip to transition on 
+a positive edge.  Hence, I’ve seen many beginners start their approach with&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	event = 1&#39;b0;
+always @(posedge i_button, posedge i_reset)
+	if (i_reset)
+		// Reset our system whenever i_reset is true
+		event &amp;lt;= 1&#39;b0
+	else
+		event &amp;lt;= 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The same mistake can be manifest in an attempt to count events, as in:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	event = 1&#39;b0;
+always @(posedge i_button, posedge i_reset)
+	if (i_reset)
+		counter &amp;lt;= 0;
+	else
+		counter &amp;lt;= counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Both of these approaches to measuring buttons are problematic.&lt;/p&gt;
+
+&lt;p&gt;Here’s why:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;Timing&lt;/strong&gt;: &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt; is not a clock.  Your tool-suite will struggle to
+analyze the timing between when a button press event takes place and
+the rest of the logic within your design.  It’s going to try to optimize
+the distance (in time and space) between the button press logic taking
+place and the logic that depends upon it, and since the button press wasn’t
+a clock the result will be difficult to analyze.  The result will be
+unreliable logic in the rest of your circuit.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;Asynchronous reset&lt;/strong&gt;’s tend to have a propagation delay when they work
+their way through your circuitry.  Therefore, they may reset one portion
+of your circuitry before another.  While this might not be such a problem
+if every part of the circuit gets reset eventually, this doesn’t mitigate
+the exit from the asynchronous reset .  Hence, when using an asynchronous
+reset, you may find some pieces of logic are released from reset before
+other pieces of logic. (This is &lt;em&gt;bad&lt;/em&gt;)&lt;/p&gt;
+
+    &lt;p&gt;Particularly problematic are spurious reset signals that last for less than
+a clock interval, perhaps created by some radio frequency interference
+within the FPGA board’s environment.  These signals may partially but not
+completely reset an FPGA’s logic.&lt;/p&gt;
+
+    &lt;p&gt;&lt;strong&gt;The beginner’s reset rule:&lt;/strong&gt; Just avoid the asynchronous reset.  This
+is easily done by removing &lt;code class=&quot;highlighter-rouge&quot;&gt;posedge i_reset&lt;/code&gt; from the dependency line in
+the always block.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Given this information, let’s try to build our logic again:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	down  = 1&#39;b0;
+initial	event = 1&#39;b0;
+always @(posedge i_clk)
+	if (i_reset)
+	begin
+		down  &amp;lt;= 0;
+		event &amp;lt;= 0;
+	end else begin
+		down &amp;lt;= i_button;
+		event &amp;lt;= (i_button)&amp;amp;&amp;amp;(!down);
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This approach, while better than the first one, is still problematic.&lt;/p&gt;
+
+&lt;p&gt;While this avoids the asynchronous reset, it now has a problem with
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastability&lt;/a&gt;. 
+Specifically, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt; may not have settled for enough time prior to the
+clock to create a stable logic signal.  As a result, the &lt;code class=&quot;highlighter-rouge&quot;&gt;down&lt;/code&gt; register may
+be indeterminate. Some parts of your circuitry may decide &lt;code class=&quot;highlighter-rouge&quot;&gt;down&lt;/code&gt; is true,
+while other parts deciding &lt;code class=&quot;highlighter-rouge&quot;&gt;down&lt;/code&gt; is false.  You may get two events in a
+row, or no events at all.&lt;/p&gt;
+
+&lt;p&gt;To avoid these problems, stick to these rules:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Use the positive edge of a single clock for &lt;em&gt;all&lt;/em&gt; of your logic.
+I like to use the same basic clock wire, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clk&lt;/code&gt;, within all my modules
+for this purpose.  The &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clk&lt;/code&gt; signal itself is either externally generated,
+or the result of a PLL applied to an external clock signal.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;For any logic inputs that are not created synchronously to your clock,
+such as your button inputs, clock them through a pair of flip flops
+(example below).  This applies to all external user input devices, such
+as buttons, switches, and keypad entry.  This rule also applies to all
+of your external asynchronous inputs as well: PS/2 devices, UARTs, or
+indeed any wires coming from external circuits that do not share your clock.&lt;/p&gt;
+
+    &lt;p&gt;While this alone doesn’t solve the problem of bouncing, it will make
+actually dealing with it a lot easier.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Using these rules, we can create a clock synchronous button input.  The first
+step is to run the button input through two flip-flops to avoid any
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastability&lt;/a&gt;
+issues.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	sync_pipe      = 1&#39;b0;
+initial	r_button_state = 1&#39;b0;
+always @(posedge i_clk)
+	{ r_button_state, sync_pipe }
+		&amp;lt;= { sync_pipe, i_button };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;r_button_state&lt;/code&gt; has now gone through two flip flops from &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt;, and so
+it will be a one or a zero to all logic within your FPGA.  Now that the
+button input has been synchronized to our clock, we can detect when the
+button input changes with such simple code as:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	r_last         = 1&#39;b0;
+initial	r_button_event = 1&#39;b0;
+always @(posedge i_clk)
+begin
+	r_last &amp;lt;= r_button_state;
+	r_button_event &amp;lt;= (r_button_state)&amp;amp;&amp;amp;(!r_last);
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The nice part of this technique for generating &lt;code class=&quot;highlighter-rouge&quot;&gt;r_button_event&lt;/code&gt;, is that it
+will only ever be true &lt;em&gt;once&lt;/em&gt; for every time the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt; goes from off to
+on.&lt;/p&gt;
+
+&lt;p&gt;The other common piece of logic drawn from an external button input is a
+counter.  Let’s assume that our reset input, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt; is synchronous–perhaps
+you created it via the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;dbgbus&lt;/a&gt;
+infrastructure &lt;a href=&quot;/blog/2017/06/28/dbgbus-goal.html&quot;&gt;we’ve already
+built&lt;/a&gt;.  We can
+use that input to increment our counter, and then we can use the button event
+we just created to increment a counter:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+		counter &amp;lt;= 0;
+	else if (r_button_event)
+		counter &amp;lt;= counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;At this point we’ve only solved the problems with metastability, the
+asynchronous clock, and synchronizing the button input to our clock.
+Now that we know how to avoid these mistakes, let’s &lt;em&gt;debounce&lt;/em&gt; this button.&lt;/p&gt;
+
+&lt;h2 id=&quot;a-very-simple-debouncer&quot;&gt;A Very Simple Debouncer&lt;/h2&gt;
+
+&lt;p&gt;The basic approach to debouncing a button is to prevent the button’s output
+from changing more than once every &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; clocks.  Hence, we’ll build our
+approach to debouncing around a timer, &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt;, that simply counts down to
+zero.  Any time this &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; reaches zero, the current value will be forwarded
+to the output.  Further, we can control the time interval by just adjusting
+the number of bits in the timer.  We’ll call this number of bits &lt;code class=&quot;highlighter-rouge&quot;&gt;LGWAIT&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Given those goals, here’s the code for a very simple digital logic debouncer:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial timer = {(LGWAIT){1&#39;b1}};
+always @(posedge i_clk)
+	timer &amp;lt;= timer - 1&#39;b1;
+always @(posedge i_clk)
+	if (timer == 0)
+		o_debounced &amp;lt;= r_button_state;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This approach should be good enough for most uses, so if you just want a very
+simple debouncing circuit this one will work.&lt;/p&gt;
+
+&lt;p&gt;However, if the latency in reporting the button press is important to you,
+this piece of logic may cause the button press indication to wait for up to
+&lt;code class=&quot;highlighter-rouge&quot;&gt;2^(LGWAIT)&lt;/code&gt; samples before being reported.&lt;/p&gt;
+
+&lt;p&gt;So, let’s return to this concept and see if we can’t do any better.&lt;/p&gt;
+
+&lt;h2 id=&quot;a-debouncer-with-more-immediate-results&quot;&gt;A Debouncer with more Immediate Results&lt;/h2&gt;
+
+&lt;p&gt;This time, let’s rebuild this debouncing circuit around the idea that a
+pressed button should be reported immediately, but that following changes
+should be held off at least &lt;code class=&quot;highlighter-rouge&quot;&gt;N=2^(LGWAIT)&lt;/code&gt; clocks after that.&lt;/p&gt;
+
+&lt;p&gt;Further, we’ll follow some of the lessons from our post on how to &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;minimize
+logic resources&lt;/a&gt;.
+In particular, we’ll use a second register, &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt;, together with our timer.
+This register will be a single wire only, and we’ll set it to true any time
+&lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; is zero.  Finally, as we are going to set this up, any time &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt;
+is true the circuit will be responsive to a changing signal.&lt;/p&gt;
+
+&lt;p&gt;So here’s the code for the &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt;:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	ztimer = 1&#39;b1;
+initial	timer  = 0;
+always @(posedge i_clk)
+	if ((ztimer)&amp;amp;&amp;amp;(different))
+	begin
+		timer  &amp;lt;= {(LGWAIT) {1&#39;b1} };
+		ztimer &amp;lt;= 1&#39;b0;
+	end else if (!ztimer)
+	begin
+		timer  &amp;lt;= timer - 1&#39;b1;
+		ztimer &amp;lt;= (timer[(LGWAIT-1):1] == 0);
+	end else begin
+		ztimer &amp;lt;= 1&#39;b1;
+		timer  &amp;lt;= 0;
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The count-down will begin any time the &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; is at zero (&lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is high),
+and the inputs are &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; from what they were.  (We’ll come back to this
+in a moment.)    Once the timer is running, it will count down to zero.
+When it hits zero, it will hold there until another change has been detected.&lt;/p&gt;
+
+&lt;p&gt;As mentioned above, we’ll use the register &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; to signal any time the
+input is different from the output of our debouncing circuit.  &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt;,
+though, will then need to remain true until any ongoing countdown completes.
+Hence, as long as &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; gets set, either when the timer isn’t counting
+or between count-downs, &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; will make sure that the timer restarts
+again.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	different &amp;lt;= ((different)&amp;amp;&amp;amp;(!ztimer))||(r_in != o_debounced);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We now finally have all the pieces necessary to create our low-latency
+debounced output.  This output will be set to whatever we just finished
+reading, but only ever anytime &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is set.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_debounced = { (NIN) {1&#39;b0} };
+always @(posedge i_clk)
+	if (ztimer)
+		o_debounced &amp;lt;= r_last;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Notice the choice to set &lt;code class=&quot;highlighter-rouge&quot;&gt;o_debounced&lt;/code&gt; any time &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is true, coupled with
+the fact that &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; idles at zero.  Because of this, any time a button is
+pressed (or released), while the circuit is idle (&lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is true), will
+immediately adjust &lt;code class=&quot;highlighter-rouge&quot;&gt;o_debounced&lt;/code&gt; with the new value.  Subsequent bounces,
+until the signal becomes stable again, will be limited to only change every
+&lt;code class=&quot;highlighter-rouge&quot;&gt;2^LGWAIT&lt;/code&gt; clocks.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;While this post presents &lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v&quot;&gt;working debouncing
+logic&lt;/a&gt;, the
+task remains far from complete.  For example, how many bits (&lt;code class=&quot;highlighter-rouge&quot;&gt;LGWAIT&lt;/code&gt;) need
+to be allocated to the counter?  Not quite so subtle is the question of how
+shall this capability be proven?  In particular, this logic requires
+an external button input bounce in order to properly verify its functionality.&lt;/p&gt;
+
+&lt;p&gt;Our next post, therefore, will focus on how to measure bounces so we can
+tell if a bounce has taken place.  After that, we’ll discuss how to modify
+the debugging bus for this purpose, and to get a trace from within the
+design so we can see what’s going on.  Then we’ll go and move on to the next
+topic.&lt;/p&gt;
+
+</description>
+        <pubDate>Fri, 04 Aug 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/blog/2017/08/04/debouncing.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/blog/2017/08/04/debouncing.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Visualizing Contact Bounce</title>
@@ -2619,282 +2968,6 @@ will be to discuss how to debug a DSP algorithm.&lt;/p&gt;
         <pubDate>Sat, 22 Jul 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/dsp/2017/07/22/rounding.html</link>
         <guid isPermaLink="true">http://zipcpu.com/dsp/2017/07/22/rounding.html</guid>
-        
-        
-        <category>dsp</category>
-        
-      </item>
-    
-      <item>
-        <title>Bit growth in FPGA arithmetic</title>
-        <description>&lt;p&gt;We just started a discussion of
-&lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear-upsampling&lt;/a&gt;.
-In many ways the &lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear-upsampling&lt;/a&gt;
-algorithm is much like &lt;em&gt;any&lt;/em&gt; DSP algorithm: samples come in, multiplies, adds,
-and subtracts get applied, and samples go out.
-Like any other algorithm using these operations, every add or multiply
-will increase the number of bits required to represent the result.
-So it seems only fitting to look at bit growth, so we can know how many bits
-to allocate for our internal results.&lt;/p&gt;
-
-&lt;p&gt;Since dropping bits, once grown, is even more complicated than just tracking
-bit growth, we’ll save that discussion for it’s own post later.&lt;/p&gt;
-
-&lt;p&gt;If you’ve never dealt with, or heard of, bit growth before then it can be
-confusing.  It doesn’t need to be so.  As we’ll show here, there are only
-two rules you need to keep track of.  Follow the two basic rules, and you
-should be okay.  That said, we’ll present three rules today.&lt;/p&gt;
-
-&lt;p&gt;My basic approach for understanding bit growth is to look
-at the extremes of any &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit arithmetic operation, and see how many bits
-it takes to represent that extreme.  Indeed, if you ever get confused, just
-come back to this approach and examine the extremes of the values you
-are calculated within your application.&lt;/p&gt;
-
-&lt;p&gt;Looking at the extremes in the representation, an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;a&lt;/code&gt;, can be any one of a range of signed or unsigned values.  In the
-case of signed, &lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s
-complement&lt;/a&gt;
-values, the range of an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number is given by,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;-2^(N-1) &amp;lt;= a &amp;lt;= 2^(N-1) -1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Hence, a four bit number can represent values between -8 and +7 inclusive.&lt;/p&gt;
-
-&lt;p&gt;Likewise the range of an unsigned value &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bits wide is,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;0 &amp;lt;= a &amp;lt; 2^(N) -1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;and a four bit unsigned number can represent values from 0 to 15.&lt;/p&gt;
-
-&lt;p&gt;If you add, subtract, or multiply numbers at the ends of these ranges,
-by how much must &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; be increased to capture the new result without overflow?&lt;/p&gt;
-
-&lt;p&gt;There are a couple of cases you might not consider along the way, and so I’ll
-note these below and keep this page updated as a reminder of what the corner
-cases are.&lt;/p&gt;
-
-&lt;h2 id=&quot;add-one-bit-on-every-add&quot;&gt;Add one bit on every add&lt;/h2&gt;
-
-&lt;p&gt;The rule for addition is that adding two &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit numbers together requires
-an extra bit to represent the result.  Let’s test this to see if this is
-true:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(2^N-1) + (2^N-1) = 2^(N+1)-2&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;That certainly works for the positive end of the range, what about the negative
-end?&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;-2^N - 2^N = -2^(N+1)&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;So, at the negative end we are good with adding an additional bit as well.&lt;/p&gt;
-
-&lt;p&gt;If you know that the numbers you will be adding will have different signs,
-then no bit growth is needed, since the absolute value of the result will
-tend towards zero rather than increasing.  I’ve just never found an
-application that can use this nuance.&lt;/p&gt;
-
-&lt;p&gt;Unsigned numbers are roughly the same, with exception that you need to be
-careful when subtracting two unsigned numbers.  The problem here being that
-the result might be negative.
-This means that, unless you can guarantee that the result will
-not overflow (i.e. go below zero), you will need to add a sign bit.  Hence,
-again, one bit of growth–but this comes with an &lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;alternate representation
-(two’s complement)&lt;/a&gt; as well.&lt;/p&gt;
-
-&lt;p&gt;So the rule of adding one bit per addition (or) subtraction has special case
-we’ll need to be careful of, where the data representation changes as well,
-but otherwise it holds.&lt;/p&gt;
-
-&lt;p&gt;What if you are adding values with different bit widths?  Suppose you wish to
-add an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number to an &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; bit number?  As before, the answer can be found
-by examining the extremes.  If you add the two positive extremes:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;2^(N-1)-1+2^(M-1)-1 &amp;lt; 2^(N) - 1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;as long as &lt;code class=&quot;highlighter-rouge&quot;&gt;M&amp;lt;N&lt;/code&gt;.  The same is true for the negative extreme.  Here, then,
-the rule is that the output must have one more bit than the widest of the
-two input numbers.&lt;/p&gt;
-
-&lt;p&gt;Now, let’s apply this to bits within an FPGA.  When building DSP algorithms,
-you’ll want to adjust them for the appropriate width &lt;em&gt;later&lt;/em&gt;.  That way you
-can write one routine that works for multiple bit-widths, and may even work
-across multiple projects.  Hence, you’ll want to declare your various bit
-widths as parameters.  We’ll use this approach for our &lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear
-interpolator&lt;/a&gt;,
-as well.)  For example, if you want to add two number, &lt;code class=&quot;highlighter-rouge&quot;&gt;a&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;b&lt;/code&gt;,
-together, you might do something like:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;module add(i_clk, a, b, out);
-parameter	AWIDTH=16, BWIDTH=4;
-		// Output width is given by one more than the maximum of A&#39;s
-		// width and B&#39;s width.  Make this a localparam so that
-		// it can&#39;t be overridden
-localparam	OUTWID = (AWIDTH &amp;gt; BWIDTH) ? (AWIDTH + 1) : (BWIDTH+1);
-
-input	wire	[(AWIDTH-1):0]	a;
-input	wire	[(BWIDTH-1):0]	b;
-output	reg	[(OUTWID-1):0]	out;
-
-always @(posedge i_clk)
-	out &amp;lt;= a + b;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This captures all of the logic we just discussed above: adding one bit on
-any addition or subtraction.&lt;/p&gt;
-
-&lt;h2 id=&quot;long-strings-of-addition&quot;&gt;Long strings of addition&lt;/h2&gt;
-
-&lt;p&gt;Since the fundamental DSP operation is a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolution&lt;/a&gt;, and since
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolutions&lt;/a&gt;
-require adding lots of numbers together, this creates a special case of
-bit growth that needs to be discussed.&lt;/p&gt;
-
-&lt;p&gt;Imagine you had &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt; words, &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bits each, that all needed to be added together.
-If you applied the rule above, you might allocate &lt;code class=&quot;highlighter-rouge&quot;&gt;K+N&lt;/code&gt; bits to the result.
-While the result would work, it’s also more bits than you need.&lt;/p&gt;
-
-&lt;p&gt;As before, we’ll look at the extremes.  What happens when you add &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt; extreme
-values together?  We’ll consider only the signed case, since the unsigned
-case is roughly the same:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K * (2^(N-1)-1)&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Before taking the next step, let’s imagine a number of bits, &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt;, that can hold
-the value &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt;, such that:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K &amp;lt;= 2^M&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Further, we want &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; to be the smallest number possible so that this inequality
-holds.  Mathematically, we might say that,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;M = ceil(log(K)/log(2))&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;or equivalently that &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; is the &lt;a href=&quot;https://en.wikipedia.org/wiki/Floor_and_ceiling_functions&quot;&gt;ceiling (smallest integer above or equal
-to)&lt;/a&gt;
-of the base two &lt;a href=&quot;https://en.wikipedia.org/wiki/Logarithm&quot;&gt;logarithm&lt;/a&gt;
-of &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt;.  In simpler terms, it’s just the log (base
-two) of &lt;code class=&quot;highlighter-rouge&quot;&gt;K&lt;/code&gt;, rounded up to the nearest integer.&lt;/p&gt;
-
-&lt;p&gt;Now, using this number, we know that&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K &amp;lt;= 2^M&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;and so that,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;K * (2^(N-1)-1) &amp;lt;= (2^M)*(2^(N-1)-1) = 2^(M+N-1)-1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;And that’s our defining case.  When adding a large number of values together,
-all having the same bit width, the number of bits required to hold the result
-is given by the original number of bits plus the log, base two, of the
-number of elements added together.&lt;/p&gt;
-
-&lt;p&gt;We’ll save the Verilog example for when we build an FIR filter on this blog.&lt;/p&gt;
-
-&lt;h2 id=&quot;add-the-number-of-bits-on-every-multiply&quot;&gt;Add the number of bits on every multiply&lt;/h2&gt;
-
-&lt;p&gt;Let’s now look at multiplying two numbers.  We’ll start by looking at signed
-multiplication, but then look at unsigned multiplication before finishing.&lt;/p&gt;
-
-&lt;p&gt;Our first step will be to examine
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s complement&lt;/a&gt;
-multiplication.  Suppose we multiply
-a signed &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number with a signed &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; bit number.  If you multiply
-the two largest of these numbers together, the result will fit in &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M-1&lt;/code&gt; bits:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(2^(N-1) -1) * (2^(M-1) -1) = 2^(N+M-2) -2^(M-1) - 2^(N-1) +1 &amp;lt; 2^(N+M-2)-1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Don’t forget to check the other extreme!  Multiplying the two most negative
-numbers together yields a positive result, so this is an important check:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(-2^(N-1)) * (-2^(M-1)) = 2^(N+M-2) &amp;lt; 2^(N+M-1)&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You may note that 2^(N+M-2) just barely doesn’t fit in &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M&lt;/code&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s complement&lt;/a&gt;
-bits, so this becomes the defining case: &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M&lt;/code&gt; bits are required to hold the
-output, although fitting within &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M-1&lt;/code&gt; bits will be more common.&lt;/p&gt;
-
-&lt;p&gt;In Verilog, multiplying two signed numbers together would look like:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;module multiply(i_clk, a, b, out);
-parameter	AWIDTH=16, BWIDTH=4;
-		// Output width is given by one more than the maximum of A&#39;s
-		// width and B&#39;s width
-localparam	OUTWID = (AWIDTH + BWIDTH);
-
-input	signed wire	[(AWIDTH-1):0]	a;
-input	signed wire	[(BWIDTH-1):0]	b;
-output	signed reg	[(OUTWID-1):0]	out;
-
-always @(posedge i_clk)
-	out &amp;lt;= a * b;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Notice again that, just like the add, we allow the bit width to be specified
-(and overruled) by a parameter.  This allows us to adjust the bit-width
-later.&lt;/p&gt;
-
-&lt;p&gt;Now let’s consider unsigned multiplication.  In this case, we only need to check
-the positive edge of the interval,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;(2^(N) -1) * (2^(M) -1) = 2^(N+M) -2^(M) - 2^(N) +1 &amp;lt; 2^(N+M)-1&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As before, &lt;code class=&quot;highlighter-rouge&quot;&gt;N+M&lt;/code&gt; bits are required to hold the product of an &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bit number
-with an &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; bit number.  Indeed, the Verilog code for doing this is the same
-as before, with the only exception that the &lt;code class=&quot;highlighter-rouge&quot;&gt;signed&lt;/code&gt; tag needs to be
-removed to do unsigned multiplication.&lt;/p&gt;
-
-&lt;h2 id=&quot;rules-to-live-by&quot;&gt;Rules to Live By&lt;/h2&gt;
-
-&lt;p&gt;Let’s summarize our rules here:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;When adding two numbers, increase the number of bits in the result by one.&lt;/p&gt;
-
-    &lt;p&gt;Be careful of subtracting unsigned numbers.  Your new bit may change
-you from unsigned to signed &lt;a href=&quot;https://en.wikipedia.org/wiki/Two&#39;s_complement&quot;&gt;two’s
-complement&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;When adding long strings of numbers, each with an identical number of bits,
-such as you would do when implementing a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolution&lt;/a&gt;
-the bit growth goes as the log of the length of the string, rather than one
-bit per addition.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;When multiplying two numbers, store the output in a register having as many
-bits within it as the two multiplicands had combined.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;We’re not quite ready to finish our lesson on &lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;Linear
-Interpolation&lt;/a&gt;,
-though.  We still need to discuss&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;How to &lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;drop bits&lt;/a&gt;
-when processing signals, and&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;How to &lt;a href=&quot;/dsp/2017/07/24/dsp-debugging.html&quot;&gt;debug DSP
-algorithms&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;The approach you will need to debug a DSP based algorithm is very distinctly
-different from the tools necessary to debug the rest of your logic.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Then we can come back and finish building our
-&lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;linear interpolator&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;If you see any mistakes in the rules above, or any rules regarding bit growth
-that I’ve missed, please feel free to comment and note them below.&lt;/p&gt;
-</description>
-        <pubDate>Fri, 21 Jul 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/dsp/2017/07/21/bit-growth.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/07/21/bit-growth.html</guid>
         
         
         <category>dsp</category>
