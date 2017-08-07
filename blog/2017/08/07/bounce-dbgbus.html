@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Using a debug-bus to Measure Bouncing</title>
+  <meta name="description" content="As we’ve discussed in our two previous posts,buttons and switches onFPGA’scan be very useful to work with.  They can bevery useful tools when debugging as we...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/blog/2017/08/07/bounce-dbgbus.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU">Support this Blog</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Using a debug-bus to Measure Bouncing</h1>
+    <p class="post-meta"><time datetime="2017-08-07T00:00:00-04:00" itemprop="datePublished">Aug 7, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>As we’ve discussed in our two previous posts,
+buttons and switches on
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>’s
+can be very useful to work with.  They can be
+very useful tools when debugging as well.  The problem is that these forms of
+inputs often “<a href="https://en.wikipedia.org/wiki/Switch#Contact_bounce">bounce</a>”,
+and produce multiple edges when only one is desired.  This can be a problem
+when you wish to depend or rely upon these inputs as being a dependable
+part of a debugging solution–before you’ve managed to ensure their
+dependability.</p>
+
+<p>Making <a href="https://en.wikipedia.org/wiki/Switch#Contact_bounce">contact bounce</a>
+particularly problematic is the fact that it is difficult to simulate, since
+the bounces tend to appear quite random.</p>
+
+<p>Our <a href="/blog/2017/08/02/debounce-teaser.html">first post</a>
+on this topic looked into how this sort of bouncing manifested, showing
+several examples and traces of contact bounces.  The pictures weren’t very
+pretty, as many buttons from several different boards and even a keypad all
+manifested this problem.</p>
+
+<p>Our <a href="/blog/2017/08/04/debouncing.html">second post</a>
+discussed how to create the digital logic necessary to debounce a user
+input.</p>
+
+<p>We then <a href="/blog/2017/08/05/bounce-metric.html">created some simple test
+points</a> that could
+be used to measure button press duration and the number of times a particular
+button press bounced.</p>
+
+<p>Today, our discussion is going to focus on how to connect these two
+components to the <a href="https://opencores.org/cdn/downloads/wbspec_b4.pdf">wishbone
+bus</a> present within our
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/rtl/testbus.v">debugging-bus testing
+logic</a>.
+We’re also going to add a
+<a href="https://github.com/ZipCPU/wbscope">compressed wishbone scope</a>
+to the design in order to get the traces out of our design such as were
+presented in the <a href="/blog/2017/08/02/debounce-teaser.html">initial
+post</a>.</p>
+
+<h2 id="instantiating-the-two-components">Instantiating the two components</h2>
+
+<p>Over the course of the last two posts, we’ve created two components that
+we would now like to test: 
+a <a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v">debouncer</a>,
+and an
+<a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v">unbounced</a>
+module.  We are going to test these two components by pressing a button, and
+then reading the results produced by these two components as registers on a
+bus.  Once read, we’ll use the bus to reset these components.</p>
+
+<p>We’ll start by assuming we have <code class="highlighter-rouge">NBTNS</code> buttons, in a vector named <code class="highlighter-rouge">i_button</code>
+coming into our top level design.  This vector, together with our system
+clock, can then be used as inputs to these two modules, as in:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">debouncer	#(NBTNS) thedebouncer(i_clk, i_button,
+				debounced, debounce_dbg);
+unbounced	#(NBTNS) theunbouncer(i_clk, unbounce_reset,
+				i_button, transitions, max_clock);</code></pre></figure>
+
+<p>The result of the
+<a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v">debouncer</a>
+is a <code class="highlighter-rouge">NBTNS</code>-bit vector <code class="highlighter-rouge">debounced</code>.  This vector is a copy of <code class="highlighter-rouge">i_button</code>,
+save only that it has been both synchronized to the clock and any bounces
+have been removed.</p>
+
+<p>The two results of the
+<a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v">unbounced</a>
+vector are two 31-bit vectors: <code class="highlighter-rouge">transitions</code> which holds the number of
+transitions, and <code class="highlighter-rouge">max_clock</code> which holds the number of clock ticks from the
+first transition to the last.</p>
+
+<p>The other two items are the <code class="highlighter-rouge">unbounce_reset</code> and the <code class="highlighter-rouge">debounce_dbg</code>.
+The <code class="highlighter-rouge">unbounce_reset</code> line clears the counters.  We’ll hook that up in the
+next section.  The <code class="highlighter-rouge">debounce_dbg</code> lines, however, we’ll come back to when
+we discuss hooking the debouncer up to the <a href="https://github.com/ZipCPU/wbscope">wishbone
+scope</a>.</p>
+
+<h2 id="connecting-the-components-to-the-debugging-bus">Connecting the components to the debugging bus</h2>
+
+<p>We’d like to hook these two peripherals to our wishbone debugging bus,
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v">testbus.v</a>.
+In particular, we’d like to be able to read these three values from an
+external UART.  Since reading the values requires no logic handshake with
+the modules, they can be hooked up just as simply as any of the other
+simple registers within the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v">testbus.v</a>.</p>
+
+<p>To hook this new peripheral up, just assign it an address among our
+simple data peripheral’s address map:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	case(wb_addr[3:0])
+	...
+	4'h6:    smpl_data &lt;= transitions;
+	4'h7:    smpl_data &lt;= max_clock;
+	4'h8:    smpl_data &lt;= { {(32-NBTNS){1'b0}}, debounced };
+	...
+	defult: smpl_data &lt;= 32'h0;
+	endcase</code></pre></figure>
+
+<p>Don’t forget when using these addresses, that each address references a
+32-bit quantity, and hence they need to be multiplied by four to get the
+offset into the address map.
+Hence, address offsets of 24, 28, and 32 from the simple data peripheral
+now contain our new values.  Given that we placed our simple data peripheral
+at an address offset of <code class="highlighter-rouge">0x2040</code>, that means these new registers will have
+final addresses <code class="highlighter-rouge">0x2058</code>, <code class="highlighter-rouge">0x205c</code>, and <code class="highlighter-rouge">0x2060</code>.</p>
+
+<p>One other change is required to the bus, we need to create our reset signal,
+<code class="highlighter-rouge">unbounce_reset</code>.  We’re going to set this reset signal up so that any time
+we write to either of these registers, either the <code class="highlighter-rouge">transitions</code> or the
+<code class="highlighter-rouge">max_clock</code> register, we reset our counters:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	unbounce_reset = (wb_stb)&amp;&amp;(wb_we)&amp;&amp;(smpl_sel)
+				&amp;&amp;(wb_addr[3:1]==3'b011);</code></pre></figure>
+
+<p>That’s it!  That’s all the changes that are necessary in order to connect
+these two new peripherals to our bus.  Gosh, if it’s that easy, why not
+try your own peripherals?</p>
+
+<p>Before moving to the next section, there’s one other difference.  If you
+compare this <a href="https://github.com/ZipCPU/debouncer/blob/master/bench/rtl/testbus.v">new top level
+design</a>
+with the <a href="https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v">initial top level
+design</a>,
+you’ll notice that the block RAM has been removed.  This was to provide
+extra block RAM space for the wishbone scope—space that was never
+really needed in the end.</p>
+
+<h2 id="switching-to-a-compressed-wishbone-scope">Switching to a compressed wishbone scope</h2>
+
+<p>There are three RTL steps to setting up a wishbone scope within your design.</p>
+
+<p>The first step is to create a trigger.  You can find the trigger I
+created in the
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/rtl/debouncer.v">debouncer</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	trigger &lt;= (!ztimer)&amp;&amp;(!different)&amp;&amp;(!(|i_in))
+			&amp;&amp;(timer[(LGWAIT-1):2]==0)&amp;&amp;(timer[1]);</code></pre></figure>
+
+<p>This trigger is designed to stop the scope any time the debouncing logic
+is complete, <em>and</em> the button’s logic value(s) has returned to zero.  In
+practice, it didn’t work very well for testing the keypad, since the keypad
+uses negative logic (a button release sends the signal high, not low).
+The end result was that I often needed to trigger the scope manually from the
+debugging bus, but we’ll come back to this in a moment.</p>
+
+<p>The next step in connecting the scope is to select the data lines you wish
+to record.  Here, let’s connect to our synchronized inputs, the debounced
+result, as well as the <code class="highlighter-rouge">ztimer</code> and <code class="highlighter-rouge">trigger</code> logic from within the design.
+Because buttons take place over a very long period of time, we’ll need
+to use the compressed wishbone scope.  That’s going to limit our debugging
+width to 31-bits instead of 32.  (The last bit is used for run length
+encoding.)</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">//	debug[31] is used for RLE encoding, and thus not available to us here
+assign	debug[30] = ztimer;
+assign	debug[29] = trigger;
+assign	debug[28] = 1'b0;
+// Bits 27:14 are assigned to the output of the debouncer
+assign	debug[27 :(14+NIN)] = 0;
+assign	debug[(14+NIN-1):14] = o_debounced;
+// Bottom 14 bits are assigned to our synchronized input(s)
+assign	debug[13 :NIN] = 0;
+assign	debug[(NIN-1):0] = r_in;
+
+assign	o_debug = debug;</code></pre></figure>
+
+<p>While this approach limits the number of inputs to 13-bits in a 14-bit
+field, the logic within the actual <a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v">debouncer
+code</a>
+makes it possible to record up to 14-bits, and to process any number of
+buttons up to an arbitrary width.</p>
+
+<p>The final change is to adjust the scope itself.  Switching from an
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v">uncompressed wishbone scope</a> to a
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v">compressed wishbone scope</a>
+is almost as easy as changing <code class="highlighter-rouge">wbscope</code> to <code class="highlighter-rouge">wbscopc</code>.  Indeed, the two share
+an almost identical interface standard.  The only more substantial change
+beyond changing the name is adjusting the input data width from 32-bits down
+to the 31-bits of the compressed scope.  We’ll also pull the <code class="highlighter-rouge">scope_trigger</code>
+from its bit position within the <code class="highlighter-rouge">debug</code> vector coming from the <a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v">debouncer
+code</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	scope_trigger = debounce_dbg[29];
+	wire	[30:0]	debug_data;
+	assign	debug_data    = debounce_dbg;
+	wbscopc	#(5'd9) thescope(i_clk, 1'b1, scope_trigger, debug_data,</code></pre></figure>
+
+<p>Setting up the design for this purpose is really just that easy.</p>
+
+<h2 id="adjusting-the-register-definition-files">Adjusting the register definition files</h2>
+
+<p>Finally, I adjusted the
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.h">regdefs.h</a> and
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.cpp">regdefs.cpp</a>
+files to reflect that there are two new registers
+in our design, giving them names that I can use to access them both from
+my own C code
+(<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.h">regdefs.h</a>),
+as well as from the <code class="highlighter-rouge">wbregs</code> command line
+(<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.cpp">regdefs.cpp</a>).</p>
+
+<p>The first change was to
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.h">regdefs.h</a>,
+where we needed to define our three new registers:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="cp">#define	R_TRANSITIONS	0x00002058
+#define	R_MAXCLOCKS	0x0000205c
+#define	R_DEBOUNCED	0x00002060</span></code></pre></figure>
+
+<p>You may remember from our discussion above that these are the addresses
+of these three new registers within our simple data peripheral’s address space.</p>
+
+<p>I then gave these registers user-friendly names by modifying
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.cpp">regdefs.cpp</a>:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="p">{</span> <span class="n">R_DEBOUNCED</span>	  <span class="p">,</span>	<span class="s">"DEBOUNCED"</span>	<span class="p">},</span>
+<span class="p">{</span> <span class="n">R_TRANSITIONS</span>	  <span class="p">,</span>	<span class="s">"BOUNCES"</span>	<span class="p">},</span>
+<span class="p">{</span> <span class="n">R_TRANSITIONS</span>	  <span class="p">,</span>	<span class="s">"TRANSITIONS"</span>	<span class="p">},</span>
+<span class="p">{</span> <span class="n">R_MAXCLOCKS</span>	  <span class="p">,</span>	<span class="s">"DURATION"</span>	<span class="p">},</span>
+<span class="p">{</span> <span class="n">R_MAXCLOCKS</span>	  <span class="p">,</span>	<span class="s">"MAXCLOCKS"</span>	<span class="p">},</span></code></pre></figure>
+
+<p>This only modifies a structure providing a mapping from register values
+to user register names.</p>
+
+<p>The final change was to create a piece of C++ code to read from the
+wishbone scope.  You can see what this new scope code looks like
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/btnscope.cpp">here</a>,
+although how to develop this code is discussed in general
+<a href="/blog/2017/07/08/getting-started-with-wbscope.html">here</a>.
+Build and run this new
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/btnscope.cpp">btnscope</a>
+program, and you’ll have a <a href="/blog/2017/07/31/vcd.html">VCD
+file</a> that you can then use with
+<a href="http://gtkwave.sourceforge.net">GTKWave</a> to view traces showing how your own
+buttons bounce–just like the <a href="/blog/2017/08/02/debounce-teaser.html">traces I presented when we first
+started</a>.</p>
+
+<p>That’s it!  We can now grab two registers from our button press, and read
+their results via <code class="highlighter-rouge">wbregs duration</code> and <code class="highlighter-rouge">wbregs bounces</code>.  We can also reset
+our count by writing to either of these registers via something like
+<code class="highlighter-rouge">wbregs duration 0</code>.  Using
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/btnscope.cpp">btnscope</a>,
+we can also read and create <a href="/blog/2017/07/31/vcd.html">VCD
+files</a>.</p>
+
+<h2 id="scripts-to-access-the-design">Scripts to access the design</h2>
+
+<p>After using this design over and over several times, I got tired of typing
+the same commands over and over.  As a result, I wrote two scripts to
+make things easier.</p>
+
+<p>The first script,
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/getinfo.sh">getinfo.sh</a>,
+simple reads the two registers and dumps them into a file record for later
+analysis.  It also manually triggers the
+<a href="https://github.com/ZipCPU/wbscope">wishbone scope</a> in case it hadn’t
+triggered yet.</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="c">#!/bin/bash</span>
+
+wbregs bounces  | tee -a btndata.txt
+wbregs duration | tee -a btndata.txt
+wbregs scope 0x88000020</code></pre></figure>
+
+<p>The second script,
+<a href="https://github.com/ZipCPU/debouncer/blob/master/sw/reset.sh">reset.sh</a>,
+resets the logic for another button press.  Specifically, it resets the
+scope (i.e. writes to it with the high data clear), and then attempts to
+write to the bounce count.  As with any write to either of the
+<a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v">unbounced</a>
+registers, this will set the reset line to the
+<a href="https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v">unbounced</a>
+module for one clock, and thus reset the counters.  Finally, just to be
+certain that the two registers actually cleared as desired, they are read
+after reset.</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="c">#!/bin/bash</span>
+
+wbregs scope 0x020 <span class="c"># Reset the scope</span>
+wbregs bounces 0   <span class="c"># Reset the unbounced code</span>
+wbregs bounces     <span class="c"># Verify that the two counts have returned to zero</span>
+wbregs duration</code></pre></figure>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>That’s it!  You now have all the information you need to either build and
+measure your own debouncer, or to just measure the bounces on your own
+device.  Further, all of the debouncing logic, design, and software files
+have been placed into their own
+<a href="https://github.com/ZipCPU/debouncer">GitHub repo</a> for your own reference.</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>As cold waters to a thirsty soul, so is good news from a far country.  (Prov 25:25)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
