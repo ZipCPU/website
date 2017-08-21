@@ -81,7 +81,7 @@ design</a>
 a <a href="https://en.wikipedia.org/wiki/Digital_filter">Digital Filter</a>,
 nor do I intend to discuss
 <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">how to evaluate</a>
-the design of a 
+the design of a
 <a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a>,
 nor do I intend to discuss
 <a href="https://en.wikipedia.org/wiki/Aliasing">aliasing</a>.  These are all vital
@@ -101,7 +101,7 @@ and that such
 are provably the <em>only</em>
 <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">signal processing</a>
 operations that are both <a href="https://en.wikipedia.org/wiki/Linear_system">linear</a>
-and <a href="https://en.wikipedia.org/wiki/Shfit-invariant_system">shift invariant</a>. 
+and <a href="https://en.wikipedia.org/wiki/Shfit-invariant_system">shift invariant</a>.
 This makes them a very important part of any discussion of <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">digital signal
 processing (DSP)</a>.</p>
 
@@ -109,7 +109,7 @@ processing (DSP)</a>.</p>
 processing</a>
 should be able to recognize when a
 <a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a>
-is 
+is
 <a href="https://en.wikipedia.org/wiki/Causal_filter">causal</a>,
 <a href="https://en.wikipedia.org/wiki/BIBO_stability">stable</a>,
 when it has <a href="https://en.wikipedia.org/wiki/Linear_phase">linear phase</a>,
@@ -241,10 +241,11 @@ just:</p>
 
 <p>Where we keep to the standard conventions of <code class="highlighter-rouge">n</code> being the sample number,
 <code class="highlighter-rouge">x[n]</code> being our input and <code class="highlighter-rouge">y[n]</code> being our output.  The new variable here,
-alpha, is our means of adjusting how
-deep or sharp this filter is.  The smaller alpha is, the more the filter
-will average the input and the longer it will take to converge to an average.
-Likewise, the smaller alpha is, the less noise the filter will admit to the
+alpha, is our means of adjusting how deep or sharp this filter is.  This is
+a value between zero and one.  If alpha is one, no averaging takes place.
+The closer alpha is to zero, however, the more the filter will average the
+input and the longer it will take to converge to an average.  Likewise, the
+closer alpha is to zero the less noise the filter will admit to the
 average estimate.</p>
 
 <p>With a little manipulation, we can rearrange this filter into something
@@ -258,27 +259,38 @@ replace the multiply above with a right shift:</p>
 <table align="center" style="float: none"><tr><td><img src="/img/eqn-iir-alpha-defn.png" alt="Alpha = 2^{-LGALPHA}" width="168" /></td></tr></table>
 
 <p>You’ll want to use an
-<a href="https://en.wikipedia.org/wiki/Arithmetic_shift">arithmetic shift</a>
-if your values are signed <a href="https://en.wikipedia.org/wiki/Two's_complement">two’s
-complement</a>, and a 
-<a href="https://en.wikipedia.org/wiki/Logical_shift">logical shift</a>,
-if they are unsigned.</p>
+<a href="https://en.wikipedia.org/wiki/Arithmetic_shift">arithmetic shift</a> here,
+to mak certain the sign propagates in the case where the difference is
+negative.</p>
 
 <p>This leads us to our first design choice: How many clocks can we use to
 calculate an answer?  In particular, this recursive averager is going to
-require a subtraction followed by an addition.  You can either try to place
+require a subtraction followed by an addition.  Both of these operations
+<em>need to complete</em> before the next sample.  You can either try to place
 this all within a single system tick, or split it between two separate ticks.</p>
+
+<p>If you have new data samples present on every clock tick, you will need
+to try the combinational approach I’m going to present below, stuffing all of
+the logic into a single clock tick.  This has the unfortunate consequence of
+limiting your system clock speed.</p>
+
+<p>On the other hand, if your data samples will always have at least one
+unused clock between them, then you could take one clock tick to calculate
+the difference, <code class="highlighter-rouge">x[n]-y[n-1]</code>, and another to update the running average,
+<code class="highlighter-rouge">y[n]</code>.</p>
 
 <p>If we suppose that we must do this all within a single clock tick, the
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/iiravg.v">following code</a>
 will implement this recursive averager.  In the code below, <code class="highlighter-rouge">AW</code>
-is the number of bits in the averager, <code class="highlighter-rouge">IW</code> the bit-width of the input, and
-<code class="highlighter-rouge">SIGNED_DATA</code> tells us if we are averaging signed or unsigned data.</p>
+is the number of bits in the averager, and <code class="highlighter-rouge">IW</code> is the bit-width of the input.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">wire	[(AW-1):0]	difference, adjustment;
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">wire	signed	[(AW-1):0]	difference, adjustment;
 
+// The difference is given by x[n] - y[n-1]
 assign	difference = { i_data, {(AW-IW){1'b0}} } - r_average;
-assign	adjustment = { {(LGALPHA){(SIGNED_DATA)&amp;&amp;(difference[(AW-1)])}},
+
+// The adjustment is the difference times alpha
+assign	adjustment = { {(LGALPHA){(difference[(AW-1)])}},
 			difference[(AW-1):(AW-LGALPHA)] };
 always @(posedge i_clk)
 	r_average &lt;= r_average + adjustment;
@@ -286,13 +298,9 @@ always @(posedge i_clk)
 assign	o_data = r_average;</code></pre></figure>
 
 <p>You may notice that I could have used the Verilog shift operator and did
-not.  Had I used it, I would have needed to declare <code class="highlighter-rouge">adjustment</code> and
-<code class="highlighter-rouge">difference</code> signed.  Then the <code class="highlighter-rouge">adjustment</code> value could have been set with:</p>
+not.  Had I done so, then the <code class="highlighter-rouge">adjustment</code> value could have been set with:</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	adjustment = difference &gt;&gt;&gt; LGALPHA;</code></pre></figure>
-
-<p>By not using this approach, the algorithm easily adjusts between signed
-and unsigned arithmetic as necessary.</p>
 
 <p>So, how did we do?  We’ll need to come back and test this later to know
 for certain.  That in itself is going to need to take some thought.  Just
@@ -381,7 +389,7 @@ logic resources.</p>
   </li>
 </ul>
 
-<p>Do you get the feeling that 
+<p>Do you get the feeling that
 <a href="https://en.wikipedia.org/wiki/Digital_filter">digital filtering</a>
 is a complex topic?  Since it is the most basic
 <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a> operation,
