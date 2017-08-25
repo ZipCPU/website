@@ -6,14 +6,529 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 23 Aug 2017 08:24:38 -0400</pubDate>
-    <lastBuildDate>Wed, 23 Aug 2017 08:24:38 -0400</lastBuildDate>
+    <pubDate>Fri, 25 Aug 2017 08:56:47 -0400</pubDate>
+    <lastBuildDate>Fri, 25 Aug 2017 08:56:47 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>http://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Debugging your soft-core CPU within an FPGA</title>
+        <description>&lt;p&gt;We’ve already looked at the requirements for &lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.thml&quot;&gt;debugging a CPU in
+general&lt;/a&gt;, as
+well as &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;how to debug a CPU within a Verilator based
+simulation&lt;/a&gt;. 
+Let’s now return to this topic and take a look at how to modify your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;soft-core CPU&lt;/a&gt;
+so that you can debug it once it is placed within an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: Soft-Core CPU H/W Debugging Needs&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cpu-dbg-inhw.svg&quot; alt=&quot;Needs of a Soft-Core Hardware Debugger&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;When we discussed the &lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.thml&quot;&gt;general needs of a
+debugger&lt;/a&gt;,
+we used a figure similar to Fig 1. to describe a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;’s
+debugging needs.
+The left column, debugging the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;’s
+while in simulation, we address &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;in a
+previous post&lt;/a&gt;.
+Today, the figure at the right has been modified to highlight todays
+discussion and focus: how to add the necessary logic into a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;soft-core CPU&lt;/a&gt;
+to support debugging.&lt;/p&gt;
+
+&lt;p&gt;As shown in the diagram, the basic operations we’re going to need to support
+are resetting, starting, halting, and stepping a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;,
+as well as examining
+and changing
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;,
+state
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;.
+You may wish to review how the &lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.md&quot;&gt;ZipCPU handles pipeline
+control&lt;/a&gt;,
+since the logic we shall discuss today needs to fit nicely into that context.&lt;/p&gt;
+
+&lt;h2 id=&quot;that-hw-debugging-interface&quot;&gt;That H/W Debugging Interface&lt;/h2&gt;
+
+&lt;p&gt;If you’ve never done this before, please don’t start by trying to implement
+&lt;a href=&quot;https://www.gnu.org/software/gdb&quot;&gt;GDB&lt;/a&gt;’s &lt;a href=&quot;https://sourceware.org/gdb/onlinedocs/gdb/Remote-Protocol.html&quot;&gt;remote serial
+protocol&lt;/a&gt;
+within Verilog.  The protocol is very powerful, and we’ll discuss how to use
+it later to connect your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+to &lt;a href=&quot;https://www.gnu.org/software/gdb&quot;&gt;GDB&lt;/a&gt;. 
+The problem is that the protocol is complex, and it will take a lot of work to
+process it within hardware.  Keep reading, there’s an easier way.&lt;/p&gt;
+
+&lt;p&gt;As a first step, think for a moment about what &lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;debugging your CPU
+will require&lt;/a&gt;.
+In particular, you’ll want to be able to read and write both
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;
+and memory.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/digilent/2017/05/22/moving-to-memory.html&quot;&gt;Reading from
+memory&lt;/a&gt;
+requires the address you wish to read from as well as a strobe signal to
+indicate your desire to read&lt;/p&gt;
+
+    &lt;p&gt;If your address space is big enough, this &lt;a href=&quot;https://en.wikipedia.org/wiki/Memory-mapped_I/O&quot;&gt;same sort of command and
+interface&lt;/a&gt; can work for
+reading 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt; 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;
+just like it does for memory.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;Writing to memory&lt;/a&gt;
+requires an address, a value, and a strobe to tell you
+when to write the value to the given address.&lt;/p&gt;
+
+    &lt;p&gt;As with reading, if you can allocate an address for each
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;register&lt;/a&gt; within your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;,
+the same interface you used for reading
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;
+could also work to writing
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt; within your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;The approach can even be expanded to include not only
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;
+values, but also internal (debugging) state variables from within your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;As a third example, a control register could also be used to tell the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt; when
+to execute an instruction, and when to hold in reset.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 2: Placing a CPU on the Debugging Bus&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/hw-debug-structure.svg&quot; alt=&quot;Block diagram of a CPU placed on a Debugging Bus&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;All of these interactions, therefore, are easily understood as things that
+could take place across a
+“&lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;bus&lt;/a&gt;”
+with both memory and &lt;a href=&quot;https://en.wikipedia.org/wiki/Memory-mapped_I/O&quot;&gt;memory mapped
+peripherals&lt;/a&gt; on it. 
+Therefore, one might consider giving the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt; a &lt;a href=&quot;/zipcpu/2017/05/29/simple-wishbone.html&quot;&gt;bus slave
+interface&lt;/a&gt;, and 
+hooking it up to the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging
+bus&lt;/a&gt; we’ve been working with (or something
+similar) as shown in Fig 2.&lt;/p&gt;
+
+&lt;p&gt;This approach has a couple of advantages.  First, the
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging bus&lt;/a&gt;
+can be used to &lt;a href=&quot;/zipcpu/2017/05/20/which-came-first.html&quot;&gt;debug both the peripherals and the
+memory&lt;/a&gt;
+the &lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+will need to work with later.  Second, if the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+and &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging
+bus&lt;/a&gt; are each given the same view of the
+peripheral set, then no separate address map and decoder needs to be created.
+Third, this approach creates a means, independent of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;,
+of reading and writing to memory.  This could be very important later when
+building a
+program loader for the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;,
+since it would then allow you to load the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;’s
+program into memory and test it, without relying on any internal
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Read-only_memory&quot;&gt;ROM&lt;/a&gt;
+within the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+that would cause the design to need to be resynthesized anytime
+something changes.&lt;/p&gt;
+
+&lt;p&gt;The downside of this approach is that, depending upon your implementation, the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/aux/wbpriarb.v&quot;&gt;bus arbiter&lt;/a&gt;
+may slow the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;’s
+access to memory by a clock (or two).&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3: ZipCPU&#39;s debugging interface&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/bare-cpu-debug-iface.svg&quot; alt=&quot;ZipCPU&#39;s bare debugging interface&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This was the approach taken by the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;, as shown in Fig 3, so we’ll use the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+as our example of this approach in our discussion below.  The
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; was
+given two address locations on the debugging bus: a control and data
+location.  (These are both discussed and defined in the 
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/doc/spec.pdf&quot;&gt;specification
+document&lt;/a&gt;.)
+A small wrapper around the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;ZipCPU
+proper&lt;/a&gt;, called
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipbones.v&quot;&gt;ZipBones&lt;/a&gt;,
+connects to the control register of the debug slave port and controls the
+reset and halt lines into the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.com&quot;&gt;CPU&lt;/a&gt;.
+These are used to implement reset, halt,
+start, and step operations as we’ll see shortly.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+also has a second wrapper with more functionality to it, called
+the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipsystem.v&quot;&gt;ZipSystem&lt;/a&gt;,
+but since the logic within the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipbones.v&quot;&gt;ZipBones&lt;/a&gt;
+is simpler, we’ll focus on it.&lt;/p&gt;
+
+&lt;p&gt;Our discussion will focus on the reads and writes of these two locations,
+the control and data ports, although you may wish to give your own
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+more registers than just these two.&lt;/p&gt;
+
+&lt;h2 id=&quot;reseting-halting-and-stepping-the-cpu&quot;&gt;Reseting, halting, and stepping the CPU&lt;/h2&gt;
+
+&lt;p&gt;Let’s look at the control register for the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; for a moment.  Writes to
+this control register have the side-effect of controlling the
+&lt;code class=&quot;highlighter-rouge&quot;&gt;i_halt&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;i_rst&lt;/code&gt; (reset) lines within the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
+These side effects will cause the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;ZipCPU&lt;/a&gt;
+to run, halt, step, or even reset as requested.&lt;/p&gt;
+
+&lt;p&gt;The first side effect to be discussed is the reset.  Like many digital
+logic cores, the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;ZipCPU&lt;/a&gt;
+has a reset line going into it.  Controlling this reset is also quite
+possibly the simplest interaction with the bus.  Specifically, any time
+the control register is written with the reset bit set, the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is reset.  Further, this reset line into the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is initialized high, to make sure
+that the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+always starts from a reset state.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	cmd_reset = 1&#39;b1;
+always @(posedge i_clk)
+	cmd_reset &amp;lt;= ((dbg_cmd_write)&amp;amp;&amp;amp;(i_dbg_data[`RESET_BIT]));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Inside the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;ZipCPU&lt;/a&gt;,
+this reset line causes the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;ZipCPU&lt;/a&gt;
+to reboot.  While it only (re-)initializes a minimum of variables, it is
+enough to get the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+start from (nearly) known conditions.
+In particular, all error conditions, cache valid indications, and pipeline
+valid flags are cleared on reset.  Further, the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is sent to a pre-programmed address.  What doesn’t happen is that the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;
+are not re-initialized (the program counter and flags registers are though).
+This allows some amount of fault recovery in software, if desired, prior to
+setting all of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;
+to known conditions.&lt;/p&gt;
+
+&lt;p&gt;The second control line going into the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is a master halt line, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_halt&lt;/code&gt;.  This line, if set, will cause the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+to halt in such a way that no instructions will go
+into the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/cpuops.v&quot;&gt;ALU&lt;/a&gt;,
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/memops.v&quot;&gt;memory&lt;/a&gt;
+or &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/div.v&quot;&gt;divide&lt;/a&gt;
+units, but instructions that have already
+entered these units will be allowed to finish.  It does this by setting the
+stall logic associated with units, as we discussed during our
+&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;CPU pipeline signaling
+post&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The neat thing about the master halt line concept is that the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is designed to halt at a stopping point between instructions when using it. 
+Instructions that have entered the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/cpuops.v&quot;&gt;ALU&lt;/a&gt;,
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/memops.v&quot;&gt;memory&lt;/a&gt;
+or &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/div.v&quot;&gt;divide&lt;/a&gt;
+stages are allowed to complete, but further instructions are not allowed
+to enter these stages.  As a result, the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+can be started, stepped, or halted by adjusting this master enable (i.e.
+&lt;code class=&quot;highlighter-rouge&quot;&gt;i_halt&lt;/code&gt;) line.&lt;/p&gt;
+
+&lt;p&gt;This &lt;code class=&quot;highlighter-rouge&quot;&gt;i_halt&lt;/code&gt; line into the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is calculated from a couple of pieces of logic in the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipbones.v&quot;&gt;ZipBones&lt;/a&gt;
+wrapper.  The first is the &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd_halt&lt;/code&gt; register which is controlled by writes
+to the control register.  On a reset, the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+will start in a halted mode (if the boolean parameter &lt;code class=&quot;highlighter-rouge&quot;&gt;START_HALTED&lt;/code&gt; is set to
+true).  Ever afterwards, any write to the halt bit in the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipbones.v&quot;&gt;ZipBones&lt;/a&gt;
+status register will set or clear this bit with two exceptions:
+&lt;code class=&quot;highlighter-rouge&quot;&gt;cmd_step&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;cpu_break&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;`define	STEP_BIT	8
+`define	HALT_BIT	10
+
+always @(posedge i_clk)
+	if ((i_rst)||(cmd_reset))
+		cmd_halt &amp;lt;= (START_HALTED);
+	else if (dbg_cmd_write)
+		cmd_halt &amp;lt;= ((i_dbg_data[`HALT_BIT])&amp;amp;&amp;amp;(!i_dbg_data[`STEP_BIT]));
+	else if ((cmd_step)||(cpu_break))
+		cmd_halt &amp;lt;= 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The first exception is the &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd_step&lt;/code&gt; logic.  If the halt bit is set
+at the same time the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is instructed to step forward by one clock, then the halt request is ignored
+until the &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd_step&lt;/code&gt; has been true for one cock.  We’ll come back to this
+exception in a moment.&lt;/p&gt;
+
+&lt;p&gt;The second exception is the &lt;code class=&quot;highlighter-rouge&quot;&gt;cpu_break&lt;/code&gt; signal.  This is shown in Fig. 3 as
+the hardware break signal.  This is the signal the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+creates when it has encountered an unrecoverable fault–such as trying
+to execute an unimplemented instruction while in the supervisor
+(i.e. interrupt) state.  Other faults within the supervisor state
+will also cause the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+to fault as well, such as the break instruction, a divide by zero fault from
+within supervisor mode, or a
+&lt;a href=&quot;https://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;wishbone bus&lt;/a&gt;
+error.  This &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd_halt&lt;/code&gt; state captures that fault, and then holds the 
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+in a halted state for the debugger to come by and examine it.  (Alternatively,
+the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+could be programmed to just reboot.)&lt;/p&gt;
+
+&lt;p&gt;On that note, let’s return to looking at the step bit.  If the step bit is ever
+set, the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipbones.v&quot;&gt;ZipBones&lt;/a&gt;
+wrapper will release the halt line for one clock and then set it immediately
+again.  This will cause one instruction to enter the
+&lt;a href=&quot;/zipcpu/08/11/simple-alu.html&quot;&gt;ALU&lt;/a&gt;/memory pipeline stage.
+It works in conjunction with the &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd_halt&lt;/code&gt; bit above, so that if the step
+register is ever true, the &lt;code class=&quot;highlighter-rouge&quot;&gt;cmd_halt&lt;/code&gt; register will get set on the next
+instruction.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	cmd_step  = 1&#39;b0;
+always @(posedge i_clk)
+	cmd_step &amp;lt;= (dbg_cmd_write)&amp;amp;&amp;amp;(i_dbg_data[`STEP_BIT]);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;While this description may sound simple, the devil is in the details.
+For example, what happens when the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is in the middle of an atomic operation?
+What if an interrupt comes in while the debugger has the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+halted?  (It gets ignored.) What if the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is in the middle of executing a pair of instructions from a compressed
+instruction set word?  (The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+has no ability to restart a compressed instruction word mid-way through …)
+What if the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is loading a cache line, and the memory is slow to respond? (i.e. broken)&lt;/p&gt;
+
+&lt;p&gt;All of these details can make this halt line difficult to implement.&lt;/p&gt;
+
+&lt;h2 id=&quot;clearing-the-cache&quot;&gt;Clearing the Cache&lt;/h2&gt;
+
+&lt;p&gt;Before we move on to gaining access to
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;,
+the control register offers one more big capability–that of
+clearing the cache.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	cmd_clear_pf_cache = 1&#39;b0;
+always @(posedge i_clk)
+	cmd_clear_pf_cache &amp;lt;= (dbg_cmd_write)&amp;amp;&amp;amp;(i_dbg_data[`CLEAR_CACHE_BIT];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This is one of those annoying details that you may not think of initially.
+If the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is halted, the debugger is free to change memory, right?  Hence,
+the debugger might wish to swap a normal instruction for a &lt;code class=&quot;highlighter-rouge&quot;&gt;BREAK&lt;/code&gt;
+instruction or vice versa.  The problem lies in whether the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+has already read that instruction into its cache.  If the instruction the
+debugger wishes to change is already in the cache, then the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+might not notice the fact that the debugger has changed that memory.
+(The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;ZipCPU&lt;/a&gt;
+cache has no bus snooping capability … yet.)&lt;/p&gt;
+
+&lt;p&gt;This command also clears the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;’s
+pipeline for essentially the same reason–lest the instruction the debugger
+wished to change was also within the pipeline already and just waiting to
+execute.  We discussed how this was done earlier, when we discussed how
+the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+implemented its
+&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.md&quot;&gt;pipeline logic&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;reading-and-setting-registers&quot;&gt;Reading and Setting Registers&lt;/h2&gt;
+
+&lt;p&gt;While a proper bus protocol makes sense for reading from
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;,
+as we discussed above,
+the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;’s
+debug implementation isn’t quite a full bus implementation. Perhaps this
+interaction is ready for redesign.  For now, I’ll just explain it as it is.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; control register contains a
+set of six address bits.  Writes to the control register can be used to set
+these six address bits as well other flags such as those we discussed above.
+These then become the
+&lt;a href=&quot;https://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;wishbone&lt;/a&gt;
+address of a register within the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
+Ever after, reads from (or writes to) the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+data register will adjust the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;register&lt;/a&gt;,
+addressed by these six address bits.&lt;/p&gt;
+
+&lt;p&gt;Remember how &lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;we discussed
+earlier&lt;/a&gt;
+that a register read from a bus is just a big case statement?  The same is true
+of the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;.
+The only difference within the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+is that 28 of the 32 &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Processor_register&quot;&gt;registers&lt;/a&gt;,
+are stored in an on-chip RAM while the other four are collected from a
+set of control and status bits, and the two program counters.  Reading from
+the bus, therefore, is almost the same as the big case statement
+&lt;a href=&quot;/zipcpu/2017/05/23/simplebus.html&quot;&gt;we discussed earlier&lt;/a&gt;:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+begin
+	// 28 registers are normal, and can be read from a memory
+	o_dbg_reg &amp;lt;= regset[i_dbg_reg];
+
+	// The PC is a bit different
+	if (i_dbg_reg[3:0] == `CPU_PC_REG)
+		o_dbg_reg &amp;lt;= w_debug_pc;
+	else if (i_dbg_reg[3:0] == `CPU_CC_REG)
+	begin
+		// As is the flags register
+		o_dbg_reg[14:0] &amp;lt;= (i_dbg_reg[4])?w_uflags:w_iflags;
+		o_dbg_reg[15] &amp;lt;= 1&#39;b0;
+		o_dbg_reg[31:23] &amp;lt;= w_cpu_info;
+		o_dbg_reg[`CPU_GIE_BIT] &amp;lt;= gie;
+	end
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Writes are a touch more difficult, since the debugger needs to insert any
+register writes into the processing chain of the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;.
+handles such writes by creating a module parallel with the
+&lt;a href=&quot;/zipcpu/08/11/simple-alu.html&quot;&gt;ALU&lt;/a&gt;
+and &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/memops.v&quot;&gt;memory&lt;/a&gt;.
+This module (really only a register and about 4 lines of code) is only active
+if the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+is halted.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	dbgv &amp;lt;= (!i_rst)&amp;amp;&amp;amp;(i_halt)&amp;amp;&amp;amp;(i_dbg_we)&amp;amp;&amp;amp;(r_halted);
+always @(posedge i_clk)
+	dbg_val &amp;lt;= i_dbg_data;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Likewise, the register (and value) the
+&lt;a href=&quot;/zipcpu/08/11/simple-alu.html&quot;&gt;ALU&lt;/a&gt; would’ve written
+upon completion is modified during a halt as well:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (adf_ce_unconditional)
+		// A normal register write, if the CPU is running
+		alu_reg &amp;lt;= op_R
+	else if ((i_halt)&amp;amp;&amp;amp;(i_dbg_we))
+		// A debug register write, requiring the CPU to be halted
+		alu_reg &amp;lt;= i_dbg_reg&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This then sets the write values on the clock before writeback.  (The
+&lt;code class=&quot;highlighter-rouge&quot;&gt;adf_ce_unconditional&lt;/code&gt; flag is a piece of the 
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;’s
+pipeline logic that we may come back and address in more detail later in
+a post on pipelining.)&lt;/p&gt;
+
+&lt;p&gt;Finally, so that the debugger can know that this write has occurred, the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt; holds the stall register high
+any time it the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+hasn’t completely halted.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	o_dbg_stall = !r_halted;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You may notice, if you look at the code, that there’s no acknowledgement line.
+Indeed, the acknowledgement line is generated at the bottom of the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipbones.v&quot;&gt;ZipBones&lt;/a&gt;
+file based upon the fact that any request made to the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;, as long
+as the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
+isn’t stalled, is successful.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;You may notice that the logic above only depends upon a couple of wires,
+and that these wires have a very simple amount of logic assicated with them.
+This is how digital design should be.  The trick to every problem is knowing
+how to make the problem simple.&lt;/p&gt;
+
+&lt;p&gt;In our case, this problem is simplified by first creating some form of
+&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;debugging bus&lt;/a&gt;
+to get a bus access point to our hardware and peripherals, as well as
+understanding several various &lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;pipeline
+strategies&lt;/a&gt;,
+and then second understanding how a simple &lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;CPU can use such a
+strategy&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;This still leaves us with many more
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+topics to discuss, such as how to add or remove peripherals by simply
+adding or removing parameters from an
+&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
+command line.
+However, we are going to postpone that discussion until after I have the
+opportunity to discuss
+&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
+at &lt;a href=&quot;http://www.orconf.org&quot;&gt;ORCONF&lt;/a&gt; this year.&lt;/p&gt;
+
+&lt;p&gt;In the meantime, then, I’d like to turn this blog’s attention to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;DSP&lt;/a&gt;
+topics of both sine wave generation and
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;digital filtering&lt;/a&gt;.
+We’ll come back to the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
+later–if for no other reason than I’ve been asked to discuss how to modify
+&lt;a href=&quot;https://www.gcc.org&quot;&gt;GCC&lt;/a&gt;
+to support a new
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt; 
+backend.&lt;/p&gt;
+
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;No man can serve two masters: for either he will hate the one, and love the other; or else he will hold to the one, and despise the other. Ye cannot serve God and mammon.  (Matt 6:24)&lt;/em&gt;</description>
+        <pubDate>Fri, 25 Aug 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/zipcpu/2017/08/25/hw-debugging.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/zipcpu/2017/08/25/hw-debugging.html</guid>
+        
+        
+        <category>zipcpu</category>
+        
+      </item>
     
       <item>
         <title>The ZipCPU&#39;s pipeline logic</title>
@@ -293,7 +808,7 @@ from other parts of the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&
 For example, if
 register &lt;code class=&quot;highlighter-rouge&quot;&gt;R0&lt;/code&gt;  is read from slow memory in one instruction and then
 immediately used on the next instruction, the pipeline logic will need to
-stall the second instruction, waiting for the 
+stall the second instruction, waiting for the
 &lt;a href=&quot;/zipcpu/2017/08/11/simple-alu.html&quot;&gt;ALU&lt;/a&gt;,
 until &lt;code class=&quot;highlighter-rouge&quot;&gt;R0&lt;/code&gt; is available.&lt;/p&gt;
 
@@ -341,13 +856,13 @@ interrupt address is kept within an alternate register set.  (See the &lt;a href
 specification&lt;/a&gt;
 for details.&lt;/p&gt;
 
-&lt;p&gt;Indeed, lots of things need to change within the 
+&lt;p&gt;Indeed, lots of things need to change within the
 &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
 every time it switches to an interrupt context, or back again.
 If you want to trace this logic, feel free to
 &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;look for&lt;/a&gt;
 the &lt;code class=&quot;highlighter-rouge&quot;&gt;w_switch_to_interrupt&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;w_release_from_interrupt&lt;/code&gt; wires.  The first
-will be true any time the 
+will be true any time the
 &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
 switches to an interrupt context, the second will be true anytime the
 &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;ZipCPU&lt;/a&gt;
@@ -387,7 +902,7 @@ over the bus.  In this case, &lt;code class=&quot;highlighter-rouge&quot;&gt;mem
 is busy with a read and not a write.  Likewise, the
 &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/cpuops.v&quot;&gt;ALU&lt;/a&gt;
 will also stall if the external halt request line is true.  (We’ll come back and
-discuss this when discussing how to debug a 
+discuss this when discussing how to debug a
 &lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt; later.)
 Another, less common, example is that the
 &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/cpuops.v&quot;&gt;ALU&lt;/a&gt;
@@ -3112,387 +3627,6 @@ be able to generate your own button bouncing traces.&lt;/p&gt;
         <pubDate>Sat, 05 Aug 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/08/05/bounce-metric.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/08/05/bounce-metric.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>How to eliminate button bounces with digital logic</title>
-        <description>&lt;p&gt;The fundamental way to avoid &lt;a href=&quot;/fpga-hell.md&quot;&gt;FPGA Hell&lt;/a&gt; is
-to start from a small design and to build to a more complex design one small
-piece at a time.  You might even call this &lt;em&gt;good engineering process.&lt;/em&gt;  Along
-the way, you’ll want to avoid changing too many things at once.  Lest, if you
-introduce too many changes at the same time, you’ll never know which change
-is keeping your design from working.  Hence, your goal should be to build
-your complex designs from an initial simple design, modified by only simple
-changes.&lt;/p&gt;
-
-&lt;p&gt;The corollary to this rule is to make certain that your test and debug
-infrastructure, I like to call this your &lt;em&gt;scaffolding&lt;/em&gt;, is never one of
-multiple unknowns within your design.  There is a time for testing the
-scaffolding of your design: &lt;em&gt;before you need it&lt;/em&gt;.  You want to be convinced
-in the reliability of your scaffolding before you ever commit your time
-and design to its strength.&lt;/p&gt;
-
-&lt;p&gt;This has a particular application when you wish to use the buttons, switches,
-or keypad entry mechanisms to your design.  My advice?  Don’t use them as part
-of your debug infrastructure until you have &lt;em&gt;proven&lt;/em&gt; that they work the way
-you want them to work first.  The reason is that buttons bounce, and
-creating a signal that doesn’t bounce requires digital logic.&lt;/p&gt;
-
-&lt;p&gt;What makes a button debouncing circuit particularly unique when it comes to
-debugging, is that it is
-difficult to test apart from using a real button.  You just can’t simulate
-an unknown piece of hardware’s response very well.  This is what makes the
-coupling of the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging bus&lt;/a&gt; and
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; so powerful: using them,
-you can not only measure what’s going on any time a button gets pressed, but
-you can also measure whether or not your debouncing logic works within that
-context.&lt;/p&gt;
-
-&lt;p&gt;In this article, we will examine how to debounce a set of button inputs,
-so that they can then be used as part of your test infrastructure.&lt;/p&gt;
-
-&lt;h2 id=&quot;generating-events&quot;&gt;Generating Events&lt;/h2&gt;
-
-&lt;p&gt;User inputs, whether they be button presses, switches, or other, can be a very
-valuable part of your design.  They can be used
-to reset your board, to start a test, or even to enter data into your design.
-Indeed, once you cut the umbilical (&lt;a href=&quot;https://en.wikipedia.org/wiki/JTAG&quot;&gt;JTAG&lt;/a&gt;,
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Universal_asynchronous_receiver/transmitter&quot;&gt;UART&lt;/a&gt;, or
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/&quot;&gt;debugging bus&lt;/a&gt;) to your
-board, such inputs may be the only means you have remaining of controlling
-your board.&lt;/p&gt;
-
-&lt;p&gt;To understand how valuable these inputs can be, consider the following
-scenarios where student’s have tried to use a button:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;One student thought it would be nice to create a design that prints &lt;a href=&quot;https://en.wikipedia.org/wiki/&amp;quot;Hello,_World!&amp;quot;_program&quot;&gt;Hello
-World&lt;/a&gt;
-anytime a button is pressed.&lt;/p&gt;
-
-    &lt;p&gt;This student hadn’t yet gotten his first serial port to work.  By adding
-the button processing to his design, he added an additional unknown to the
-design and was thus unable to discern which piece of logic was failing
-when the whole didn’t work.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Another student’s challenge was to increment a counter every time a key was
-pressed.
-&lt;a href=&quot;https://forum.digilentinc.com/topic/3992-something-simple-is-apparently-impossible-incrdec-number/&quot;&gt;[1]&lt;/a&gt;&lt;/p&gt;
-
-    &lt;p&gt;This sounds easy, right?&lt;/p&gt;
-
-    &lt;p&gt;This student was surprised to discover that every time he pressed a button,
-his counter jumped by more than a single count.  He was expecting a single
-state change only.  Indeed, his design depended upon being able to detect
-singular button press events.  The multiple detected events “broke” the
-design he was building.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;While both of these applications are valid applications of a button, both
-students ended up stuck with an FPGA design that didn’t work because they
-weren’t aware of the difficulty associated with buttons: they bounce.&lt;/p&gt;
-
-&lt;p&gt;Turning a button from a bouncing electrical signal into a useful entry method
-requires some &lt;em&gt;debouncing logic&lt;/em&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;metastability-and-avoiding-the-beginners-mistakes&quot;&gt;Metastability, and avoiding the beginner’s mistakes&lt;/h2&gt;
-
-&lt;p&gt;Before we dig deeply into how to &lt;em&gt;debounce&lt;/em&gt; a button, let’s take a quick
-moment to mention how &lt;em&gt;not&lt;/em&gt; to work with a button.&lt;/p&gt;
-
-&lt;p&gt;The beginner is often enticed by the capabilities of a chip to transition on 
-a positive edge.  Hence, I’ve seen many beginners start their approach with&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	event = 1&#39;b0;
-always @(posedge i_button, posedge i_reset)
-	if (i_reset)
-		// Reset our system whenever i_reset is true
-		event &amp;lt;= 1&#39;b0
-	else
-		event &amp;lt;= 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The same mistake can be manifest in an attempt to count events, as in:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	event = 1&#39;b0;
-always @(posedge i_button, posedge i_reset)
-	if (i_reset)
-		counter &amp;lt;= 0;
-	else
-		counter &amp;lt;= counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Both of these approaches to measuring buttons are problematic.&lt;/p&gt;
-
-&lt;p&gt;Here’s why:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;Timing&lt;/strong&gt;: &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt; is not a clock.  Your tool-suite will struggle to
-analyze the timing between when a button press event takes place and
-the rest of the logic within your design.  It’s going to try to optimize
-the distance (in time and space) between the button press logic taking
-place and the logic that depends upon it, and since the button press wasn’t
-a clock the result will be difficult to analyze.  The result will be
-unreliable logic in the rest of your circuit.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;Asynchronous reset&lt;/strong&gt;’s tend to have a propagation delay when they work
-their way through your circuitry.  Therefore, they may reset one portion
-of your circuitry before another.  While this might not be such a problem
-if every part of the circuit gets reset eventually, this doesn’t mitigate
-the exit from the asynchronous reset .  Hence, when using an asynchronous
-reset, you may find some pieces of logic are released from reset before
-other pieces of logic. (This is &lt;em&gt;bad&lt;/em&gt;)&lt;/p&gt;
-
-    &lt;p&gt;Particularly problematic are spurious reset signals that last for less than
-a clock interval, perhaps created by some radio frequency interference
-within the FPGA board’s environment.  These signals may partially but not
-completely reset an FPGA’s logic.&lt;/p&gt;
-
-    &lt;p&gt;&lt;strong&gt;The beginner’s reset rule:&lt;/strong&gt; Just avoid the asynchronous reset.  This
-is easily done by removing &lt;code class=&quot;highlighter-rouge&quot;&gt;posedge i_reset&lt;/code&gt; from the dependency line in
-the always block.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Given this information, let’s try to build our logic again:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	down  = 1&#39;b0;
-initial	event = 1&#39;b0;
-always @(posedge i_clk)
-	if (i_reset)
-	begin
-		down  &amp;lt;= 0;
-		event &amp;lt;= 0;
-	end else begin
-		down &amp;lt;= i_button;
-		event &amp;lt;= (i_button)&amp;amp;&amp;amp;(!down);
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This approach, while better than the first one, is still problematic.&lt;/p&gt;
-
-&lt;p&gt;While this avoids the asynchronous reset, it now has a problem with
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastability&lt;/a&gt;. 
-Specifically, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt; may not have settled for enough time prior to the
-clock to create a stable logic signal.  As a result, the &lt;code class=&quot;highlighter-rouge&quot;&gt;down&lt;/code&gt; register may
-be indeterminate. Some parts of your circuitry may decide &lt;code class=&quot;highlighter-rouge&quot;&gt;down&lt;/code&gt; is true,
-while other parts deciding &lt;code class=&quot;highlighter-rouge&quot;&gt;down&lt;/code&gt; is false.  You may get two events in a
-row, or no events at all.&lt;/p&gt;
-
-&lt;p&gt;To avoid these problems, stick to these rules:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Use the positive edge of a single clock for &lt;em&gt;all&lt;/em&gt; of your logic.
-I like to use the same basic clock wire, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clk&lt;/code&gt;, within all my modules
-for this purpose.  The &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clk&lt;/code&gt; signal itself is either externally generated,
-or the result of a PLL applied to an external clock signal.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;For any logic inputs that are not created synchronously to your clock,
-such as your button inputs, clock them through a pair of flip flops
-(example below).  This applies to all external user input devices, such
-as buttons, switches, and keypad entry.  This rule also applies to all
-of your external asynchronous inputs as well: PS/2 devices, UARTs, or
-indeed any wires coming from external circuits that do not share your clock.&lt;/p&gt;
-
-    &lt;p&gt;While this alone doesn’t solve the problem of bouncing, it will make
-actually dealing with it a lot easier.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Using these rules, we can create a clock synchronous button input.  The first
-step is to run the button input through two flip-flops to avoid any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastability&lt;/a&gt;
-issues.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	sync_pipe      = 1&#39;b0;
-initial	r_button_state = 1&#39;b0;
-always @(posedge i_clk)
-	{ r_button_state, sync_pipe }
-		&amp;lt;= { sync_pipe, i_button };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;r_button_state&lt;/code&gt; has now gone through two flip flops from &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt;, and so
-it will be a one or a zero to all logic within your FPGA.  Now that the
-button input has been synchronized to our clock, we can detect when the
-button input changes with such simple code as:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	r_last         = 1&#39;b0;
-initial	r_button_event = 1&#39;b0;
-always @(posedge i_clk)
-begin
-	r_last &amp;lt;= r_button_state;
-	r_button_event &amp;lt;= (r_button_state)&amp;amp;&amp;amp;(!r_last);
-end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The nice part of this technique for generating &lt;code class=&quot;highlighter-rouge&quot;&gt;r_button_event&lt;/code&gt;, is that it
-will only ever be true &lt;em&gt;once&lt;/em&gt; for every time the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt; goes from off to
-on.&lt;/p&gt;
-
-&lt;p&gt;The other common piece of logic drawn from an external button input is a
-counter.  Let’s assume that our reset input, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt; is synchronous–perhaps
-you created it via the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;dbgbus&lt;/a&gt;
-infrastructure &lt;a href=&quot;/blog/2017/06/28/dbgbus-goal.html&quot;&gt;we’ve already
-built&lt;/a&gt;.  We can
-use that input to increment our counter, and then we can use the button event
-we just created to increment a counter:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-		counter &amp;lt;= 0;
-	else if (r_button_event)
-		counter &amp;lt;= counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;At this point we’ve only solved the problems with metastability, the
-asynchronous clock, and synchronizing the button input to our clock.
-Now that we know how to avoid these mistakes, let’s &lt;em&gt;debounce&lt;/em&gt; this button.&lt;/p&gt;
-
-&lt;h2 id=&quot;a-very-simple-debouncer&quot;&gt;A Very Simple Debouncer&lt;/h2&gt;
-
-&lt;p&gt;The basic approach to debouncing a button is to prevent the button’s output
-from changing more than once every &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; clocks.  Hence, we’ll build our
-approach to debouncing around a timer, &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt;, that simply counts down to
-zero.  Any time this &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; reaches zero, the current value will be forwarded
-to the output.  Further, we can control the time interval by just adjusting
-the number of bits in the timer.  We’ll call this number of bits &lt;code class=&quot;highlighter-rouge&quot;&gt;LGWAIT&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;Given those goals, here’s the code for a very simple digital logic debouncer:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial timer = {(LGWAIT){1&#39;b1}};
-always @(posedge i_clk)
-	timer &amp;lt;= timer - 1&#39;b1;
-always @(posedge i_clk)
-	if (timer == 0)
-		o_debounced &amp;lt;= r_button_state;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This approach should be good enough for most uses, so if you just want a very
-simple debouncing circuit this one will work.&lt;/p&gt;
-
-&lt;p&gt;However, if the latency in reporting the button press is important to you,
-this piece of logic may cause the button press indication to wait for up to
-&lt;code class=&quot;highlighter-rouge&quot;&gt;2^(LGWAIT)&lt;/code&gt; samples before being reported.  This problem is shown in Fig
-1 below.&lt;/p&gt;
-
-&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1: Traditional Debouncer&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/debounce-traditional.svg&quot; alt=&quot;Traditional debouncing logic&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;This figure hows a “slow timer” in its top line.  Any time the &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt;
-finishes counting down, the slow timer line changes as a visual reference.
-Notice then how the button press needs to wait on a transition in 
-slow timer (&lt;code class=&quot;highlighter-rouge&quot;&gt;timer == 0&lt;/code&gt;) before it reports a button press?
-That latency is what I’m talking about.&lt;/p&gt;
-
-&lt;p&gt;So, let’s return to this concept and see if we can’t do any better.&lt;/p&gt;
-
-&lt;h2 id=&quot;a-debouncer-with-more-immediate-results&quot;&gt;A Debouncer with more Immediate Results&lt;/h2&gt;
-
-&lt;p&gt;This time, let’s rebuild this debouncing circuit around the idea that a
-pressed button should be reported immediately, but that following changes
-should be held off at least &lt;code class=&quot;highlighter-rouge&quot;&gt;N=2^(LGWAIT)&lt;/code&gt; clocks after that.  Fig 2 captures
-this concept.&lt;/p&gt;
-
-&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2: Low-latency debouncer&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/debounce-immediate.svg&quot; alt=&quot;An immediate response debouncer&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;In this approach, the timer starts when the first change is detected.
-While the timer is counting, changes are not permitted.  As a result, the
-latency should be much lower than before.&lt;/p&gt;
-
-&lt;p&gt;We’ll follow some of the lessons from our post on how to &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;minimize
-logic resources&lt;/a&gt;.
-In particular, we’ll use a second register, &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt;, together with our timer.
-This register will be a single wire only, and we’ll set it to true any time
-&lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; is zero.  Finally, as we are going to set this up, any time &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt;
-is true the circuit will be responsive to a changing signal.&lt;/p&gt;
-
-&lt;p&gt;So here’s the code for the &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt;:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	ztimer = 1&#39;b1;
-initial	timer  = 0;
-always @(posedge i_clk)
-	if ((ztimer)&amp;amp;&amp;amp;(different))
-	begin
-		timer  &amp;lt;= {(LGWAIT) {1&#39;b1} };
-		ztimer &amp;lt;= 1&#39;b0;
-	end else if (!ztimer)
-	begin
-		timer  &amp;lt;= timer - 1&#39;b1;
-		ztimer &amp;lt;= (timer[(LGWAIT-1):1] == 0);
-	end else begin
-		ztimer &amp;lt;= 1&#39;b1;
-		timer  &amp;lt;= 0;
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The count-down will begin any time the &lt;code class=&quot;highlighter-rouge&quot;&gt;timer&lt;/code&gt; is at zero (&lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is high),
-and the inputs are &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; from what they were.  (We’ll come back to this
-in a moment.)    Once the timer is running, it will count down to zero.
-When it hits zero, it will hold there until another change has been detected.&lt;/p&gt;
-
-&lt;p&gt;As mentioned above, we’ll use the register &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; to signal any time the
-input is different from the output of our debouncing circuit.  &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt;,
-though, will then need to remain true until any ongoing countdown completes.
-Hence, as long as &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; gets set, either when the timer isn’t counting
-or between count-downs, &lt;code class=&quot;highlighter-rouge&quot;&gt;different&lt;/code&gt; will make sure that the timer restarts
-again.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	different &amp;lt;= ((different)&amp;amp;&amp;amp;(!ztimer))||(r_in != o_debounced);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We now finally have all the pieces necessary to create our low-latency
-debounced output.  This output will be set to whatever we just finished
-reading, but only ever anytime &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is set.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;initial	o_debounced = { (NIN) {1&#39;b0} };
-always @(posedge i_clk)
-	if (ztimer)
-		o_debounced &amp;lt;= r_last;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Notice the choice to set &lt;code class=&quot;highlighter-rouge&quot;&gt;o_debounced&lt;/code&gt; any time &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is true, coupled with
-the fact that &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; idles at zero.  Because of this, any time a button is
-pressed (or released), while the circuit is idle (&lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; is true), will
-immediately adjust &lt;code class=&quot;highlighter-rouge&quot;&gt;o_debounced&lt;/code&gt; with the new value.  Subsequent bounces,
-until the signal becomes stable again, will be limited to only change every
-&lt;code class=&quot;highlighter-rouge&quot;&gt;2^LGWAIT&lt;/code&gt; clocks.&lt;/p&gt;
-
-&lt;p&gt;Now, if we go back and review some of the button presses from the &lt;a href=&quot;/blog/2017/08/02/debounce-teaser.html&quot;&gt;opening
-post on debouncing&lt;/a&gt;,
-you’ll be able to understand the debounced trace in Fig 3. below.&lt;/p&gt;
-
-&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3: Debouncing Result&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/kypad.png&quot; alt=&quot;Example debouncing trace&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;In particular, notice how the &lt;code class=&quot;highlighter-rouge&quot;&gt;debounced&lt;/code&gt; trace changes immediately as soon
-as the button is pressed, and before it is done bouncing.  It doesn’t change
-again until all the bouncing is over, and the user releases the button.&lt;/p&gt;
-
-&lt;p&gt;This demonstrates that our logic actually worked.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
-
-&lt;p&gt;While this post presents &lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v&quot;&gt;working debouncing
-logic&lt;/a&gt;, the
-task remains far from complete.  For example, how many bits (&lt;code class=&quot;highlighter-rouge&quot;&gt;LGWAIT&lt;/code&gt;) need
-to be allocated to the counter?  Not quite so subtle is the question of how
-shall this capability be proven?  In particular, this logic requires
-an external button input bounce in order to properly verify its functionality.&lt;/p&gt;
-
-&lt;p&gt;Our &lt;a href=&quot;/blog/2017/08/05/bounce-metric.html&quot;&gt;next post&lt;/a&gt;,
-therefore, will focus on
-&lt;a href=&quot;/blog/2017/08/05/bounce-metric.html&quot;&gt;how to measure bounces&lt;/a&gt;
-so we can
-tell if a bounce has taken place.  After that, we’ll discuss
-&lt;a href=&quot;/blog/2017/08/07/bounce-dbgbus.html&quot;&gt;how to modify the&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging bus&lt;/a&gt; for this purpose, and to get
-a trace from within the design so we can see what’s going on.  Then we’ll go
-and move on to the next topic.&lt;/p&gt;
-
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Can the Ethiopian change his skin, or the leopard his spots? then may ye also do good, that are accustomed to do evil. (Jer 13:23)&lt;/em&gt;</description>
-        <pubDate>Fri, 04 Aug 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/08/04/debouncing.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/08/04/debouncing.html</guid>
         
         
         <category>blog</category>
