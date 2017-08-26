@@ -6,14 +6,333 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 25 Aug 2017 13:51:58 -0400</pubDate>
-    <lastBuildDate>Fri, 25 Aug 2017 13:51:58 -0400</lastBuildDate>
+    <pubDate>Sat, 26 Aug 2017 09:09:03 -0400</pubDate>
+    <lastBuildDate>Sat, 26 Aug 2017 09:09:03 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>http://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>(DRAFT) Building a quarter sine-wave lookup table</title>
+        <description>&lt;p&gt;The last time &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;we discussed how to create a
+sinewave&lt;/a&gt;,
+we discussed the way to make a very simple
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;.
+from a &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;LUT&lt;/a&gt;-based
+table lookup.  We limited that
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;.
+to an 8-bit table for simplicity, although it could easily be extended to a
+much larger table.&lt;/p&gt;
+
+&lt;p&gt;Today, let’s expand this concept to a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;.
+that uses a quarter wave table
+made from Block &lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;.  Such a table uses only a fourth of the block &lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;
+resources required by a full table, although it does require some extra logic
+to handle making things look like the full table.&lt;/p&gt;
+
+&lt;p&gt;Let’s also build this as an example of how to create pipelined
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Hardware_description_language&quot;&gt;HDL&lt;/a&gt; logic.&lt;/p&gt;
+
+&lt;p&gt;We’ll start by describing the algorithm in general, and then build the
+algorithm through a series of stages.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-algorithm&quot;&gt;The Algorithm&lt;/h2&gt;
+
+&lt;p&gt;The first step is always stepping back and assessing the problem.
+If you look at a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;,
+such as Fig 1. below, you can separate the full
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+period into four sections, one quarter wavelength each.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1: Sinewave Symmetry&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/sin-symmetry.png&quot; alt=&quot;Sinewave symmetry&quot; width=&quot;580&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;We’ll leave the first section alone.  This will become our quarter-wave
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+table.
+The second section is identical to the first, only in a backwards order.
+Hence, if we reverse our index, we should be able to recover anything from
+this quarter wave of the table.  The third and fourth sections are identical
+to the first two, only their results will need to be negated afterwards.&lt;/p&gt;
+
+&lt;p&gt;Since we are splitting the full wavelength into four sections, the top two
+&lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;phase&lt;/a&gt; bits can be
+used to determine which of the four sections we are in.  If the most significant
+bit is set, then we’ll want to negate the result.  If the next significant bit
+is set, we’ll want to read backwards out of the table.&lt;/p&gt;
+
+&lt;p&gt;This quarter wave table runs into a bit of a problem with
+&lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;phase&lt;/a&gt;
+quantization, though.  Consider a
+&lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;phase&lt;/a&gt;
+quantized table with only 16 entries, such as shown in Fig 2.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2: Sampled Sinewave&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/sin-qtrbroken.png&quot; alt=&quot;Sinewave symmetry broken by sampling&quot; width=&quot;580&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This table has lost the symmetry that was originally present in the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;.
+In particular, table[4]’s value is not present in table[0:3].
+If we were to use table[3] to represent the missing table[4] value, we
+might get a &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+looking like Fig 3. below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3: Symmetry can be broken by quantization&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/sin-qtrmisshapen.png&quot; alt=&quot;Fixing the broken symmetry by shifting a half a sample in phase&quot; width=&quot;580&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Notice how flat the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+is every time it crosses zero.  It’s not
+supposed to be this flat.  The slope of a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+is supposed to be at
+a maximum when it crosses zero–not flat. This shape distortion will create
+harmonics that we are not expecting if we don’t fix it.&lt;/p&gt;
+
+&lt;p&gt;If we instead advance the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+table entries by a half of a sample of phase each, the result
+will have less harmonic distortion. (i.e., it’ll be closer to the right shape,
+even if shifted left a touch).  The result would then look like Fig 4.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4: Fixing Symmetry by slipping a half a sample in phase&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/sin-qtrfixed.png&quot; alt=&quot;Fixing the broken symmetry by shifting a half a sample in phase&quot; width=&quot;580&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The resulting equation for this table is also shown in Fig 4.&lt;/p&gt;
+
+&lt;p&gt;The algorithm we want to build will take the first quarter of this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;,
+place it into a table, and then use that same table to generate
+the other four quarters of the wavelength.&lt;/p&gt;
+
+&lt;h2 id=&quot;building-the-algorithm&quot;&gt;Building the Algorithm&lt;/h2&gt;
+
+&lt;p&gt;It’s now time to build this algorithm.  Although the algorithm itself is
+quite simple, I’m going to build it in stages and use this as an opportunity
+to discuss how to build a pipelined algorithm in general.  This will allow us
+to compare several different implementations, and judge between good an bad
+approaches.&lt;/p&gt;
+
+&lt;p&gt;Our first draft for this algorithm uses a giant case statement:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+begin
+	case({ i_phase[(PW-1):PW-2] })
+	2&#39;b00:	o_val &amp;lt;=  tbl[ i_phase[(PW-3):0]];
+	2&#39;b01:	o_val &amp;lt;=  tbl[~i_phase[(PW-3):0]];
+	2&#39;b10:	o_val &amp;lt;= -tbl[ i_phase[(PW-3):0]];
+	2&#39;b11:	o_val &amp;lt;= -tbl[~i_phase[(PW-3):0]];
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In this piece of code, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase&lt;/code&gt; is the input
+&lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;phase&lt;/a&gt;
+request, &lt;code class=&quot;highlighter-rouge&quot;&gt;tbl&lt;/code&gt; is the quarter wave
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+table, and &lt;code class=&quot;highlighter-rouge&quot;&gt;o_val&lt;/code&gt; is the output
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;.
+PW is the
+&lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;phase&lt;/a&gt;
+width, or equivalently the number of bits in &lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;You may notice that I haven’t used &lt;code class=&quot;highlighter-rouge&quot;&gt;TBLLEN/4-1-i_phase&lt;/code&gt; at all when reversing
+the table entries.  Instead, &lt;code class=&quot;highlighter-rouge&quot;&gt;~i_phase&lt;/code&gt; accomplishes the same effect.  To know
+why this is relevant, remember the two steps to negating a two’s complement
+number: invert all the bits and add one.  In this case, we’d subtract one
+after adding one, so we can just invert the bits.  As an example, then, if
+&lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase&lt;/code&gt; counts from 0 to 15, &lt;code class=&quot;highlighter-rouge&quot;&gt;~i_phase&lt;/code&gt; would count from 15 back down to 0.&lt;/p&gt;
+
+&lt;p&gt;The problem with this big case statement approach is that most block &lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;’s
+are &lt;a href=&quot;https://www.xilinx.com/support/documentation/white_papers/wp231.pdf&quot;&gt;very particular about how they are
+accessed&lt;/a&gt;.
+Extra logic on the index is not allowed, neither is extra logic on the output.
+Adding logic in either place can interfere with the synthesis tool and keep
+it from recognizing your table as a block &lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt; (or &lt;a href=&quot;https://en.wikipedia.org/wiki/Read-only_memory&quot;&gt;ROM&lt;/a&gt; in this case).
+When dealing with this, I have found the following form to be reliable
+among the various hardware’s I have worked with.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_ce)
+		tblvalue &amp;lt;= tbl[index];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Perhaps this is simpler than it needs to be, but it does work across
+vendors’ tool-suites.&lt;/p&gt;
+
+&lt;p&gt;This may also be the time to discuss our pipeline strategy.  Looking over the
+&lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;various pipeline
+strategies&lt;/a&gt;
+we posted about earlier, this already looks like the beginning of the
+“global CE” approach.  If we look up the examples of where the “global CE”
+pipeline strategy makes the most sense, you may recall that
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;DSP&lt;/a&gt;
+logic was one of the common applications of this approach.  Since that’s what
+we are building today, we’ll keep the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt;
+line, and add it into the rest of our logic.&lt;/p&gt;
+
+&lt;p&gt;Working the simplicity of this block
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt; access into our
+logic, though, will take some work.  We’ll need to spend a clock to calculate
+the index, and another clock after that to deal with the negation.&lt;/p&gt;
+
+&lt;p&gt;This brings us to our second approach to our logic.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+if (i_ce)
+begin
+	// First, calculate the table index
+	if (i_phase[(PW-2):0])
+		index &amp;lt;= ~i_phase[(PW-3):0];
+	else
+		index &amp;lt;=  i_phase[(PW-3):0];
+
+	// Use the index to access Block RAM
+	tblvalue &amp;lt;= table[index];
+
+	// Handle the negation afterwards
+	if (i_phase[(PW-1):0])
+		o_val &amp;lt;= -tblvalue;
+	else
+		o_val &amp;lt;=  tblvalue;
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This approach still has some hazards to it.  Perhaps if we drew a data
+flow diagram, such as Fig 5 below, these hazards will become be more apparent.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5: Initial Data Flow Diagram&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qtrwave-preschedule.svg&quot; alt=&quot;Initial data flow diagram&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Let’s work with this flow diagram for a moment.  First, it helps to
+separate the data flow variables into clock transitions regions.  (We’ll
+show this in Fig 6 below in a moment.)
+&lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase&lt;/code&gt; would be in the first clock.  We’ll call this the input clock.
+&lt;code class=&quot;highlighter-rouge&quot;&gt;index&lt;/code&gt; is in the next clock, etc.  Once you separate these variables, then
+you can see the problem with the negation logic.  This negation flag
+needs to come from the
+high bit of &lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase[(PW-1)]&lt;/code&gt;, but it has to be available after the table
+look up.  To make this problem more apparent, draw vertical lines through
+the diagram, dilineating the processing clocks.  Data flows should not cross
+through such lines, without being clocked into a new register–else you’ll
+have a pipeline bug.&lt;/p&gt;
+
+&lt;p&gt;The solution to this problem is to &lt;em&gt;schedule&lt;/em&gt; the pipeline logic.
+Specifically, we’ll create a register to hold &lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase[(PW-1)]&lt;/code&gt; while
+the table index is calculated and the table value is looked up.  We can
+implement this with a two stage shift register, captured by &lt;code class=&quot;highlighter-rouge&quot;&gt;negate[0]&lt;/code&gt; and
+&lt;code class=&quot;highlighter-rouge&quot;&gt;negate[1]&lt;/code&gt;:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+if (i_ce)
+begin
+	negate[0] &amp;lt;= i_phase[(PW-1):0];
+	// ...
+	negate[1] &amp;lt;= negate[0];
+	if (negate[1])
+		// ...
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;A new data flow diagram for this modified algorithm might look like Fig 6.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6: Scheduled data flow&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qtrwave-scheduled.svg&quot; alt=&quot;Data flow diagram, with all logic scheduled&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Notice how each variable is now associated with a clock period in the pipeline.&lt;/p&gt;
+
+&lt;p&gt;Written out, our logic now looks like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// Initialize the quarter-wave table
+initial	$readmemh(&quot;quarterwav.hex&quot;, quartertable);
+
+always @(posedge i_clk)
+	if (i_ce)
+	begin
+		// Clock one
+		negate[0] &amp;lt;= i_phase[(PW-1):0];
+		index  &amp;lt;= i_phase[(PW-2):0]
+				? ~i_phase[(PW-3):0]
+				:  i_phase[(PW-3):0];
+
+		// Clock two
+		negate[1] &amp;lt;= negate[0];
+		tblvalue &amp;lt;= table[index];
+
+		// Output clock
+		if (negate[1])
+			o_val &amp;lt;= -tblvalue;
+		else
+			o_val &amp;lt;=  tblvalue;
+	end
+end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You can also find a &lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/rtl/quarterwav.v&quot;&gt;full example of this logic
+here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;At this point, we are almost done.  All that’s left is to create a hex
+file to be used to crate this table.  This can be done from a simple
+&lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/sw/sintable.cpp&quot;&gt;C++ program&lt;/a&gt;,
+where the relevant portion is shown below:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;tbl_entries&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lgtable&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;),&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;maxv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ow&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tbl_entries&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;dv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ph&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;ph&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;2.0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;M_PI&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;/&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tbl_entries&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;ph&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt;       &lt;span class=&quot;n&quot;&gt;M_PI&lt;/span&gt;             &lt;span class=&quot;o&quot;&gt;/&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tbl_entries&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;dv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;maxv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sin&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ph&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;%&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;fprintf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;hexfp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;%s@%08x &quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;?&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;fprintf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;hexfp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;%0*x &quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ow&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;fprintf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;hexfp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Well, not quite.  The problem with this approach is that the table generator
+is closely associtated with the Verilog code itself.  In particular, you
+can’t change the number of table entries, or for that matter the width of
+the table entries, without also adjusting the &lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/rtl/quarterwav.v&quot;&gt;Verilog
+code&lt;/a&gt;.
+For this reason, the
+&lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/sw/sintable.cpp&quot;&gt;C++ generator&lt;/a&gt;
+program creates both the
+&lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/rtl/quarterwav.v&quot;&gt;Verilog code&lt;/a&gt;
+and the
+&lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/rtl/quarterwav.hex&quot;&gt;hex table&lt;/a&gt;
+at the same time.&lt;/p&gt;
+
+&lt;p&gt;That’s it!  We’ve now made a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+generator from just a quarter wave
+table.  We’re still going to need to come back to test this table, to build
+a test bench and prove that it works, but that’s the basics of the algorithm.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;This post is one in a small series of posts discussing how to generate a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;.
+We’ve already discussed a &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.md&quot;&gt;very simple sinewave
+generator&lt;/a&gt;,
+and we are well on our way to creating and explaining a full blown
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt; implementation.&lt;/p&gt;
+
+&lt;p&gt;These &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;
+generators will then form the basis for testing the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;digital filters&lt;/a&gt;
+that I intend to discuss and demonstrate as well.&lt;/p&gt;
+
+&lt;p&gt;So, while this is the end of this post, in many ways it is only one step
+forward in building &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;Digital Signal
+Proccessing&lt;/a&gt;
+algorithms within an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
+Stick around, there’s a lot you can do with a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sinewave&lt;/a&gt;.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;But he went out, and began to publish it much, and to blaze abroad the matter, insomuch that Jesus could no more openly enter into the city, but was without in desert places: and they came to him from every quarter.  (Mark 1:45)&lt;/em&gt;</description>
+        <pubDate>Sat, 26 Aug 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/dsp/2017/08/26/quarterwave.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/08/26/quarterwave.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>Debugging your soft-core CPU within an FPGA</title>
@@ -3438,196 +3757,6 @@ have been placed into their own
         <pubDate>Mon, 07 Aug 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/08/07/bounce-dbgbus.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/08/07/bounce-dbgbus.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Measuring Contact Bounce</title>
-        <description>&lt;p&gt;Buttons and switches on
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;’s
-can be very useful to work with.  This extra
-user I/O on a development board can make life easier when trying to direct
-what is going on within it, or when trying to debug logic within the board.
-The problem is that these forms of inputs often
-“&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bounce&lt;/a&gt;”,
-and produce multiple transitions when only one was directed.&lt;/p&gt;
-
-&lt;p&gt;This problem is particularly problematic in the fact that it is difficult
-to simulate hardware
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bounces&lt;/a&gt;,
-since they tend to be quite random.&lt;/p&gt;
-
-&lt;p&gt;Our &lt;a href=&quot;/blog/2017/08/02/debounce-teaser.html&quot;&gt;first post&lt;/a&gt;
-on this topic looked into how this sort of
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bouncing&lt;/a&gt;
-manifested.  It wasn’t pretty, as many buttons from several different
-boards and even a keypad all demonstrated this problem.&lt;/p&gt;
-
-&lt;p&gt;Our &lt;a href=&quot;/blog/2017/08/04/debouncing.html&quot;&gt;second post&lt;/a&gt;
-discussed how to create the &lt;a href=&quot;https://github.com/ZipCPU/debouce/trunk/blob/master/rtl/debounce.html&quot;&gt;digital logic necessary to
-debounce&lt;/a&gt;
-a user input.&lt;/p&gt;
-
-&lt;p&gt;Today, we’ll discuss how to measure the effect
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bouncing&lt;/a&gt;
-has on your input logic.&lt;/p&gt;
-
-&lt;h1 id=&quot;measuring-the-reality-of-buttons-bouncing&quot;&gt;Measuring the Reality of Buttons: Bouncing&lt;/h1&gt;
-
-&lt;p&gt;To try to capture this phenomena, let’s look at two things in particular.&lt;/p&gt;
-
-&lt;p&gt;First, we’ll count the number of state transitions as in Fig 1 below.  In
-the case of a button,
-the first transition should be when the button is pressed, and the second
-transition when the button is released.  In the case of a switch, only
-one transition should ever take place.  It either of the two
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bounces&lt;/a&gt;, we should be
-able to tell.  In particular, the number of transitions would be
-something other than two for a button or one for a switch.&lt;/p&gt;
-
-&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1: Measuring Transitions&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/button-transitions.svg&quot; alt=&quot;Counting how many transitions a button creates&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The second thing we we might wish to measure is how many clocks it takes
-for the transitions to take place.  For example, with a button, this will
-be the number of clocks from the first press to the last bounce on release,
-as shown in Fig 2 below.  It won’t tell us as much about
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bouncing&lt;/a&gt;, though, since
-the bounces will have settled long before this measurement is concluded.
-It might still tell us something about the nature and character of a button
-press in general.  We can then use this information to understand how to
-tune our &lt;a href=&quot;/blog/2017/08/04/debouncing.html&quot;&gt;debouncing
-logic&lt;/a&gt;.&lt;/p&gt;
-
-&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2: Measuring Button Press Duration&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/button-duration.svg&quot; alt=&quot;Counting a button press duration&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;h1 id=&quot;building-the-code-the-unbouncer&quot;&gt;Building the code: The Unbouncer&lt;/h1&gt;
-
-&lt;p&gt;We’ll handle the first two measurements in a routine I’m going to call
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blog/master/rtl/unbounced.v&quot;&gt;unbounced&lt;/a&gt;.
-This &lt;em&gt;unbouncer&lt;/em&gt; will help to tell us what has been going on within our
-design.&lt;/p&gt;
-
-&lt;p&gt;As we discussed during our discussion on
-&lt;a href=&quot;/blog/2017/08/04/debouncing.html&quot;&gt;debouncing logic&lt;/a&gt;,
-the first step of necessity is going to be to synchronize our inputs.
-This synchronization is our approach to take the incoming button logic
-signal, and make sure that any logic depending upon this information has
-its &lt;a href=&quot;https://en.wikipedia.org/wiki/Flip-flop_(electronics)#Timing_considerations&quot;&gt;setup and
-hold&lt;/a&gt;
-requirements met.  It also helps us avoid any issues with
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastability&lt;/a&gt;,
-lest our logic act in an unpredictable (and incomprehensible) manner later.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-begin
-	// Two clocks to synchronize asynchronous data
-	q_in   &amp;lt;= i_in;
-	r_in   &amp;lt;= q_in; // SYNCHRONIZED!
-	// Keep track of last value, so we can find changes
-	r_last &amp;lt;= r_in;
-end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Once the inputs have been synchronized, we can then count the number of
-times they change.  We’ll reset our count upon any reset request, but ever
-afterwards we can just increment our counter on any changes:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-		o_transitions &amp;lt;= 0;
-	else if (r_last != r_in)
-		o_transitions &amp;lt;= o_transitions + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As we mentioned above, a button press should produce two transitions: one
-when the button is pressed, and one when it is released.  Anything else is
-an indication of
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bouncing&lt;/a&gt;.
-This simple counter can be used to test whether there was a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bounce&lt;/a&gt; or not.&lt;/p&gt;
-
-&lt;p&gt;The other thing we’re going to want to do is count how much time it takes
-from the initial change (button press) until the final change (button release).
-We’ll use the &lt;code class=&quot;highlighter-rouge&quot;&gt;triggered&lt;/code&gt; signal to determine when to run our counter, and
-so run the counter any time after the button was &lt;code class=&quot;highlighter-rouge&quot;&gt;triggered&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-		triggered &amp;lt;= 1&#39;b0;
-	else if (r_last != r_in)
-		triggered &amp;lt;= 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Let’s just remember that we’re going to need to reset our logic
-between events, so we can re-trigger on the next event.&lt;/p&gt;
-
-&lt;p&gt;Next, we’ll keep track of the time since the last trigger:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-		counter &amp;lt;= 0;
-	else if ((triggered)&amp;amp;&amp;amp;(!clock[31]))
-		counter &amp;lt;= counter + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Note that this “counter” measure will saturate once the top bit sets.  This
-will give us about 21~seconds of measurement before losing track of what’s
-going on (assuming a 100MHz clock).  That should be plenty for our purposes.&lt;/p&gt;
-
-&lt;p&gt;Once we have this “time-since-event” above, we can then measure the maximum
-amount of time that takes place between the initial button press and the
-last change.  We’ll set this to zero upon an external reset, and ever
-afterwards if our button input &lt;code class=&quot;highlighter-rouge&quot;&gt;r_in&lt;/code&gt; doesn’t match what it was once clock
-ago, we’ll update our maximum clock duration value.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	if (i_reset)
-		o_max_clock &amp;lt;= 0;
-	else if (r_last != r_in)
-		o_max_clock &amp;lt;= counter;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This &lt;code class=&quot;highlighter-rouge&quot;&gt;o_max_clock&lt;/code&gt; value will therefore capture the number of clocks between
-a trigger and the last transition.&lt;/p&gt;
-
-&lt;h2 id=&quot;coming-back-to-the-debug-bus&quot;&gt;Coming back to the Debug Bus&lt;/h2&gt;
-
-&lt;p&gt;At this point, many students would turn to a
-&lt;a href=&quot;https://store.digilentinc.com/pmod-ssd-seven-segment-display/&quot;&gt;7-segment display&lt;/a&gt;,
-&lt;a href=&quot;https://store.digilentinc.com/pmod-8ld-eight-high-brightness-leds&quot;&gt;LED’s&lt;/a&gt;,
-an &lt;a href=&quot;https://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface&quot;&gt;LCD&lt;/a&gt;,
-or another &lt;a href=&quot;https://store.digilentinc.com/pmod-oledrgb-96-x-64-rgb-oled-display-with-16-bit-color-resolution/&quot;&gt;display output&lt;/a&gt;
-to return these numbers.  This becomes a trap for
-the student, though, because the problems associated with displaying these
-values (particularly the &lt;a href=&quot;https://store.digilentinc.com/pmod-ssd-seven-segment-display/&quot;&gt;7-segment
-display&lt;/a&gt;
-or &lt;a href=&quot;https://store.digilentinc.com/pmodclp-character-lcd-with-parallel-interface&quot;&gt;LCD&lt;/a&gt;) can be just as complicated,
-if not more so, than the simple button pressing logic we’ve presented above.
-When this student then wants to isolate the bug he is getting to be either
-the debouncing module or the display module, he can’t tell which is causing
-the problem.&lt;/p&gt;
-
-&lt;p&gt;Let’s avoid this mistake by integrating our
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/trunk/rtl/deboucer.v&quot;&gt;debouncing&lt;/a&gt;
-and &lt;a href=&quot;https://github.com/ZipCPU/debouncer/trunk/rtl/unbounced.v&quot;&gt;unbouncing&lt;/a&gt;
-logic into a &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging bus&lt;/a&gt;, such as
-the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/tree/master/hexbus&quot;&gt;one we built together
-earlier&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;This will be our next step: How to integrate our
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v&quot;&gt;debouncer&lt;/a&gt;
-together with
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v&quot;&gt;today’s unbounced logic&lt;/a&gt;
-and the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus&quot;&gt;debugging bus&lt;/a&gt;, so that we can get
-bounce information from within an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
-Even better, if we include a
-&lt;a href=&quot;http://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v&quot;&gt;compressed&lt;/a&gt;
-&lt;a href=&quot;http://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; into that project, you’ll
-be able to generate your own button bouncing traces.&lt;/p&gt;
-
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;And this is the fashion which thou shalt make it of: The length of the ark shall be three hundred cubits, the breadth of it fifty cubits, and the height of it thirty cubits. (Genesis 6:15)&lt;/em&gt;</description>
-        <pubDate>Sat, 05 Aug 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/08/05/bounce-metric.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/08/05/bounce-metric.html</guid>
         
         
         <category>blog</category>
