@@ -6,14 +6,663 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 28 Aug 2017 08:56:11 -0400</pubDate>
-    <lastBuildDate>Mon, 28 Aug 2017 08:56:11 -0400</lastBuildDate>
+    <pubDate>Wed, 30 Aug 2017 09:01:05 -0400</pubDate>
+    <lastBuildDate>Wed, 30 Aug 2017 09:01:05 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>http://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Using a CORDIC to calculate sines and cosines in an FPGA</title>
+        <description>&lt;p&gt;We’ve now presented two separate algorithms that can be used for calculating
+a sine wave: a &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;very simple sinewave table
+lookup&lt;/a&gt;,
+and a &lt;a href=&quot;/dsp/2017/08/26/quarterwave.html&quot;&gt;more complicated quarter-wave table lookup
+method&lt;/a&gt;.  Both of these
+approaches used only a minimum number of clocks, although their precision
+was somewhat limited.&lt;/p&gt;
+
+&lt;p&gt;Today, let’s look at how to implement a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;&lt;strong&gt;CO&lt;/strong&gt;ordinate &lt;strong&gt;R&lt;/strong&gt;otation &lt;strong&gt;DI&lt;/strong&gt;gital &lt;strong&gt;C&lt;/strong&gt;omputer
+(CORDIC)&lt;/a&gt;
+algorithm within an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: The CORDIC problem description&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cordic-problem-setup.svg&quot; alt=&quot;Setting up a CORDIC&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;p&gt;If you’ve never worked with a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm before, the algorithms are all
+based around specific
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrices&lt;/a&gt;
+which we will explain first.  These rotation matrices can be strung together
+to accomplish many digital logic purposes.  For today’s discussion, though,
+we will be rotating a two-dimensional vector by a requested counter-clockwise
+angle.  Thus, the inputs will be x and y values, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_xval&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;i_yval&lt;/code&gt;,
+together with a requested phase rotation, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase&lt;/code&gt;, whereas the outputs
+will just be a rotated x and y value, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_xval&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;o_yval&lt;/code&gt;–as shown in
+Fig 1.&lt;/p&gt;
+
+&lt;h1 id=&quot;the-cordic-rotation&quot;&gt;The CORDIC rotation&lt;/h1&gt;
+
+&lt;p&gt;But, just what is a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+rotation?  Well, since all of these algorithms are built around a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+rotation, let’s start by answering that question.  We’ll start with the
+concept of a simple two-dimensional
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrix&lt;/a&gt;,
+and then work from there to how that can be turned into a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+rotation.&lt;/p&gt;
+
+&lt;p&gt;A simple two-dimensional
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrix&lt;/a&gt;
+is given by:&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-2d-rotation.png&quot; alt=&quot;Equation for a 2D rotation&quot; width=&quot;302&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This rotation can be used to rotate a complex vector &lt;code class=&quot;highlighter-rouge&quot;&gt;exp(j*phi)&lt;/code&gt; and turn it
+into another one, &lt;code class=&quot;highlighter-rouge&quot;&gt;exp(j*(phi+theta))&lt;/code&gt;, if the real value is the first value
+in the given vector, and the would-be imaginary value the second (i.e. strip off
+the &lt;code class=&quot;highlighter-rouge&quot;&gt;j&lt;/code&gt;).  Further, if the original vector is
+simply the real number one, &lt;code class=&quot;highlighter-rouge&quot;&gt;1+j0&lt;/code&gt;, then we will have just created
+&lt;code class=&quot;highlighter-rouge&quot;&gt;sin(theta)&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;cos(theta)&lt;/code&gt; in this process.&lt;/p&gt;
+
+&lt;p&gt;This is what we are going to try to do: apply a rotation like this one.&lt;/p&gt;
+
+&lt;p&gt;We could apply this rotation using &lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;angles more
+suited&lt;/a&gt;
+for an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-no-pi-rotation.png&quot; alt=&quot;Eqn for a 2D rotation in FPGA units&quot; width=&quot;364&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;but this still leaves us with the problem that the sine and cosine aren’t
+easy to calculate, leaving this rotation difficult to accomplish.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: CORDIC Rotation Vectors&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cordic-rotations.svg&quot; alt=&quot;Cordic rotation vectors&quot; width=&quot;240&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;p&gt;The
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+approach is to replace the cosine portion of this rotation matrix with a &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt;,
+and the sine portion with a &lt;code class=&quot;highlighter-rouge&quot;&gt;2^-k&lt;/code&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-bare-cordic-transform.png&quot; alt=&quot;EQN for a bare cordic stage&quot; width=&quot;281&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;You can think of this as a series of complex rotation vectors,
+indexed by &lt;code class=&quot;highlighter-rouge&quot;&gt;k&lt;/code&gt;, such as those are shown in Fig 1.  Notice from the figure
+that these vectors are not on the unit circle, but rather just outside the
+unit circle, and they get closer and closer to the unit circle the higher
+&lt;code class=&quot;highlighter-rouge&quot;&gt;k&lt;/code&gt; becomes.&lt;/p&gt;
+
+&lt;p&gt;In other words, &lt;code class=&quot;highlighter-rouge&quot;&gt;T&lt;/code&gt; is approximately a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrix&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;T&lt;/code&gt; is also something that is easy to calculate within an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
+It requires only adds, subtracts, and shifts.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-cordic-eqns.png&quot; alt=&quot;Cordic equations&quot; width=&quot;350&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This can all be done with integer math–no multiplies or divides are required.&lt;/p&gt;
+
+&lt;p&gt;Of course, this transform is not a true rotation matrix.  Instead, it is a
+scaled &lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrix&lt;/a&gt;.
+To see this, first calculate the angles of the vectors in Fig 1 above:&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-cordic-phase.png&quot; alt=&quot;Cordic rotation phase&quot; width=&quot;168&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Then also calculate and normalize by their their lengths.  The resulting
+transform, &lt;code class=&quot;highlighter-rouge&quot;&gt;T&lt;/code&gt;, is shown below:&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-cordic-transform-simplified.png&quot; alt=&quot;Eqn for the cordic stage, after simplification&quot; width=&quot;459&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;From here you can see that this is most definitely a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrix&lt;/a&gt;
+with an amplitude increase associated with it.&lt;/p&gt;
+
+&lt;p&gt;Further, as you may have guessed from Fig 1 above, we can apply a similar
+rotation going in the opposite direction:&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-cordic-negative-transform.png&quot; alt=&quot;Eqn for the cordic stage, negated angle, after simplification&quot; width=&quot;459&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;These two (nearly) &lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation
+matrices&lt;/a&gt;
+form the basis of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm.&lt;/p&gt;
+
+&lt;p&gt;The basic idea behind the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm is that we can string many of these
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrices&lt;/a&gt;
+together–either rotating by a positive &lt;code class=&quot;highlighter-rouge&quot;&gt;theta_k&lt;/code&gt; or a
+negative &lt;code class=&quot;highlighter-rouge&quot;&gt;theta_k&lt;/code&gt; in each matrix.  As an example, suppose you rotated
+[1, 0] by +26.57 degrees (k=1), then by 14.03 degrees (k=2), then backwards
+by 7.12 degrees (k=3).  You would then
+have a vector that has been rotated by 30.48 degrees.  Other than
+the slight amplitude increase, that means that your resulting vector now
+approximates a thirty degree phasor–and you didn’t have to do anything that
+significant to get there.&lt;/p&gt;
+
+&lt;p&gt;Further, the more of these rotation matrices you string together, the smaller
+the remaining rotation becomes, and hence the closer the result will come
+(in angular distance) to any desired rotation.&lt;/p&gt;
+
+&lt;p&gt;This is what we are going to try to build today.&lt;/p&gt;
+
+&lt;h2 id=&quot;rotating-into-range&quot;&gt;Rotating into range&lt;/h2&gt;
+
+&lt;p&gt;The first step in building this rotation, though, is that massage the problem
+so that the rotation desired is less than 45 degrees.  This comes from the
+fact that the smallest rotation the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+rotation above can accomplish is a 45 degree rotation.  Angles beyond
+45 degrees just get smaller.  Therefore, the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+rotation requires an initial angular request, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase&lt;/code&gt;, to be less than 45
+degrees.  Our first problem, therefore is going to be rotating our incoming
+vector so that any remaining rotation amount is 45 degrees or less.&lt;/p&gt;
+
+&lt;p&gt;As a preliminary step, we’ll start our algorithm off by expanding the two
+input values from their initial width, &lt;code class=&quot;highlighter-rouge&quot;&gt;IW&lt;/code&gt;, to a wider working width, &lt;code class=&quot;highlighter-rouge&quot;&gt;WW&lt;/code&gt;.
+Because the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm will also increase the magnitude of the input, this process adds one
+more bit on the left–to allow for a touch of width expansion.  It also adds
+a user selectable number of bits (captured as part of &lt;code class=&quot;highlighter-rouge&quot;&gt;WW&lt;/code&gt;) to the right so as
+to minimize any distortion’s caused by
+&lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;truncation effects&lt;/a&gt;
+within the rotation.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;wire	signed [(WW-1):0]	e_xval, e_yval;
+assign	e_xval = { {i_xval[(IW-1)]}, i_xval, {(WW-IW-1){1&#39;b0}} };
+assign	e_yval = { {i_yval[(IW-1)]}, i_yval, {(WW-IW-1){1&#39;b0}} };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Further, we’re going to declare our intermediate values
+to be an array of &lt;code class=&quot;highlighter-rouge&quot;&gt;WW&lt;/code&gt; bits each for the intermediate &lt;code class=&quot;highlighter-rouge&quot;&gt;xv&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;yv&lt;/code&gt; values,
+and an array of phase width, &lt;code class=&quot;highlighter-rouge&quot;&gt;PW&lt;/code&gt;, number of bits for the phase.  Since the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+operation takes place in stages, we’ll declare &lt;code class=&quot;highlighter-rouge&quot;&gt;NSTAGES+1&lt;/code&gt; of these
+values–that will create variables to hold not only the input values,
+but the outputs as well.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// Declare variables for all of the separate stages
+reg	signed	[(WW-1):0]	xv	[0:(NSTAGES)];
+reg	signed	[(WW-1):0]	yv	[0:(NSTAGES)];
+reg		[(PW-1):0]	ph	[0:(NSTAGES)];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The beginner needs to understand that this is not the definition of a memory,
+although it might look very similar to a block RAM definition.  Rather, this
+is a simplified definition of &lt;code class=&quot;highlighter-rouge&quot;&gt;NSTAGES&lt;/code&gt; of values in flip-flops.&lt;/p&gt;
+
+&lt;p&gt;Declarations aside, that brings us to the actual logic of the
+pre-&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+section.  The goal of this section is to rotate the input by some number
+of ninety-degree intervals until the remaining phase is between -45 and 45.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2: Initial rotation&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cordic-prerotation.svg&quot; alt=&quot;Result of the pre-CORDIC rotation&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Since this is a signal processing algorithm, the “global CE” &lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;pipeline
+strategy&lt;/a&gt;
+may make the most sense.  We’ll also create logic for the &lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;traveling CE strategy
+strategy&lt;/a&gt;
+later.  For now, remember that the global CE strategy requires that nothing
+changes unless a CE line is true.  Therefore, our transform begins by
+checking the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt; line.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+if (i_ce)&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Next, we’ll want to walk through the actual rotations.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3: Rotation by quadrant&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cordic-prequadrants.svg&quot; alt=&quot;Split the pre-rotation up by quadrant&quot; width=&quot;280&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;p&gt;In order to get 
+everything into +/- 45 degrees, we’ll want to check not only which quadrant
+our phase request is within, but also which 45 degree segment of that quadrant
+the angle is in, as shown in Fig 3.
+Hence, we’ll check the top three bits of &lt;code class=&quot;highlighter-rouge&quot;&gt;i_phase&lt;/code&gt;, and apply a rotation
+based upon them.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	case(i_phase[(PW-1):(PW-3)])&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Each rotation opportunity will set &lt;code class=&quot;highlighter-rouge&quot;&gt;xv[0]&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;yv[0]&lt;/code&gt;, and &lt;code class=&quot;highlighter-rouge&quot;&gt;ph[0]&lt;/code&gt;.  These are
+the initial values of x, y, and the remaining phase to rotate through.  The
+options for &lt;code class=&quot;highlighter-rouge&quot;&gt;xv[0]&lt;/code&gt; are &lt;code class=&quot;highlighter-rouge&quot;&gt;+/- e_xval&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;+/- e_yval&lt;/code&gt; and likewise for &lt;code class=&quot;highlighter-rouge&quot;&gt;yv[0]&lt;/code&gt;.
+Further, because these rotations are all by multiples of ninety degrees,
+there’s no need to do any additions.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	3&#39;b000: begin	// 0 .. 45, No change
+		xv[0] &amp;lt;= e_xval;
+		yv[0] &amp;lt;= e_yval;
+		ph[0] &amp;lt;= i_phase;
+		end
+	3&#39;b001: begin	// 45 .. 90
+		xv[0] &amp;lt;= -e_yval;
+		yv[0] &amp;lt;= e_xval;
+		ph[0] &amp;lt;= i_phase - 30&#39;h10000000;
+		end
+	3&#39;b010: begin	// 90 .. 135
+		xv[0] &amp;lt;= -e_yval;
+		yv[0] &amp;lt;= e_xval;
+		ph[0] &amp;lt;= i_phase - 30&#39;h10000000;
+		end
+	3&#39;b011: begin	// 135 .. 180
+		xv[0] &amp;lt;= -e_xval;
+		yv[0] &amp;lt;= -e_yval;
+		ph[0] &amp;lt;= i_phase - 30&#39;h20000000;
+		end
+	3&#39;b100: begin	// 180 .. 225
+		xv[0] &amp;lt;= -e_xval;
+		yv[0] &amp;lt;= -e_yval;
+		ph[0] &amp;lt;= i_phase - 30&#39;h20000000;
+		end
+	3&#39;b101: begin	// 225 .. 270
+		xv[0] &amp;lt;= e_yval;
+		yv[0] &amp;lt;= -e_xval;
+		ph[0] &amp;lt;= i_phase - 30&#39;h30000000;
+		end
+	3&#39;b110: begin	// 270 .. 315
+		xv[0] &amp;lt;= e_yval;
+		yv[0] &amp;lt;= -e_xval;
+		ph[0] &amp;lt;= i_phase - 30&#39;h30000000;
+		end
+	3&#39;b111: begin	// 315 .. 360, No change
+		xv[0] &amp;lt;= e_xval;
+		yv[0] &amp;lt;= e_yval;
+		ph[0] &amp;lt;= i_phase;
+		end
+	endcase&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Remember: we are rotating the &lt;code class=&quot;highlighter-rouge&quot;&gt;xv&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;yv&lt;/code&gt; vector counter-clockwise, so
+that the rotation remaining, &lt;code class=&quot;highlighter-rouge&quot;&gt;ph&lt;/code&gt;, is less than &lt;code class=&quot;highlighter-rouge&quot;&gt;+/- 45&lt;/code&gt; degrees.  Hence we
+are rotating &lt;code class=&quot;highlighter-rouge&quot;&gt;xv&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;yv&lt;/code&gt; in a counter-clockwise direction, while the
+remaining phase angle will decrease in what will look like a clock-wise
+direction.&lt;/p&gt;
+
+&lt;p&gt;This sets up the actual
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;:
+&lt;code class=&quot;highlighter-rouge&quot;&gt;xv[0]&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;yv[0]&lt;/code&gt; now need to be rotated
+through &lt;code class=&quot;highlighter-rouge&quot;&gt;ph[0]&lt;/code&gt; remaining &lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;angular
+units&lt;/a&gt;.  We’ve also
+guaranteed that &lt;code class=&quot;highlighter-rouge&quot;&gt;|ph[0]|&lt;/code&gt; is less than or equal to 45 degrees.&lt;/p&gt;
+
+&lt;h2 id=&quot;rotating-to-zero&quot;&gt;Rotating to zero&lt;/h2&gt;
+
+&lt;p&gt;The next step is to rotate the &lt;code class=&quot;highlighter-rouge&quot;&gt;xv[0]&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;yv[0]&lt;/code&gt; values through the remaining
+phase angle, &lt;code class=&quot;highlighter-rouge&quot;&gt;ph[0]&lt;/code&gt;.  To do this, we’re going to check whether or not the
+remaining phase is negative or positive.  If the phase is negative, we’ll
+rotate by a positive &lt;code class=&quot;highlighter-rouge&quot;&gt;cordic_angle[i]&lt;/code&gt;.  If the remaining phase is positive,
+we’ll rotate in the opposite direction but by the same amount.&lt;/p&gt;
+
+&lt;p&gt;Software programmers like to look at &lt;code class=&quot;highlighter-rouge&quot;&gt;for&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;while&lt;/code&gt; loops in Verilog and
+think of them like their &lt;code class=&quot;highlighter-rouge&quot;&gt;for&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;while&lt;/code&gt; counterparts in software.  HDL
+loops, however, are &lt;em&gt;nothing&lt;/em&gt; like software loops.  Software loops repeat the
+same instruction, one after another in time.  HDL loops on the other hand
+repeat the instruction in space on the chip by creating multiple copies of
+the same logic, all of which will be executed in parallel.&lt;/p&gt;
+
+&lt;p&gt;This is one of those rare cases where a &lt;code class=&quot;highlighter-rouge&quot;&gt;for&lt;/code&gt; loop makes sense in Verilog.  The
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm repeats nearly the same logic &lt;code class=&quot;highlighter-rouge&quot;&gt;NSTAGES&lt;/code&gt; times over.  Hence, this
+loop generates &lt;code class=&quot;highlighter-rouge&quot;&gt;NSTAGES&lt;/code&gt; pieces of logic, each of which advances the
+prior stage by one clock.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;genvar	i;
+generate for(i=0; i&amp;lt;NSTAGES; i=i+1) begin : CORDICops&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Within this for loop, we’ll create several always blocks.  Each block
+first makes sure that nothing changes, except when the global CE signal, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt;
+is high.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
+	// Reset logic can be placed here, but it isnt required
+	if (i_ce)
+	begin&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Once these last preliminaries have been taken care of, we can finally apply the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+rotation/transform.
+Note that we first check the sign of the remaining phase to know which
+direction to rotate, but otherwise the operations you see here should match
+the transform we discussed earlier.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		// You can check for cord[i] == 0 here if you would like
+		if (ph[i][(PW-1)]) // Negative phase
+		begin
+			// If the phase is negative, rotate by the
+			// CORDIC angle in a clockwise direction.
+			xv[i+1] &amp;lt;= xv[i] + (yv[i]&amp;gt;&amp;gt;&amp;gt;(i));
+			yv[i+1] &amp;lt;= yv[i] - (xv[i]&amp;gt;&amp;gt;&amp;gt;(i));
+			ph[i+1] &amp;lt;= ph[i] + cordic_angle[i];
+		end else begin
+			// On the other hand, if the phase is
+			// positive ... rotate in the
+			// counter-clockwise direction
+			xv[i+1] &amp;lt;= xv[i] - (yv[i]&amp;gt;&amp;gt;&amp;gt;(i));
+			yv[i+1] &amp;lt;= yv[i] + (xv[i]&amp;gt;&amp;gt;&amp;gt;(i));
+			ph[i+1] &amp;lt;= ph[i] - cordic_angle[i];
+		end
+	end
+endgenerate&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;While this is the core of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm, now that we have put it together we are by no means done.  We still
+need to generate the &lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+angles, listed as array elements of &lt;code class=&quot;highlighter-rouge&quot;&gt;cordic_angle&lt;/code&gt; above, any traveling
+CE &lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;pipeline
+logic&lt;/a&gt;,
+&lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;drop any excess bits&lt;/a&gt;
+we’ve accumulated,
+and figure out what the gain of the algorithm is in case we wish to compensate
+for it.&lt;/p&gt;
+
+&lt;h2 id=&quot;using-a-core-generator-in-c-to-get-the-angles&quot;&gt;Using a core-generator in C++ to get the angles&lt;/h2&gt;
+
+&lt;p&gt;One difficulty associated with building a “generic”
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+HDL core is that some of the components of the core cannot be generalized
+very easily.  A good example of this problem is the VHDL
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+&lt;a href=&quot;http://github.com/freecores/cordic/blob/master/polar2rect/p2r_Cordic_pipe.vhd&quot;&gt;core&lt;/a&gt; found on
+&lt;a href=&quot;http://opencores.org/project,cordic&quot;&gt;OpenCores&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;http://github.com/freecores/cordic/blob/master/polar2rect/p2r_Cordic_pipe.vhd&quot;&gt;This open-cores
+core&lt;/a&gt;
+is built with a fixed precision.  While the data width can ostensibly be
+adjusted, there are a fixed number of internal arc-tangent results, each created
+with a fixed width and a fixed value.  (Well, that and you can’t &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;simulate the
+core&lt;/a&gt; within
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt; because someone chose to
+write it within &lt;em&gt;VHDL&lt;/em&gt;.)  The only way to prevent this bit-width problem
+associated with a one-size fits all solution is to
+use a software program, sometimes called a core generator or
+&lt;a href=&quot;https://www.xilinx.com/products/design-tools/coregen.html&quot;&gt;coregen&lt;/a&gt;, to
+tailor the &lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+to a specifically requested precision.  This piece of software needs to
+calculate the phase rotation angles.  We’ll also use the software to calculate
+the required number of stages, the number of input or output bits required,
+the number of phase bits, etc., etc.&lt;/p&gt;
+
+&lt;p&gt;Such a core generator will be our approach
+&lt;a href=&quot;https://github.com/ZipCPU/cordic/tree/master/sw&quot;&gt;here&lt;/a&gt;.  You can find the
+basic &lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/sw/basiccordic.v&quot;&gt;core generator
+here&lt;/a&gt;,
+within my &lt;a href=&quot;https://github.com/ZipCPU/cordic&quot;&gt;cordic repository&lt;/a&gt;.
+For now, let’s discuss calculating the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+angles.&lt;/p&gt;
+
+&lt;p&gt;Starting from above, the cordic angles are defined as&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-cordic-phase.png&quot; alt=&quot;Cordic rotation phase&quot; width=&quot;168&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;but in our &lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;normalized integer units of
+phase&lt;/a&gt;,
+the value we will want is going to be&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-cordic-tblangle.png&quot; alt=&quot;Cordic rotation phase&quot; width=&quot;342&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This value can easily be computed in C++ or any other higher level language
+for that matter.  We’ll use C++ for this exercise.&lt;/p&gt;
+
+&lt;p&gt;We’ll need to calculate one angle for each of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+stages.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;for(unsigned k=0; k&amp;lt;(unsigned)nstages; k++) {
+	double		x, deg;
+	unsigned	phase_value;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The angle is given by the arctangent of our rotation vector, &lt;code class=&quot;highlighter-rouge&quot;&gt;1+j2^-k&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	x = atan2(1., pow(2,k));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;(Remember, atan2 accepts the y argument first.  Hence our arguments of
+&lt;code class=&quot;highlighter-rouge&quot;&gt;x=2^k&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;y=1&lt;/code&gt; represent an equivalent representation to our angle of
+interest.)&lt;/p&gt;
+
+&lt;p&gt;We’ll keep track of the value of this angle in degrees as well as
+&lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;FPGA units&lt;/a&gt;,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	deg = x * 180.0 / M_PI;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;For all other purposes, though, we’ll convert our angle to a &lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;normalized
+integer phase&lt;/a&gt;,
+value we can use in an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+algorithm,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	x *= (4.0 * (1ul&amp;lt;&amp;lt;(phase_bits-2))) / (M_PI * 2.0);
+	phase_value = (unsigned)x;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We can then print this value to our resulting Verilog file.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	fprintf(fp, &quot;\tassign\tcordic_angle[%2d] = %2d\&#39;h%0*x; //%11.6f deg\n&quot;,
+		k, phase_bits, (phase_bits+3)/4, phase_value,
+		deg);
+}&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;(I know this is the old-style C I/O — while I’ve used the C++ I/O, I’ve
+never really fallen in-love with it.)&lt;/p&gt;
+
+&lt;p&gt;After applying this calculation to a problem set with an &lt;code class=&quot;highlighter-rouge&quot;&gt;18-bit&lt;/code&gt; phase
+requirement, the code above generated the following table,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	cordic_angle[ 0] = 18&#39;h0_8000; //  45.000000 deg
+assign	cordic_angle[ 1] = 18&#39;h0_4b90; //  26.565051 deg
+assign	cordic_angle[ 2] = 18&#39;h0_27ec; //  14.036243 deg
+assign	cordic_angle[ 3] = 18&#39;h0_1444; //   7.125016 deg
+assign	cordic_angle[ 4] = 18&#39;h0_0a2c; //   3.576334 deg
+assign	cordic_angle[ 5] = 18&#39;h0_0517; //   1.789911 deg
+assign	cordic_angle[ 6] = 18&#39;h0_028b; //   0.895174 deg
+assign	cordic_angle[ 7] = 18&#39;h0_0145; //   0.447614 deg
+assign	cordic_angle[ 8] = 18&#39;h0_00a2; //   0.223811 deg
+assign	cordic_angle[ 9] = 18&#39;h0_0051; //   0.111906 deg
+assign	cordic_angle[10] = 18&#39;h0_0028; //   0.055953 deg
+assign	cordic_angle[11] = 18&#39;h0_0014; //   0.027976 deg
+assign	cordic_angle[12] = 18&#39;h0_000a; //   0.013988 deg
+assign	cordic_angle[13] = 18&#39;h0_0005; //   0.006994 deg&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The number of stages and the number of bits in each stage can both be defined
+based upon arguments to the &lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/sw/main.cpp&quot;&gt;core generator
+program&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;We still have several steps remaining.  In particular, we need to set up the
+“traveling CE” &lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;pipeline strategy
+logic&lt;/a&gt;,
+&lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;round&lt;/a&gt;
+the final result, and discuss on how to deal with
+the amplitude distortion produced by the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm.&lt;/p&gt;
+
+&lt;h2 id=&quot;auxiliary-logic&quot;&gt;Auxiliary Logic&lt;/h2&gt;
+
+&lt;p&gt;I mentioned earlier that we could use the “traveling CE” &lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;pipeline
+strategy&lt;/a&gt;
+if desired.  That strategy requires that for every strobe input, the output
+associated with that input also needs to have a high strobe output.&lt;/p&gt;
+
+&lt;p&gt;We’ll use our C++ code to build this as well, since in C++ we have control
+over when to place this logic into the code, as well as how much of this
+logic needs to be placed into
+&lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/rtl/cordic.v&quot;&gt;our core&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;To do this, we’ll teach the &lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/sw/main.cpp&quot;&gt;main core generator
+program&lt;/a&gt;
+to accept a &lt;code class=&quot;highlighter-rouge&quot;&gt;-a&lt;/code&gt; option.  We’ll then use this to create an &lt;code class=&quot;highlighter-rouge&quot;&gt;aux&lt;/code&gt;iliary bit
+to contain the “traveling CE” bit.&lt;/p&gt;
+
+&lt;p&gt;The actual logic required to implement this “traveling CE” is just a simple
+shift register:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
+	if (i_reset)
+		ax &amp;lt;= {(NSTAGES+1){1&#39;b0}};
+	else if (i_ce)
+		ax &amp;lt;= { ax[(NSTAGES-1):0], i_aux };
+
+always @(posedge i_clk)
+	o_aux &amp;lt;= ax[NSTAGES];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;On a 7-Series Xilinx
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
+all of this logic can fit within one shift register logic block.&lt;/p&gt;
+
+&lt;p&gt;Placing this logic within the core generator makes certain that no matter
+what logic takes place within the core, the output &lt;code class=&quot;highlighter-rouge&quot;&gt;o_aux&lt;/code&gt; bit remains lined
+up with the output data associated with any input data that had the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_aux&lt;/code&gt;
+bit.&lt;/p&gt;
+
+&lt;h2 id=&quot;dropping-the-last-number-of-bits&quot;&gt;Dropping the last number of bits&lt;/h2&gt;
+
+&lt;p&gt;When we get to the end, we’ll want to drop some bits.  We
+&lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;discussed some time ago&lt;/a&gt;
+how to go about this via
+&lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;rounding&lt;/a&gt;.  We also discussed
+several different types of
+&lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;rounding&lt;/a&gt; at that same time.
+Here, we follow the convergent rounding approach to drop any excess bits.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	// Round our result towards even
+	wire	[(WW-1):0]	pre_xval, pre_yval;
+
+	assign	pre_xval = xv[NSTAGES] + ,
+				xv[NSTAGES][(WW-OW)],
+				{(WW-OW-1){!xv[NSTAGES][WW-OW]}}};
+	assign	pre_yval = yv[NSTAGES] + ,
+				yv[NSTAGES][(WW-OW)],
+				{(WW-OW-1){!yv[NSTAGES][WW-OW]}}};
+
+	always @(posedge i_clk)
+	begin
+		o_xval &amp;lt;= pre_xval[(WW-1):(WW-OW)];
+		o_yval &amp;lt;= pre_yval[(WW-1):(WW-OW)];
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;That marks the end of our basic
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm.  We still need to discuss what to do about the amplitude
+gain we’ve accumulated, so that will be next.&lt;/p&gt;
+
+&lt;h2 id=&quot;dealing-with-amplitude&quot;&gt;Dealing with Amplitude&lt;/h2&gt;
+
+&lt;p&gt;As you’ll recall from the beginning of our discussion, the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm has a gain associated with it.  Our task here will be to calculate
+that gain.  We’ll do this within our C++ generator program, since it has
+all the details and capability to do so.&lt;/p&gt;
+
+&lt;p&gt;Below is a copy of the &lt;a href=&quot;https://github.com/ZipCPU/cordic/blob/master/sw/cordiclib.cpp&quot;&gt;C++ code used to calculate the cordic
+gain&lt;/a&gt;.
+It basically calculates the product of all of the gains of the various
+stages in our algorithm.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;cordic_gain&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nstages&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_bits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;gain&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nstages&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;dgain&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;dgain&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;dgain&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sqrt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dgain&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;gain&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;gain&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;dgain&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;gain&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This, however, only tells us how much gain will be applied to our input.  That
+is, it quantifies our amplitude distortion.  We’ll capture this with a
+comment line added to the end of the list of &lt;code class=&quot;highlighter-rouge&quot;&gt;cordic_angles&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// Gain is 1.646760&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Not all applications need gain compensation.  Some can ignore the
+gain.  In the case of those applications, the task is done.&lt;/p&gt;
+
+&lt;p&gt;Other applications use a
+CORDIC
+for calculating sines and cosines.  These applications would nominally send
+&lt;code class=&quot;highlighter-rouge&quot;&gt;(1,0)&lt;/code&gt; into the algorithm as an input.  For these applications, the way to
+compensate for the gain is to send a different number as an input.  Instead
+of &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt; (or really &lt;code class=&quot;highlighter-rouge&quot;&gt;2^n&lt;/code&gt; for an &lt;code class=&quot;highlighter-rouge&quot;&gt;n&lt;/code&gt;-bit input), these algorithms will want
+to send one divided by the gain into the algorithm.  If we calculate the
+right constant to replace the &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt; with, then we still won’t need any
+multiplies.  To help you figure this out, the algorithm calculates
+&lt;code class=&quot;highlighter-rouge&quot;&gt;2^32/cordic_gain&lt;/code&gt;, and places this into the comments following the
+calculation of the &lt;code class=&quot;highlighter-rouge&quot;&gt;cordic_angle&lt;/code&gt;s as well.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// You can annihilate this gain by multiplying by 32&#39;h9b74edae
+// and right shifting by 32 bits.&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;That allows you to pick the number of most-significant bits that you need,
+for the precision you want.&lt;/p&gt;
+
+&lt;p&gt;Other applications use the
+CORDIC
+to actually rotate the input vector.  For these applications, the same
+32-bit value can be used as an annihilator, post
+CORDIC
+application.  If you multiply by this annihilator, and shift right, then the
+CORDIC
+gain will be removed.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
+
+&lt;p&gt;Now that you’ve seen what goes into making a working
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+core, perhaps you are as amazed as I am at how many parts and pieces this
+&lt;em&gt;simple&lt;/em&gt; sine and cosine wave generator has.  We started out by discussing the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation matrices&lt;/a&gt;
+used by the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm.  This is usually where most academic
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+development’s stop.&lt;/p&gt;
+
+&lt;p&gt;However, when you want to make a working
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+core, you have to go further.  You need to rotate the original vector by
+some multiple of ninety degree angles until the remaining rotation angle is
+less than forty five degrees.  Only then can you apply the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Rotation_matrix&quot;&gt;rotation&lt;/a&gt;.
+Doing so, though, requires the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+angles, which we needed to calculate based upon the desired precision of the
+output.  As a final step, we calculated both the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+gain and it’s associated annihilator (inverse).&lt;/p&gt;
+
+&lt;p&gt;If only this were all that was required of a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+core.  It’s not.  We still need to build a test bench for this core–so our
+work isn’t over yet.
+Before doing so, however, I think we’ll present the other basic type of
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+algorithm: the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/CORDIC&quot;&gt;CORDIC&lt;/a&gt;
+arctan, sometimes called the rectangular to polar conversion, before diving
+into the bench test.&lt;/p&gt;
+
+&lt;p&gt;If you are interested in further reading on the topic,
+Ray Andraka has written an excellent &lt;a href=&quot;http://www.andraka.com/files/crdcsrvy.pdf&quot;&gt;survey of CORDIC
+algorithms&lt;/a&gt; that you might find
+valuable.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;O ye simple, understand wisdom: and, ye fools, be ye of an understanding heart.  (Prov 8:5)&lt;/em&gt;</description>
+        <pubDate>Wed, 30 Aug 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/dsp/2017/08/30/cordic.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/08/30/cordic.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>Building a quarter sine-wave lookup table</title>
@@ -3449,314 +4098,6 @@ bouncing for yourself, or even test your own debouncing code.&lt;/p&gt;
         <pubDate>Wed, 09 Aug 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2017/08/09/series-debouncing.html</link>
         <guid isPermaLink="true">http://zipcpu.com/blog/2017/08/09/series-debouncing.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>Using a debug-bus to Measure Bouncing</title>
-        <description>&lt;p&gt;As we’ve discussed in our two previous posts,
-buttons and switches on
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;’s
-can be very useful to work with.  They can be
-very useful tools when debugging as well.  The problem is that these forms of
-inputs often “&lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;bounce&lt;/a&gt;”,
-and produce multiple edges when only one is desired.  This can be a problem
-when you wish to depend or rely upon these inputs as being a dependable
-part of a debugging solution–before you’ve managed to ensure their
-dependability.&lt;/p&gt;
-
-&lt;p&gt;Making &lt;a href=&quot;https://en.wikipedia.org/wiki/Switch#Contact_bounce&quot;&gt;contact bounce&lt;/a&gt;
-particularly problematic is the fact that it is difficult to simulate, since
-the bounces tend to appear quite random.&lt;/p&gt;
-
-&lt;p&gt;Our &lt;a href=&quot;/blog/2017/08/02/debounce-teaser.html&quot;&gt;first post&lt;/a&gt;
-on this topic looked into how this sort of bouncing manifested, showing
-several examples and traces of contact bounces.  The pictures weren’t very
-pretty, as many buttons from several different boards and even a keypad all
-manifested this problem.&lt;/p&gt;
-
-&lt;p&gt;Our &lt;a href=&quot;/blog/2017/08/04/debouncing.html&quot;&gt;second post&lt;/a&gt;
-discussed how to create the digital logic necessary to debounce a user
-input.&lt;/p&gt;
-
-&lt;p&gt;We then &lt;a href=&quot;/blog/2017/08/05/bounce-metric.html&quot;&gt;created some simple test
-points&lt;/a&gt; that could
-be used to measure button press duration and the number of times a particular
-button press bounced.&lt;/p&gt;
-
-&lt;p&gt;Today, our discussion is going to focus on how to connect these two
-components to the &lt;a href=&quot;https://opencores.org/cdn/downloads/wbspec_b4.pdf&quot;&gt;wishbone
-bus&lt;/a&gt; present within our
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/testbus.v&quot;&gt;debugging-bus testing
-logic&lt;/a&gt;.
-We’re also going to add a
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;compressed wishbone scope&lt;/a&gt;
-to the design in order to get the traces out of our design such as were
-presented in the &lt;a href=&quot;/blog/2017/08/02/debounce-teaser.html&quot;&gt;initial
-post&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;instantiating-the-two-components&quot;&gt;Instantiating the two components&lt;/h2&gt;
-
-&lt;p&gt;Over the course of the last two posts, we’ve created two components that
-we would now like to test: 
-a &lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v&quot;&gt;debouncer&lt;/a&gt;,
-and an
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v&quot;&gt;unbounced&lt;/a&gt;
-module.  We are going to test these two components by pressing a button, and
-then reading the results produced by these two components as registers on a
-bus.  Once read, we’ll use the bus to reset these components.&lt;/p&gt;
-
-&lt;p&gt;We’ll start by assuming we have &lt;code class=&quot;highlighter-rouge&quot;&gt;NBTNS&lt;/code&gt; buttons, in a vector named &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt;
-coming into our top level design.  This vector, together with our system
-clock, can then be used as inputs to these two modules, as in:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;debouncer	#(NBTNS) thedebouncer(i_clk, i_button,
-				debounced, debounce_dbg);
-unbounced	#(NBTNS) theunbouncer(i_clk, unbounce_reset,
-				i_button, transitions, max_clock);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The result of the
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v&quot;&gt;debouncer&lt;/a&gt;
-is a &lt;code class=&quot;highlighter-rouge&quot;&gt;NBTNS&lt;/code&gt;-bit vector &lt;code class=&quot;highlighter-rouge&quot;&gt;debounced&lt;/code&gt;.  This vector is a copy of &lt;code class=&quot;highlighter-rouge&quot;&gt;i_button&lt;/code&gt;,
-save only that it has been both synchronized to the clock and any bounces
-have been removed.&lt;/p&gt;
-
-&lt;p&gt;The two results of the
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v&quot;&gt;unbounced&lt;/a&gt;
-vector are two 31-bit vectors: &lt;code class=&quot;highlighter-rouge&quot;&gt;transitions&lt;/code&gt; which holds the number of
-transitions, and &lt;code class=&quot;highlighter-rouge&quot;&gt;max_clock&lt;/code&gt; which holds the number of clock ticks from the
-first transition to the last.&lt;/p&gt;
-
-&lt;p&gt;The other two items are the &lt;code class=&quot;highlighter-rouge&quot;&gt;unbounce_reset&lt;/code&gt; and the &lt;code class=&quot;highlighter-rouge&quot;&gt;debounce_dbg&lt;/code&gt;.
-The &lt;code class=&quot;highlighter-rouge&quot;&gt;unbounce_reset&lt;/code&gt; line clears the counters.  We’ll hook that up in the
-next section.  The &lt;code class=&quot;highlighter-rouge&quot;&gt;debounce_dbg&lt;/code&gt; lines, however, we’ll come back to when
-we discuss hooking the debouncer up to the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone
-scope&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;connecting-the-components-to-the-debugging-bus&quot;&gt;Connecting the components to the debugging bus&lt;/h2&gt;
-
-&lt;p&gt;We’d like to hook these two peripherals to our wishbone debugging bus,
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;testbus.v&lt;/a&gt;.
-In particular, we’d like to be able to read these three values from an
-external UART.  Since reading the values requires no logic handshake with
-the modules, they can be hooked up just as simply as any of the other
-simple registers within the
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;testbus.v&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;To hook this new peripheral up, just assign it an address among our
-simple data peripheral’s address map:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	case(wb_addr[3:0])
-	...
-	4&#39;h6:    smpl_data &amp;lt;= transitions;
-	4&#39;h7:    smpl_data &amp;lt;= max_clock;
-	4&#39;h8:    smpl_data &amp;lt;= { {(32-NBTNS){1&#39;b0}}, debounced };
-	...
-	defult: smpl_data &amp;lt;= 32&#39;h0;
-	endcase&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Don’t forget when using these addresses, that each address references a
-32-bit quantity, and hence they need to be multiplied by four to get the
-offset into the address map.
-Hence, address offsets of 24, 28, and 32 from the simple data peripheral
-now contain our new values.  Given that we placed our simple data peripheral
-at an address offset of &lt;code class=&quot;highlighter-rouge&quot;&gt;0x2040&lt;/code&gt;, that means these new registers will have
-final addresses &lt;code class=&quot;highlighter-rouge&quot;&gt;0x2058&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;0x205c&lt;/code&gt;, and &lt;code class=&quot;highlighter-rouge&quot;&gt;0x2060&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;One other change is required to the bus, we need to create our reset signal,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;unbounce_reset&lt;/code&gt;.  We’re going to set this reset signal up so that any time
-we write to either of these registers, either the &lt;code class=&quot;highlighter-rouge&quot;&gt;transitions&lt;/code&gt; or the
-&lt;code class=&quot;highlighter-rouge&quot;&gt;max_clock&lt;/code&gt; register, we reset our counters:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	unbounce_reset = (wb_stb)&amp;amp;&amp;amp;(wb_we)&amp;amp;&amp;amp;(smpl_sel)
-				&amp;amp;&amp;amp;(wb_addr[3:1]==3&#39;b011);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;That’s it!  That’s all the changes that are necessary in order to connect
-these two new peripherals to our bus.  Gosh, if it’s that easy, why not
-try your own peripherals?&lt;/p&gt;
-
-&lt;p&gt;Before moving to the next section, there’s one other difference.  If you
-compare this &lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/bench/rtl/testbus.v&quot;&gt;new top level
-design&lt;/a&gt;
-with the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/bench/rtl/testbus.v&quot;&gt;initial top level
-design&lt;/a&gt;,
-you’ll notice that the block RAM has been removed.  This was to provide
-extra block RAM space for the wishbone scope—space that was never
-really needed in the end.&lt;/p&gt;
-
-&lt;h2 id=&quot;switching-to-a-compressed-wishbone-scope&quot;&gt;Switching to a compressed wishbone scope&lt;/h2&gt;
-
-&lt;p&gt;There are three RTL steps to setting up a wishbone scope within your design.&lt;/p&gt;
-
-&lt;p&gt;The first step is to create a trigger.  You can find the trigger I
-created in the
-&lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/rtl/debouncer.v&quot;&gt;debouncer&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(posedge i_clk)
-	trigger &amp;lt;= (!ztimer)&amp;amp;&amp;amp;(!different)&amp;amp;&amp;amp;(!(|i_in))
-			&amp;amp;&amp;amp;(timer[(LGWAIT-1):2]==0)&amp;amp;&amp;amp;(timer[1]);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This trigger is designed to stop the scope any time the debouncing logic
-is complete, &lt;em&gt;and&lt;/em&gt; the button’s logic value(s) has returned to zero.  In
-practice, it didn’t work very well for testing the keypad, since the keypad
-uses negative logic (a button release sends the signal high, not low).
-The end result was that I often needed to trigger the scope manually from the
-debugging bus, but we’ll come back to this in a moment.&lt;/p&gt;
-
-&lt;p&gt;The next step in connecting the scope is to select the data lines you wish
-to record.  Here, let’s connect to our synchronized inputs, the debounced
-result, as well as the &lt;code class=&quot;highlighter-rouge&quot;&gt;ztimer&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;trigger&lt;/code&gt; logic from within the design.
-Because buttons take place over a very long period of time, we’ll need
-to use the compressed wishbone scope.  That’s going to limit our debugging
-width to 31-bits instead of 32.  (The last bit is used for run length
-encoding.)&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;//	debug[31] is used for RLE encoding, and thus not available to us here
-assign	debug[30] = ztimer;
-assign	debug[29] = trigger;
-assign	debug[28] = 1&#39;b0;
-// Bits 27:14 are assigned to the output of the debouncer
-assign	debug[27 :(14+NIN)] = 0;
-assign	debug[(14+NIN-1):14] = o_debounced;
-// Bottom 14 bits are assigned to our synchronized input(s)
-assign	debug[13 :NIN] = 0;
-assign	debug[(NIN-1):0] = r_in;
-
-assign	o_debug = debug;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;While this approach limits the number of inputs to 13-bits in a 14-bit
-field, the logic within the actual &lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v&quot;&gt;debouncer
-code&lt;/a&gt;
-makes it possible to record up to 14-bits, and to process any number of
-buttons up to an arbitrary width.&lt;/p&gt;
-
-&lt;p&gt;The final change is to adjust the scope itself.  Switching from an
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v&quot;&gt;uncompressed wishbone scope&lt;/a&gt; to a
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscope.v&quot;&gt;compressed wishbone scope&lt;/a&gt;
-is almost as easy as changing &lt;code class=&quot;highlighter-rouge&quot;&gt;wbscope&lt;/code&gt; to &lt;code class=&quot;highlighter-rouge&quot;&gt;wbscopc&lt;/code&gt;.  Indeed, the two share
-an almost identical interface standard.  The only more substantial change
-beyond changing the name is adjusting the input data width from 32-bits down
-to the 31-bits of the compressed scope.  We’ll also pull the &lt;code class=&quot;highlighter-rouge&quot;&gt;scope_trigger&lt;/code&gt;
-from its bit position within the &lt;code class=&quot;highlighter-rouge&quot;&gt;debug&lt;/code&gt; vector coming from the &lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/debouncer.v&quot;&gt;debouncer
-code&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	assign	scope_trigger = debounce_dbg[29];
-	wire	[30:0]	debug_data;
-	assign	debug_data    = debounce_dbg;
-	wbscopc	#(5&#39;d9) thescope(i_clk, 1&#39;b1, scope_trigger, debug_data,&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Setting up the design for this purpose is really just that easy.&lt;/p&gt;
-
-&lt;h2 id=&quot;adjusting-the-register-definition-files&quot;&gt;Adjusting the register definition files&lt;/h2&gt;
-
-&lt;p&gt;Finally, I adjusted the
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.h&quot;&gt;regdefs.h&lt;/a&gt; and
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.cpp&quot;&gt;regdefs.cpp&lt;/a&gt;
-files to reflect that there are two new registers
-in our design, giving them names that I can use to access them both from
-my own C code
-(&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.h&quot;&gt;regdefs.h&lt;/a&gt;),
-as well as from the &lt;code class=&quot;highlighter-rouge&quot;&gt;wbregs&lt;/code&gt; command line
-(&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.cpp&quot;&gt;regdefs.cpp&lt;/a&gt;).&lt;/p&gt;
-
-&lt;p&gt;The first change was to
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.h&quot;&gt;regdefs.h&lt;/a&gt;,
-where we needed to define our three new registers:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;cp&quot;&gt;#define	R_TRANSITIONS	0x00002058
-#define	R_MAXCLOCKS	0x0000205c
-#define	R_DEBOUNCED	0x00002060&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You may remember from our discussion above that these are the addresses
-of these three new registers within our simple data peripheral’s address space.&lt;/p&gt;
-
-&lt;p&gt;I then gave these registers user-friendly names by modifying
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/regdefs.cpp&quot;&gt;regdefs.cpp&lt;/a&gt;:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R_DEBOUNCED&lt;/span&gt;	  &lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;	&lt;span class=&quot;s&quot;&gt;&quot;DEBOUNCED&quot;&lt;/span&gt;	&lt;span class=&quot;p&quot;&gt;},&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R_TRANSITIONS&lt;/span&gt;	  &lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;	&lt;span class=&quot;s&quot;&gt;&quot;BOUNCES&quot;&lt;/span&gt;	&lt;span class=&quot;p&quot;&gt;},&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R_TRANSITIONS&lt;/span&gt;	  &lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;	&lt;span class=&quot;s&quot;&gt;&quot;TRANSITIONS&quot;&lt;/span&gt;	&lt;span class=&quot;p&quot;&gt;},&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R_MAXCLOCKS&lt;/span&gt;	  &lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;	&lt;span class=&quot;s&quot;&gt;&quot;DURATION&quot;&lt;/span&gt;	&lt;span class=&quot;p&quot;&gt;},&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;R_MAXCLOCKS&lt;/span&gt;	  &lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;	&lt;span class=&quot;s&quot;&gt;&quot;MAXCLOCKS&quot;&lt;/span&gt;	&lt;span class=&quot;p&quot;&gt;},&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This only modifies a structure providing a mapping from register values
-to user register names.&lt;/p&gt;
-
-&lt;p&gt;The final change was to create a piece of C++ code to read from the
-wishbone scope.  You can see what this new scope code looks like
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/btnscope.cpp&quot;&gt;here&lt;/a&gt;,
-although how to develop this code is discussed in general
-&lt;a href=&quot;/blog/2017/07/08/getting-started-with-wbscope.html&quot;&gt;here&lt;/a&gt;.
-Build and run this new
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/btnscope.cpp&quot;&gt;btnscope&lt;/a&gt;
-program, and you’ll have a &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD
-file&lt;/a&gt; that you can then use with
-&lt;a href=&quot;http://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt; to view traces showing how your own
-buttons bounce–just like the &lt;a href=&quot;/blog/2017/08/02/debounce-teaser.html&quot;&gt;traces I presented when we first
-started&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;That’s it!  We can now grab two registers from our button press, and read
-their results via &lt;code class=&quot;highlighter-rouge&quot;&gt;wbregs duration&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;wbregs bounces&lt;/code&gt;.  We can also reset
-our count by writing to either of these registers via something like
-&lt;code class=&quot;highlighter-rouge&quot;&gt;wbregs duration 0&lt;/code&gt;.  Using
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/btnscope.cpp&quot;&gt;btnscope&lt;/a&gt;,
-we can also read and create &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD
-files&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;scripts-to-access-the-design&quot;&gt;Scripts to access the design&lt;/h2&gt;
-
-&lt;p&gt;After using this design over and over several times, I got tired of typing
-the same commands over and over.  As a result, I wrote two scripts to
-make things easier.&lt;/p&gt;
-
-&lt;p&gt;The first script,
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/getinfo.sh&quot;&gt;getinfo.sh&lt;/a&gt;,
-simple reads the two registers and dumps them into a file record for later
-analysis.  It also manually triggers the
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; in case it hadn’t
-triggered yet.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;c&quot;&gt;#!/bin/bash&lt;/span&gt;
-
-wbregs bounces  | tee -a btndata.txt
-wbregs duration | tee -a btndata.txt
-wbregs scope 0x88000020&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The second script,
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/sw/reset.sh&quot;&gt;reset.sh&lt;/a&gt;,
-resets the logic for another button press.  Specifically, it resets the
-scope (i.e. writes to it with the high data clear), and then attempts to
-write to the bounce count.  As with any write to either of the
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v&quot;&gt;unbounced&lt;/a&gt;
-registers, this will set the reset line to the
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer/blob/master/rtl/unbounced.v&quot;&gt;unbounced&lt;/a&gt;
-module for one clock, and thus reset the counters.  Finally, just to be
-certain that the two registers actually cleared as desired, they are read
-after reset.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;c&quot;&gt;#!/bin/bash&lt;/span&gt;
-
-wbregs scope 0x020 &lt;span class=&quot;c&quot;&gt;# Reset the scope&lt;/span&gt;
-wbregs bounces 0   &lt;span class=&quot;c&quot;&gt;# Reset the unbounced code&lt;/span&gt;
-wbregs bounces     &lt;span class=&quot;c&quot;&gt;# Verify that the two counts have returned to zero&lt;/span&gt;
-wbregs duration&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
-
-&lt;p&gt;That’s it!  You now have all the information you need to either build and
-measure your own debouncer, or to just measure the bounces on your own
-device.  Further, all of the debouncing logic, design, and software files
-have been placed into their own
-&lt;a href=&quot;https://github.com/ZipCPU/debouncer&quot;&gt;GitHub repo&lt;/a&gt; for your own reference.&lt;/p&gt;
-
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;As cold waters to a thirsty soul, so is good news from a far country.  (Prov 25:25)&lt;/em&gt;</description>
-        <pubDate>Mon, 07 Aug 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/08/07/bounce-dbgbus.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/08/07/bounce-dbgbus.html</guid>
         
         
         <category>blog</category>

@@ -1,0 +1,775 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Using a CORDIC to calculate sines and cosines in an FPGA</title>
+  <meta name="description" content="We’ve now presented two separate algorithms that can be used for calculatinga sine wave: a very simple sinewave tablelookup,and a more complicated quarter-wa...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/08/30/cordic.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Using a CORDIC to calculate sines and cosines in an FPGA</h1>
+    <p class="post-meta"><time datetime="2017-08-30T00:00:00-04:00" itemprop="datePublished">Aug 30, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>We’ve now presented two separate algorithms that can be used for calculating
+a sine wave: a <a href="/dsp/2017/07/11/simplest-sinewave-generator.html">very simple sinewave table
+lookup</a>,
+and a <a href="/dsp/2017/08/26/quarterwave.html">more complicated quarter-wave table lookup
+method</a>.  Both of these
+approaches used only a minimum number of clocks, although their precision
+was somewhat limited.</p>
+
+<p>Today, let’s look at how to implement a
+<a href="https://en.wikipedia.org/wiki/CORDIC"><strong>CO</strong>ordinate <strong>R</strong>otation <strong>DI</strong>gital <strong>C</strong>omputer
+(CORDIC)</a>
+algorithm within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.</p>
+
+<table style="float: right"><caption>Fig 1: The CORDIC problem description</caption><tr><td><img src="/img/cordic-problem-setup.svg" alt="Setting up a CORDIC" width="320" /></td></tr></table>
+<p>If you’ve never worked with a
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm before, the algorithms are all
+based around specific
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrices</a>
+which we will explain first.  These rotation matrices can be strung together
+to accomplish many digital logic purposes.  For today’s discussion, though,
+we will be rotating a two-dimensional vector by a requested counter-clockwise
+angle.  Thus, the inputs will be x and y values, <code class="highlighter-rouge">i_xval</code> and <code class="highlighter-rouge">i_yval</code>,
+together with a requested phase rotation, <code class="highlighter-rouge">i_phase</code>, whereas the outputs
+will just be a rotated x and y value, <code class="highlighter-rouge">o_xval</code> and <code class="highlighter-rouge">o_yval</code>–as shown in
+Fig 1.</p>
+
+<h1 id="the-cordic-rotation">The CORDIC rotation</h1>
+
+<p>But, just what is a
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+rotation?  Well, since all of these algorithms are built around a
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+rotation, let’s start by answering that question.  We’ll start with the
+concept of a simple two-dimensional
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrix</a>,
+and then work from there to how that can be turned into a
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+rotation.</p>
+
+<p>A simple two-dimensional
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrix</a>
+is given by:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-2d-rotation.png" alt="Equation for a 2D rotation" width="302" /></td></tr></table>
+
+<p>This rotation can be used to rotate a complex vector <code class="highlighter-rouge">exp(j*phi)</code> and turn it
+into another one, <code class="highlighter-rouge">exp(j*(phi+theta))</code>, if the real value is the first value
+in the given vector, and the would-be imaginary value the second (i.e. strip off
+the <code class="highlighter-rouge">j</code>).  Further, if the original vector is
+simply the real number one, <code class="highlighter-rouge">1+j0</code>, then we will have just created
+<code class="highlighter-rouge">sin(theta)</code> and <code class="highlighter-rouge">cos(theta)</code> in this process.</p>
+
+<p>This is what we are going to try to do: apply a rotation like this one.</p>
+
+<p>We could apply this rotation using <a href="/dsp/2017/06/15/no-pi-for-you.html">angles more
+suited</a>
+for an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-no-pi-rotation.png" alt="Eqn for a 2D rotation in FPGA units" width="364" /></td></tr></table>
+
+<p>but this still leaves us with the problem that the sine and cosine aren’t
+easy to calculate, leaving this rotation difficult to accomplish.</p>
+
+<table align="center" style="float: right"><caption>Fig 1: CORDIC Rotation Vectors</caption><tr><td><img src="/img/cordic-rotations.svg" alt="Cordic rotation vectors" width="240" /></td></tr></table>
+<p>The
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+approach is to replace the cosine portion of this rotation matrix with a <code class="highlighter-rouge">1</code>,
+and the sine portion with a <code class="highlighter-rouge">2^-k</code>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-bare-cordic-transform.png" alt="EQN for a bare cordic stage" width="281" /></td></tr></table>
+
+<p>You can think of this as a series of complex rotation vectors,
+indexed by <code class="highlighter-rouge">k</code>, such as those are shown in Fig 1.  Notice from the figure
+that these vectors are not on the unit circle, but rather just outside the
+unit circle, and they get closer and closer to the unit circle the higher
+<code class="highlighter-rouge">k</code> becomes.</p>
+
+<p>In other words, <code class="highlighter-rouge">T</code> is approximately a
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrix</a>.</p>
+
+<p><code class="highlighter-rouge">T</code> is also something that is easy to calculate within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.
+It requires only adds, subtracts, and shifts.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-cordic-eqns.png" alt="Cordic equations" width="350" /></td></tr></table>
+
+<p>This can all be done with integer math–no multiplies or divides are required.</p>
+
+<p>Of course, this transform is not a true rotation matrix.  Instead, it is a
+scaled <a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrix</a>.
+To see this, first calculate the angles of the vectors in Fig 1 above:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-cordic-phase.png" alt="Cordic rotation phase" width="168" /></td></tr></table>
+
+<p>Then also calculate and normalize by their their lengths.  The resulting
+transform, <code class="highlighter-rouge">T</code>, is shown below:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-cordic-transform-simplified.png" alt="Eqn for the cordic stage, after simplification" width="459" /></td></tr></table>
+
+<p>From here you can see that this is most definitely a
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrix</a>
+with an amplitude increase associated with it.</p>
+
+<p>Further, as you may have guessed from Fig 1 above, we can apply a similar
+rotation going in the opposite direction:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-cordic-negative-transform.png" alt="Eqn for the cordic stage, negated angle, after simplification" width="459" /></td></tr></table>
+
+<p>These two (nearly) <a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation
+matrices</a>
+form the basis of the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm.</p>
+
+<p>The basic idea behind the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm is that we can string many of these
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrices</a>
+together–either rotating by a positive <code class="highlighter-rouge">theta_k</code> or a
+negative <code class="highlighter-rouge">theta_k</code> in each matrix.  As an example, suppose you rotated
+[1, 0] by +26.57 degrees (k=1), then by 14.03 degrees (k=2), then backwards
+by 7.12 degrees (k=3).  You would then
+have a vector that has been rotated by 30.48 degrees.  Other than
+the slight amplitude increase, that means that your resulting vector now
+approximates a thirty degree phasor–and you didn’t have to do anything that
+significant to get there.</p>
+
+<p>Further, the more of these rotation matrices you string together, the smaller
+the remaining rotation becomes, and hence the closer the result will come
+(in angular distance) to any desired rotation.</p>
+
+<p>This is what we are going to try to build today.</p>
+
+<h2 id="rotating-into-range">Rotating into range</h2>
+
+<p>The first step in building this rotation, though, is that massage the problem
+so that the rotation desired is less than 45 degrees.  This comes from the
+fact that the smallest rotation the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+rotation above can accomplish is a 45 degree rotation.  Angles beyond
+45 degrees just get smaller.  Therefore, the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+rotation requires an initial angular request, <code class="highlighter-rouge">i_phase</code>, to be less than 45
+degrees.  Our first problem, therefore is going to be rotating our incoming
+vector so that any remaining rotation amount is 45 degrees or less.</p>
+
+<p>As a preliminary step, we’ll start our algorithm off by expanding the two
+input values from their initial width, <code class="highlighter-rouge">IW</code>, to a wider working width, <code class="highlighter-rouge">WW</code>.
+Because the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm will also increase the magnitude of the input, this process adds one
+more bit on the left–to allow for a touch of width expansion.  It also adds
+a user selectable number of bits (captured as part of <code class="highlighter-rouge">WW</code>) to the right so as
+to minimize any distortion’s caused by
+<a href="/dsp/2017/07/22/rounding.html">truncation effects</a>
+within the rotation.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">wire	signed [(WW-1):0]	e_xval, e_yval;
+assign	e_xval = { {i_xval[(IW-1)]}, i_xval, {(WW-IW-1){1'b0}} };
+assign	e_yval = { {i_yval[(IW-1)]}, i_yval, {(WW-IW-1){1'b0}} };</code></pre></figure>
+
+<p>Further, we’re going to declare our intermediate values
+to be an array of <code class="highlighter-rouge">WW</code> bits each for the intermediate <code class="highlighter-rouge">xv</code> and <code class="highlighter-rouge">yv</code> values,
+and an array of phase width, <code class="highlighter-rouge">PW</code>, number of bits for the phase.  Since the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+operation takes place in stages, we’ll declare <code class="highlighter-rouge">NSTAGES+1</code> of these
+values–that will create variables to hold not only the input values,
+but the outputs as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// Declare variables for all of the separate stages
+reg	signed	[(WW-1):0]	xv	[0:(NSTAGES)];
+reg	signed	[(WW-1):0]	yv	[0:(NSTAGES)];
+reg		[(PW-1):0]	ph	[0:(NSTAGES)];</code></pre></figure>
+
+<p>The beginner needs to understand that this is not the definition of a memory,
+although it might look very similar to a block RAM definition.  Rather, this
+is a simplified definition of <code class="highlighter-rouge">NSTAGES</code> of values in flip-flops.</p>
+
+<p>Declarations aside, that brings us to the actual logic of the
+pre-<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+section.  The goal of this section is to rotate the input by some number
+of ninety-degree intervals until the remaining phase is between -45 and 45.</p>
+
+<table align="center" style="float: none"><caption>Fig 2: Initial rotation</caption><tr><td><img src="/img/cordic-prerotation.svg" alt="Result of the pre-CORDIC rotation" width="420" /></td></tr></table>
+
+<p>Since this is a signal processing algorithm, the “global CE” <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline
+strategy</a>
+may make the most sense.  We’ll also create logic for the <a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling CE strategy
+strategy</a>
+later.  For now, remember that the global CE strategy requires that nothing
+changes unless a CE line is true.  Therefore, our transform begins by
+checking the <code class="highlighter-rouge">i_ce</code> line.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_ce)</code></pre></figure>
+
+<p>Next, we’ll want to walk through the actual rotations.</p>
+
+<table style="float: right"><caption>Fig 3: Rotation by quadrant</caption><tr><td><img src="/img/cordic-prequadrants.svg" alt="Split the pre-rotation up by quadrant" width="280" /></td></tr></table>
+<p>In order to get 
+everything into +/- 45 degrees, we’ll want to check not only which quadrant
+our phase request is within, but also which 45 degree segment of that quadrant
+the angle is in, as shown in Fig 3.
+Hence, we’ll check the top three bits of <code class="highlighter-rouge">i_phase</code>, and apply a rotation
+based upon them.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	case(i_phase[(PW-1):(PW-3)])</code></pre></figure>
+
+<p>Each rotation opportunity will set <code class="highlighter-rouge">xv[0]</code>, <code class="highlighter-rouge">yv[0]</code>, and <code class="highlighter-rouge">ph[0]</code>.  These are
+the initial values of x, y, and the remaining phase to rotate through.  The
+options for <code class="highlighter-rouge">xv[0]</code> are <code class="highlighter-rouge">+/- e_xval</code> or <code class="highlighter-rouge">+/- e_yval</code> and likewise for <code class="highlighter-rouge">yv[0]</code>.
+Further, because these rotations are all by multiples of ninety degrees,
+there’s no need to do any additions.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	3'b000: begin	// 0 .. 45, No change
+		xv[0] &lt;= e_xval;
+		yv[0] &lt;= e_yval;
+		ph[0] &lt;= i_phase;
+		end
+	3'b001: begin	// 45 .. 90
+		xv[0] &lt;= -e_yval;
+		yv[0] &lt;= e_xval;
+		ph[0] &lt;= i_phase - 30'h10000000;
+		end
+	3'b010: begin	// 90 .. 135
+		xv[0] &lt;= -e_yval;
+		yv[0] &lt;= e_xval;
+		ph[0] &lt;= i_phase - 30'h10000000;
+		end
+	3'b011: begin	// 135 .. 180
+		xv[0] &lt;= -e_xval;
+		yv[0] &lt;= -e_yval;
+		ph[0] &lt;= i_phase - 30'h20000000;
+		end
+	3'b100: begin	// 180 .. 225
+		xv[0] &lt;= -e_xval;
+		yv[0] &lt;= -e_yval;
+		ph[0] &lt;= i_phase - 30'h20000000;
+		end
+	3'b101: begin	// 225 .. 270
+		xv[0] &lt;= e_yval;
+		yv[0] &lt;= -e_xval;
+		ph[0] &lt;= i_phase - 30'h30000000;
+		end
+	3'b110: begin	// 270 .. 315
+		xv[0] &lt;= e_yval;
+		yv[0] &lt;= -e_xval;
+		ph[0] &lt;= i_phase - 30'h30000000;
+		end
+	3'b111: begin	// 315 .. 360, No change
+		xv[0] &lt;= e_xval;
+		yv[0] &lt;= e_yval;
+		ph[0] &lt;= i_phase;
+		end
+	endcase</code></pre></figure>
+
+<p>Remember: we are rotating the <code class="highlighter-rouge">xv</code> and <code class="highlighter-rouge">yv</code> vector counter-clockwise, so
+that the rotation remaining, <code class="highlighter-rouge">ph</code>, is less than <code class="highlighter-rouge">+/- 45</code> degrees.  Hence we
+are rotating <code class="highlighter-rouge">xv</code> and <code class="highlighter-rouge">yv</code> in a counter-clockwise direction, while the
+remaining phase angle will decrease in what will look like a clock-wise
+direction.</p>
+
+<p>This sets up the actual
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>:
+<code class="highlighter-rouge">xv[0]</code> and <code class="highlighter-rouge">yv[0]</code> now need to be rotated
+through <code class="highlighter-rouge">ph[0]</code> remaining <a href="/dsp/2017/06/15/no-pi-for-you.html">angular
+units</a>.  We’ve also
+guaranteed that <code class="highlighter-rouge">|ph[0]|</code> is less than or equal to 45 degrees.</p>
+
+<h2 id="rotating-to-zero">Rotating to zero</h2>
+
+<p>The next step is to rotate the <code class="highlighter-rouge">xv[0]</code> and <code class="highlighter-rouge">yv[0]</code> values through the remaining
+phase angle, <code class="highlighter-rouge">ph[0]</code>.  To do this, we’re going to check whether or not the
+remaining phase is negative or positive.  If the phase is negative, we’ll
+rotate by a positive <code class="highlighter-rouge">cordic_angle[i]</code>.  If the remaining phase is positive,
+we’ll rotate in the opposite direction but by the same amount.</p>
+
+<p>Software programmers like to look at <code class="highlighter-rouge">for</code> and <code class="highlighter-rouge">while</code> loops in Verilog and
+think of them like their <code class="highlighter-rouge">for</code> and <code class="highlighter-rouge">while</code> counterparts in software.  HDL
+loops, however, are <em>nothing</em> like software loops.  Software loops repeat the
+same instruction, one after another in time.  HDL loops on the other hand
+repeat the instruction in space on the chip by creating multiple copies of
+the same logic, all of which will be executed in parallel.</p>
+
+<p>This is one of those rare cases where a <code class="highlighter-rouge">for</code> loop makes sense in Verilog.  The
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm repeats nearly the same logic <code class="highlighter-rouge">NSTAGES</code> times over.  Hence, this
+loop generates <code class="highlighter-rouge">NSTAGES</code> pieces of logic, each of which advances the
+prior stage by one clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">genvar	i;
+generate for(i=0; i&lt;NSTAGES; i=i+1) begin : CORDICops</code></pre></figure>
+
+<p>Within this for loop, we’ll create several always blocks.  Each block
+first makes sure that nothing changes, except when the global CE signal, <code class="highlighter-rouge">i_ce</code>
+is high.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	// Reset logic can be placed here, but it isnt required
+	if (i_ce)
+	begin</code></pre></figure>
+
+<p>Once these last preliminaries have been taken care of, we can finally apply the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+rotation/transform.
+Note that we first check the sign of the remaining phase to know which
+direction to rotate, but otherwise the operations you see here should match
+the transform we discussed earlier.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		// You can check for cord[i] == 0 here if you would like
+		if (ph[i][(PW-1)]) // Negative phase
+		begin
+			// If the phase is negative, rotate by the
+			// CORDIC angle in a clockwise direction.
+			xv[i+1] &lt;= xv[i] + (yv[i]&gt;&gt;&gt;(i));
+			yv[i+1] &lt;= yv[i] - (xv[i]&gt;&gt;&gt;(i));
+			ph[i+1] &lt;= ph[i] + cordic_angle[i];
+		end else begin
+			// On the other hand, if the phase is
+			// positive ... rotate in the
+			// counter-clockwise direction
+			xv[i+1] &lt;= xv[i] - (yv[i]&gt;&gt;&gt;(i));
+			yv[i+1] &lt;= yv[i] + (xv[i]&gt;&gt;&gt;(i));
+			ph[i+1] &lt;= ph[i] - cordic_angle[i];
+		end
+	end
+endgenerate</code></pre></figure>
+
+<p>While this is the core of the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm, now that we have put it together we are by no means done.  We still
+need to generate the <a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+angles, listed as array elements of <code class="highlighter-rouge">cordic_angle</code> above, any traveling
+CE <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline
+logic</a>,
+<a href="/dsp/2017/07/22/rounding.html">drop any excess bits</a>
+we’ve accumulated,
+and figure out what the gain of the algorithm is in case we wish to compensate
+for it.</p>
+
+<h2 id="using-a-core-generator-in-c-to-get-the-angles">Using a core-generator in C++ to get the angles</h2>
+
+<p>One difficulty associated with building a “generic”
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+HDL core is that some of the components of the core cannot be generalized
+very easily.  A good example of this problem is the VHDL
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+<a href="http://github.com/freecores/cordic/blob/master/polar2rect/p2r_Cordic_pipe.vhd">core</a> found on
+<a href="http://opencores.org/project,cordic">OpenCores</a>.</p>
+
+<p><a href="http://github.com/freecores/cordic/blob/master/polar2rect/p2r_Cordic_pipe.vhd">This open-cores
+core</a>
+is built with a fixed precision.  While the data width can ostensibly be
+adjusted, there are a fixed number of internal arc-tangent results, each created
+with a fixed width and a fixed value.  (Well, that and you can’t <a href="/blog/2017/06/21/looking-at-verilator.html">simulate the
+core</a> within
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> because someone chose to
+write it within <em>VHDL</em>.)  The only way to prevent this bit-width problem
+associated with a one-size fits all solution is to
+use a software program, sometimes called a core generator or
+<a href="https://www.xilinx.com/products/design-tools/coregen.html">coregen</a>, to
+tailor the <a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+to a specifically requested precision.  This piece of software needs to
+calculate the phase rotation angles.  We’ll also use the software to calculate
+the required number of stages, the number of input or output bits required,
+the number of phase bits, etc., etc.</p>
+
+<p>Such a core generator will be our approach
+<a href="https://github.com/ZipCPU/cordic/tree/master/sw">here</a>.  You can find the
+basic <a href="https://github.com/ZipCPU/cordic/blob/master/sw/basiccordic.v">core generator
+here</a>,
+within my <a href="https://github.com/ZipCPU/cordic">cordic repository</a>.
+For now, let’s discuss calculating the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+angles.</p>
+
+<p>Starting from above, the cordic angles are defined as</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-cordic-phase.png" alt="Cordic rotation phase" width="168" /></td></tr></table>
+
+<p>but in our <a href="/dsp/2017/06/15/no-pi-for-you.html">normalized integer units of
+phase</a>,
+the value we will want is going to be</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-cordic-tblangle.png" alt="Cordic rotation phase" width="342" /></td></tr></table>
+
+<p>This value can easily be computed in C++ or any other higher level language
+for that matter.  We’ll use C++ for this exercise.</p>
+
+<p>We’ll need to calculate one angle for each of the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+stages.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">for(unsigned k=0; k&lt;(unsigned)nstages; k++) {
+	double		x, deg;
+	unsigned	phase_value;</code></pre></figure>
+
+<p>The angle is given by the arctangent of our rotation vector, <code class="highlighter-rouge">1+j2^-k</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	x = atan2(1., pow(2,k));</code></pre></figure>
+
+<p>(Remember, atan2 accepts the y argument first.  Hence our arguments of
+<code class="highlighter-rouge">x=2^k</code> and <code class="highlighter-rouge">y=1</code> represent an equivalent representation to our angle of
+interest.)</p>
+
+<p>We’ll keep track of the value of this angle in degrees as well as
+<a href="/dsp/2017/06/15/no-pi-for-you.html">FPGA units</a>,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	deg = x * 180.0 / M_PI;</code></pre></figure>
+
+<p>For all other purposes, though, we’ll convert our angle to a <a href="/dsp/2017/06/15/no-pi-for-you.html">normalized
+integer phase</a>,
+value we can use in an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+algorithm,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	x *= (4.0 * (1ul&lt;&lt;(phase_bits-2))) / (M_PI * 2.0);
+	phase_value = (unsigned)x;</code></pre></figure>
+
+<p>We can then print this value to our resulting Verilog file.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	fprintf(fp, "\tassign\tcordic_angle[%2d] = %2d\'h%0*x; //%11.6f deg\n",
+		k, phase_bits, (phase_bits+3)/4, phase_value,
+		deg);
+}</code></pre></figure>
+
+<p>(I know this is the old-style C I/O — while I’ve used the C++ I/O, I’ve
+never really fallen in-love with it.)</p>
+
+<p>After applying this calculation to a problem set with an <code class="highlighter-rouge">18-bit</code> phase
+requirement, the code above generated the following table,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	cordic_angle[ 0] = 18'h0_8000; //  45.000000 deg
+assign	cordic_angle[ 1] = 18'h0_4b90; //  26.565051 deg
+assign	cordic_angle[ 2] = 18'h0_27ec; //  14.036243 deg
+assign	cordic_angle[ 3] = 18'h0_1444; //   7.125016 deg
+assign	cordic_angle[ 4] = 18'h0_0a2c; //   3.576334 deg
+assign	cordic_angle[ 5] = 18'h0_0517; //   1.789911 deg
+assign	cordic_angle[ 6] = 18'h0_028b; //   0.895174 deg
+assign	cordic_angle[ 7] = 18'h0_0145; //   0.447614 deg
+assign	cordic_angle[ 8] = 18'h0_00a2; //   0.223811 deg
+assign	cordic_angle[ 9] = 18'h0_0051; //   0.111906 deg
+assign	cordic_angle[10] = 18'h0_0028; //   0.055953 deg
+assign	cordic_angle[11] = 18'h0_0014; //   0.027976 deg
+assign	cordic_angle[12] = 18'h0_000a; //   0.013988 deg
+assign	cordic_angle[13] = 18'h0_0005; //   0.006994 deg</code></pre></figure>
+
+<p>The number of stages and the number of bits in each stage can both be defined
+based upon arguments to the <a href="https://github.com/ZipCPU/cordic/blob/master/sw/main.cpp">core generator
+program</a>.</p>
+
+<p>We still have several steps remaining.  In particular, we need to set up the
+“traveling CE” <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline strategy
+logic</a>,
+<a href="/dsp/2017/07/22/rounding.html">round</a>
+the final result, and discuss on how to deal with
+the amplitude distortion produced by the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm.</p>
+
+<h2 id="auxiliary-logic">Auxiliary Logic</h2>
+
+<p>I mentioned earlier that we could use the “traveling CE” <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline
+strategy</a>
+if desired.  That strategy requires that for every strobe input, the output
+associated with that input also needs to have a high strobe output.</p>
+
+<p>We’ll use our C++ code to build this as well, since in C++ we have control
+over when to place this logic into the code, as well as how much of this
+logic needs to be placed into
+<a href="https://github.com/ZipCPU/cordic/blob/master/rtl/cordic.v">our core</a>.</p>
+
+<p>To do this, we’ll teach the <a href="https://github.com/ZipCPU/cordic/blob/master/sw/main.cpp">main core generator
+program</a>
+to accept a <code class="highlighter-rouge">-a</code> option.  We’ll then use this to create an <code class="highlighter-rouge">aux</code>iliary bit
+to contain the “traveling CE” bit.</p>
+
+<p>The actual logic required to implement this “traveling CE” is just a simple
+shift register:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_reset)
+		ax &lt;= {(NSTAGES+1){1'b0}};
+	else if (i_ce)
+		ax &lt;= { ax[(NSTAGES-1):0], i_aux };
+
+always @(posedge i_clk)
+	o_aux &lt;= ax[NSTAGES];</code></pre></figure>
+
+<p>On a 7-Series Xilinx
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>,
+all of this logic can fit within one shift register logic block.</p>
+
+<p>Placing this logic within the core generator makes certain that no matter
+what logic takes place within the core, the output <code class="highlighter-rouge">o_aux</code> bit remains lined
+up with the output data associated with any input data that had the <code class="highlighter-rouge">i_aux</code>
+bit.</p>
+
+<h2 id="dropping-the-last-number-of-bits">Dropping the last number of bits</h2>
+
+<p>When we get to the end, we’ll want to drop some bits.  We
+<a href="/dsp/2017/07/22/rounding.html">discussed some time ago</a>
+how to go about this via
+<a href="/dsp/2017/07/22/rounding.html">rounding</a>.  We also discussed
+several different types of
+<a href="/dsp/2017/07/22/rounding.html">rounding</a> at that same time.
+Here, we follow the convergent rounding approach to drop any excess bits.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Round our result towards even
+	wire	[(WW-1):0]	pre_xval, pre_yval;
+
+	assign	pre_xval = xv[NSTAGES] + ,
+				xv[NSTAGES][(WW-OW)],
+				{(WW-OW-1){!xv[NSTAGES][WW-OW]}}};
+	assign	pre_yval = yv[NSTAGES] + ,
+				yv[NSTAGES][(WW-OW)],
+				{(WW-OW-1){!yv[NSTAGES][WW-OW]}}};
+
+	always @(posedge i_clk)
+	begin
+		o_xval &lt;= pre_xval[(WW-1):(WW-OW)];
+		o_yval &lt;= pre_yval[(WW-1):(WW-OW)];
+	end</code></pre></figure>
+
+<p>That marks the end of our basic
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm.  We still need to discuss what to do about the amplitude
+gain we’ve accumulated, so that will be next.</p>
+
+<h2 id="dealing-with-amplitude">Dealing with Amplitude</h2>
+
+<p>As you’ll recall from the beginning of our discussion, the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm has a gain associated with it.  Our task here will be to calculate
+that gain.  We’ll do this within our C++ generator program, since it has
+all the details and capability to do so.</p>
+
+<p>Below is a copy of the <a href="https://github.com/ZipCPU/cordic/blob/master/sw/cordiclib.cpp">C++ code used to calculate the cordic
+gain</a>.
+It basically calculates the product of all of the gains of the various
+stages in our algorithm.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="kt">double</span>	<span class="nf">cordic_gain</span><span class="p">(</span><span class="kt">int</span> <span class="n">nstages</span><span class="p">,</span> <span class="kt">int</span> <span class="n">phase_bits</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">double</span>	<span class="n">gain</span> <span class="o">=</span> <span class="mf">1.0</span><span class="p">;</span>
+
+	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">nstages</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">double</span>		<span class="n">dgain</span><span class="p">;</span>
+
+		<span class="n">dgain</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="o">+</span> <span class="n">pow</span><span class="p">(</span><span class="mf">2.0</span><span class="p">,</span><span class="o">-</span><span class="mf">2.</span><span class="o">*</span><span class="p">(</span><span class="n">k</span><span class="p">));</span>
+		<span class="n">dgain</span> <span class="o">=</span> <span class="n">sqrt</span><span class="p">(</span><span class="n">dgain</span><span class="p">);</span>
+		<span class="n">gain</span> <span class="o">=</span> <span class="n">gain</span> <span class="o">*</span> <span class="n">dgain</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="k">return</span> <span class="n">gain</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>This, however, only tells us how much gain will be applied to our input.  That
+is, it quantifies our amplitude distortion.  We’ll capture this with a
+comment line added to the end of the list of <code class="highlighter-rouge">cordic_angles</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// Gain is 1.646760</code></pre></figure>
+
+<p>Not all applications need gain compensation.  Some can ignore the
+gain.  In the case of those applications, the task is done.</p>
+
+<p>Other applications use a
+CORDIC
+for calculating sines and cosines.  These applications would nominally send
+<code class="highlighter-rouge">(1,0)</code> into the algorithm as an input.  For these applications, the way to
+compensate for the gain is to send a different number as an input.  Instead
+of <code class="highlighter-rouge">1</code> (or really <code class="highlighter-rouge">2^n</code> for an <code class="highlighter-rouge">n</code>-bit input), these algorithms will want
+to send one divided by the gain into the algorithm.  If we calculate the
+right constant to replace the <code class="highlighter-rouge">1</code> with, then we still won’t need any
+multiplies.  To help you figure this out, the algorithm calculates
+<code class="highlighter-rouge">2^32/cordic_gain</code>, and places this into the comments following the
+calculation of the <code class="highlighter-rouge">cordic_angle</code>s as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// You can annihilate this gain by multiplying by 32'h9b74edae
+// and right shifting by 32 bits.</code></pre></figure>
+
+<p>That allows you to pick the number of most-significant bits that you need,
+for the precision you want.</p>
+
+<p>Other applications use the
+CORDIC
+to actually rotate the input vector.  For these applications, the same
+32-bit value can be used as an annihilator, post
+CORDIC
+application.  If you multiply by this annihilator, and shift right, then the
+CORDIC
+gain will be removed.</p>
+
+<h2 id="conclusions">Conclusions</h2>
+
+<p>Now that you’ve seen what goes into making a working
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+core, perhaps you are as amazed as I am at how many parts and pieces this
+<em>simple</em> sine and cosine wave generator has.  We started out by discussing the
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation matrices</a>
+used by the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm.  This is usually where most academic
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+development’s stop.</p>
+
+<p>However, when you want to make a working
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+core, you have to go further.  You need to rotate the original vector by
+some multiple of ninety degree angles until the remaining rotation angle is
+less than forty five degrees.  Only then can you apply the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+<a href="https://en.wikipedia.org/wiki/Rotation_matrix">rotation</a>.
+Doing so, though, requires the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+angles, which we needed to calculate based upon the desired precision of the
+output.  As a final step, we calculated both the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+gain and it’s associated annihilator (inverse).</p>
+
+<p>If only this were all that was required of a
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+core.  It’s not.  We still need to build a test bench for this core–so our
+work isn’t over yet.
+Before doing so, however, I think we’ll present the other basic type of
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+algorithm: the
+<a href="https://en.wikipedia.org/wiki/CORDIC">CORDIC</a>
+arctan, sometimes called the rectangular to polar conversion, before diving
+into the bench test.</p>
+
+<p>If you are interested in further reading on the topic,
+Ray Andraka has written an excellent <a href="http://www.andraka.com/files/crdcsrvy.pdf">survey of CORDIC
+algorithms</a> that you might find
+valuable.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>O ye simple, understand wisdom: and, ye fools, be ye of an understanding heart.  (Prov 8:5)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
