@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Reinventing PWM</title>
+  <meta name="description" content="A common beginners FPGA task is tobuild a Pulse WidthModulated (PWM)signal.  Such signals, when fed into an appropriately modifiedamplifier, canbe used to cr...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/09/04/pwm-reinvention.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Reinventing PWM</h1>
+    <p class="post-meta"><time datetime="2017-09-04T00:00:00-04:00" itemprop="datePublished">Sep 4, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>A common <a href="http://www.fpga4fun.com/PWM_DAC.html">beginners FPGA</a> task is to
+build a <a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">Pulse Width
+Modulated (PWM)</a>
+signal.  Such signals, when fed into an <a href="store.digilentinc.com/pmod-amp2-audio-amplifier/">appropriately modified
+amplifier</a>, can
+be used to create an audio signal that can then be heard.</p>
+
+<p>Indeed, you might think of this as a poor man’s digital to analog converter,
+since the circuitry required to turn a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a> signal into
+an audio signal is quite minimal.  Likewise,
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+<a href="https://store.digilentinc.com/pmod-amp2-audio-amplifier/">audio hardware</a>
+($10 USD) can be cheaper than the corresponding
+<a href="https://en.wikipedia.org/wiki/I2S">I2S</a>
+<a href="https://store.digilentinc.com/pmod-i2s-stereo-audio-output/">based Digital to Analog Converter</a> ($15 USD).</p>
+
+<p>Today, let’s add some additional functionality and performance to this
+<a href="http://www.fpga4fun.com/PWM_DAC.html">traditional beginner’s project</a>.
+Even better, let’s make this a simple <em>no cost</em> improvement to the
+traditional audio output–one that solves several common problems commonly
+associated with the traditional
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+development.
+Our result will have the quality of a
+<a href="https://en.wikipedia.org/wiki/Pulse-density_modulation">PDM</a>
+signal, but without the painful cost of generating one.</p>
+
+<h2 id="the-traditional-development">The traditional development</h2>
+
+<p>Let’s start by outlining the basics of a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal.  A <a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal is simply a
+<a href="https://en.wikipedia.org/wiki/Digital_signal">digital signal</a>
+that gets used in an
+<a href="https://en.wikipedia.org/wiki/Analog_signal">analog</a>
+context.  You can think of the
+<a href="https://store.digilentinc.com/pmod-amp2-audio-amplifier">PModAMP2</a>
+as a good hardware example for this discussion, although the discussion
+is much more general than just the
+<a href="https://store.digilentinc.com/pmod-amp2-audio-amplifier">PModAMP2</a>.</p>
+
+<p>The definition of a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal revolves around an time interval, <code class="highlighter-rouge">T</code>.  During that
+interval, the output signal starts as a logic one.  After some period of
+time, determined by the desired but approximate output voltage, the signal
+transitions to zero. 
+A minimum output voltage is created by transitioning immediately to zero.
+A maximum output voltage is created by waiting to the end of the interval
+before transitioning to a logic zero.</p>
+
+<p>Pictorially, this might look like Fig 1.</p>
+
+<table style="float: right"><caption>Fig 1: A PWM waveform sample</caption><tr><td><img src="/img/pwm-example-defn.png" alt="Setting up a CORDIC" width="868" /></td></tr></table>
+
+<p>In this figure, the 
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal is shown in red.  The current time this waveform is positive is given
+by <code class="highlighter-rouge">tau</code>.  The information within the waveform is captured by moving the
+transition time back and forth with respect to the center of the period.</p>
+
+<p>With a signal description that simple, generating a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM modulator</a>
+is as simple as any good beginner’s assignment should be.</p>
+
+<p>First, you will need a counter.  This will count from the beginning to the end
+of the interval, and then start over.  If we use the <a href="/blog/2017/08/14/strategies-for-pipelining.html">handshake pipeline
+signaling</a>
+strategy, then we’ll need an <code class="highlighter-rouge">o_busy</code> (a.k.a. stall) signal to slow down any
+logic that is feeding our pipeline.  Hence, if we allow for a constant length
+interval of <code class="highlighter-rouge">COUNTS_PER_INTERVAL</code> clock ticks, the first part of our code
+will look like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (counter &gt;= COUNTS_PER_INTERVAL-1)
+	begin
+		counter &lt;= 0;
+		sample &lt;= i_sample;
+	end else
+		counter &lt;= counter + 1'b1;
+
+always @(posedge i_clk)
+	o_busy &lt;= (counter == COUNTS_PER_INTERVAL-2);</code></pre></figure>
+
+<p>Note that we need to compare the counter against <code class="highlighter-rouge">COUNTS_PER_INTERVAL-1</code>
+to make certain that we have an interval <code class="highlighter-rouge">COUNTS_PER_INTERVAL</code> long.  Likewise,
+we want the <code class="highlighter-rouge">o_busy</code> signal to be true for the one clock when
+<code class="highlighter-rouge">counts == COUNTS_PER_INTERVAL-1</code>, and to do that we need to set it one
+clock earlier.</p>
+
+<p>The last step, that of determining whether or not our pin should be on or off,
+is determined by the simplest comparison:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	o_pin &lt;= (counter &lt; sample);</code></pre></figure>
+
+<p>That’s how you build an audio
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+peripheral.</p>
+
+<p>The problem wih this approach is that audio sounds horrible.</p>
+
+<h2 id="problems-with-the-traditional-development">Problems with the traditional development</h2>
+
+<p>Let’s spend a moment and discuss all of the problems associated with generating
+a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal in this fashion.  This will help guide our solution later.</p>
+
+<p>The first problem with this algorithm is that the samples need to range
+between one and <code class="highlighter-rouge">COUNTS_PER_INTERVAL-1</code>.  Commonly, samples are represented as
+<a href="https://en.wikipedia.org/wiki/Twos_complement">two’s complement</a>
+integers ranging from between <code class="highlighter-rouge">-2^(N-1)</code> to <code class="highlighter-rouge">2^(N-1)-1</code>.
+Converting from
+<a href="https://en.wikipedia.org/wiki/Twos_complement">two’s complement</a>
+to the samples this algorithm would require is going to require
+multiplying by <code class="highlighter-rouge">(COUNTS_PER_INTERVAL-2)/2^N</code> and then flipping the sign bit.
+While the divide by <code class="highlighter-rouge">2^N</code> can be accomplished just dropping the lower
+<code class="highlighter-rouge">N</code> bits, this still requires a multiply by
+<code class="highlighter-rouge">COUNTS_PER_INTERVAL-2</code>.
+It would be nice to have an alternative that doesn’t require any multiplies.</p>
+
+<p>The second problem with the standard
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+development is that the only way to send a zero is to send a
+<a href="https://en.wikipedia.org/wiki/Square_wave">square wave</a>
+with a 50% duty cycle (tau is in the center of the interval).  Such a
+<a href="https://en.wikipedia.org/wiki/Square_wave">square wave</a>
+is a tone which can be heard when the audio is supposed to be silent, should
+the <code class="highlighter-rouge">COUNTS_PER_INTERVAL</code> be large enough.  Indeed, this “silent” tone can be
+very obnoxious on the ears.</p>
+
+<p>The third problem with the development above is that the sample rate
+<em>must</em> be an integer divisor of the system sample rate.  This limits the
+sample rates that can be created.</p>
+
+<p>Coupled with the sample rate is the difficulty of getting a high
+<a href="https://en.wikipedia.org/wiki/Dynamic_range">dynamic range</a>.
+More output voltage resolution requires a slower sample rate.
+However, a slower sample rate brings the nasty audio
+<a href="https://en.wikipedia.org/wiki/Harmonic">harmonics</a>
+into the
+<a href="https://en.wikipedia.org/wiki/Hearing_range">audio range</a>.
+For this reason, it can appear impossible to get good sound quality
+from a <a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+output.  Perhaps this was the idea, but we’ll do better in a moment.</p>
+
+<p>The final problem with this means of creating an audio signal is that
+it creates lots of unwanted
+<a href="https://en.wikipedia.org/wiki/Harmonic">harmonics</a>,
+i.e. distortions, in the audio that you
+wish to produce.  We’ll see these when we introduce our improvements in a
+moment.  Our goal should be to reduce these distortions.</p>
+
+<p>Hang on, that’s coming up.</p>
+
+<h2 id="how-a-pwm-fits-into-a-digital-audio-system">How a PWM fits into a digital audio system</h2>
+
+<table style="float: right"><caption>Fig 2: Audio Hearing Range</caption><tr><td><img src="/img/pwm-hearing-range.svg" alt="A PWM sinewave" width="380" /></td></tr></table>
+<p>Before we can make an improvement, you need to understand that the <a href="https://en.wikipedia.org/wiki/Hearing_range">ear can
+<em>only</em> hear sounds between about 20Hz and
+20kHz</a>.  To be successful, the
+period of the <a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal will then need to be well above 20kHz—out of the
+<a href="https://en.wikipedia.org/wiki/Hearing_range">range of hearing</a>.</p>
+
+<p>Hence, a good
+<a href="https://store.digilentinc.com/pmod-amp2-audio-amplifier">audio circuit</a>
+(audiophile’s please forgive me for calling this “good”), following
+a <a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+output, will place a filter on the output to remove anything above 20kHz.</p>
+
+<p>This means that if we can push any distortions towards higher frequency
+components, then these distortions will get filtered out by the amplifier
+circuitry (or your ear), and the result will sound more pleasing to the ear.</p>
+
+<p>Can this be done?</p>
+
+<h2 id="a-better-pwm">A better PWM</h2>
+
+<p>Ok, you’ve waited enough, here’s the technique: <em>Bit-reverse the counter</em> before
+comparing it with the sample.
+Further, we’ll insist that our
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>,
+counter have a power of two length so that
+the bit reversed counter will take on the same values that the counter would’ve
+taken on in the first place.  The result is a waveform that is like
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>,
+although technically not a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a> signal.
+It is more generally a
+<a href="https://en.wikipedia.org/wiki/Pulse-density_modulation">PDM</a> signal,
+but unlike the implementation of
+<a href="https://en.wikipedia.org/wiki/Pulse-density_modulation">PDM</a>
+presented on <a href="https://en.wikipedia.org/wiki/Pulse-density_modulation">Wikipedia</a>
+this implementation is very easy to calculate.  Like both
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a> and
+<a href="https://en.wikipedia.org/wiki/Pulse-density_modulation">PDM</a>
+the result will nominally maintain the same number of output clock periods
+that a <a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+output would have been on.  Likewise, it will also be off for the same number
+of clock periods that a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+output would have been off.  (Assuming <code class="highlighter-rouge">2^N</code> clocks per interva.)  It will
+produce the same number of one’s, and
+the same number of zero’s.  The only difference is that bit-reversing the
+counter will cause these one’s and zero’s to be produced in a different order.</p>
+
+<p>I’m going to call this new signal type simply bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>,
+even though technically it’s not really a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a> signal at all
+any more.</p>
+
+<p>To understand what’s going on, let’s consider what the traditional
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+output would be for a sine-wave (shown in Fig 3 below).</p>
+
+<table align="center" style="float: none"><caption>Fig 3: A PWM sinewave</caption><tr><td><img src="/img/pwm-sinewave.png" alt="A PWM sinewave" width="780" /></td></tr></table>
+
+<p>Now, let’s take a look at that same sine wave output, but this time we’ll
+bit reverse the counter before creating our output signal.</p>
+
+<table align="center" style="float: none"><caption>Fig 4: An improved PWM sinewave</caption><tr><td><img src="/img/pwm-sine-improved.png" alt="An improved PWM sinewave" width="780" /></td></tr></table>
+
+<p>From this figure, you can see that there are <em>many</em> more transitions in the
+bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal.  Another way of saying this is that the
+bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal has a lot more high frequency content.  This extra high frequency
+content should be easier to filter out with cheap analog circuitry, and hence
+the remaining audio quality should be better.</p>
+
+<p>Enough of the hand-waving, is this new approach actually better?  To answer
+that question, let’s look at a
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+of the
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+encoded sine wave in Fig 3, and let’s compare it to the
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+of the bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a> sinewave from
+Fig 4.  We’ll place this frequency comparison into Fig 5 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 5: Comparing PWM frequency responses</caption><tr><td><img src="/img/pwm-harmonics.png" alt="Comparing PWM frequency responses" width="780" /></td></tr></table>
+
+<p>In this Figure, the vertical bars are frequency components, running from just
+above zero frequency at the left to higher frequencies at the right.  Their
+height is given by the magnitude squared of the
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+output values.  These are not <a href="https://en.wikipedia.orgg/wiki/Decibel">decibel</a>
+ values.
+The tone we want to create is represented by the tall
+vertical bar near the y-axis line.  The
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+of the original 
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+scheme is represented in red, whereas the
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+of our modified bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+sinewave is represented in green.</p>
+
+<p>Now that you understand the graph, notice the additional red bars to the
+right of the bar associated with our audio signal (the sinewave).  These are
+distortions.  Your
+ear will hear these distortions, and the result won’t sound like the pleasant
+tone you wanted.</p>
+
+<p>If you look further, you won’t see any green distortions to
+speak of.  It’s not that they aren’t there, it’s just that they’ve been spread
+out and spread across a much higher frequency range.  Those distortions in
+green that do remain within the audio range are much smaller in magnitude.</p>
+
+<p>The next step, now that we know how to improve this
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+development, is to build our improved signal and hear what it sounds like.</p>
+
+<h2 id="building-the-updated-pwms-logic">Building the updated PWM’s logic</h2>
+
+<p>Let’s now work through how to code this bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal, and make an
+<a href="https://github.com/ZipCPU/wbpwmaudio">audio controller</a>
+using the scheme.</p>
+
+<p>The first step to creating a more pleasing sounding
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+audio waveform is to bit–reverse the counter.  If we let our counter be a
+simple 16-bit number, we can reverse it with a for loop within a Verilog
+generate statement.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// The bit-reversed (br) counter
+wire	[15:0]	br_counter;
+genvar	k;
+generate for(k=0; k&lt;16; k=k+1)
+begin : bit_reversal_loop
+	assign br_counter[k] = pwm_counter[15-k];
+end endgenerate</code></pre></figure>
+
+<p>The beginning
+<a href="https://en.wikipedia.org/wiki/Hardware_description_language">HDL</a>.
+student should remember that for loops in Verilog <em>are not
+like for loops in software</em>.  This loop does nothing but rename the wires
+within the original <code class="highlighter-rouge">pwm_counter</code>.  It requires no
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+instructions, nor
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+<a href="https://en.wikipedia.org/wiki/Logic_block">logic elements</a>,
+to be accomplished.  As a result,
+there’s no time consumed by the logic this loop creates.</p>
+
+<p>This loop is actually the whole key to the algorithm, and the source of the
+difference we are going to create.  If you’ve built
+a <a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a> based audio signal
+before, you now understand how to build a better one.  We’ll keep going,
+though, just for completeness.</p>
+
+<p>We can then create our output from comparing this bit-reversed counter to the
+sample we would desire to output.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">// Create the PWM output
+always @(posedge i_clk)
+	o_pin &lt;= (sample_out &lt;= br_counter);</code></pre></figure>
+
+<p>You can find the code to create this type of waveform in my <a href="https://github.com/ZipCPU/wbpwmaudio/blob/master/rtl/wbpwmaudio.v">wbpwmaudio
+repository</a>
+on <a href="https://github.com/ZipCPU">GitHub</a>.  However, if you look over <a href="https://github.com/ZipCPU/wbpwmaudio/blob/master/rtl/wbpwmaudio.v">the
+code</a>
+alone, you might find there’s a bit more to it than the code written above.</p>
+
+<p>The first thing missing is the timer to tell the
+bit reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+audio driver when to switch samples.  Unlike our original development,
+the <a href="https://github.com/ZipCPU/wbpwmaudio/blob/master/rtl/wbpwmaudio.v">wbpwmaudio
+core</a>
+uses a user-configurable count-down timer.  This configurable value is placed
+into <code class="highlighter-rouge">w_reload_value</code>, allowing us to write our count-down timer as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	timer = DEFAULT_RELOAD;
+initial	ztimer= 1'b0;
+
+// ztimer is true for one clock pulse any time the timer restarts.
+always @(posedge i_clk)
+	ztimer &lt;= (timer == { {(TIMING_BITS-1){1'b0}}, 1'b1 });
+always @(posedge i_clk)
+	if (ztimer)
+		timer &lt;= w_reload_value;
+	else
+		timer &lt;= timer - ,1'b1};</code></pre></figure>
+
+<p>You might find this code very similar to the count-down timer logic found
+in our <a href="/blog/2017/06/02/generating-timing.html">timing
+post</a>.
+The big thing you may find different is the parameterized number of bits in
+the counter.  In this case, the number of bits in the timer counter is
+defined by the parameter,<code class="highlighter-rouge">TIMING_BITS</code>.  Why?  Because I needed to be able
+to trim the logic within the
+<a href="https://github.com/ZipCPU/s6soc">S6SoC</a> project down until the project
+<a href="/blog/2017/06/12/minimizing-luts.html">could fit</a>
+onto
+<a href="https://store.digilentinc.com">Digilent</a>’s <a href="https://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module">CMod
+S6</a>.</p>
+
+<p>The other thing you may notice is that the timer reload value isn’t connected
+to the
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+counter any more.  Heresy!  No, actually it makes a lot of sense.  Because the
+output bit order is spread uniformly across the sample interval, chopping a
+value off before it’s had enough time to send all of its bits isn’t something
+the ear will notice.  Further, this allows us to use arbitrary audio
+intervals, without suffering significant loss.</p>
+
+<p>Incidentally, this simple change renders genering samples easier.  Not only
+can we feed this value
+<a href="https://en.wikipedia.org/wiki/Twos_complement">two’s complement</a>
+values now, but we can do so at our
+favorite rate.  What if there aren’t enough clocks to transmit all the bits
+in this new value?  Not a problem, the algorithm will adjust so that it
+transmits as many bits as you have time to transmit.</p>
+
+<p>In other words, that’s all it takes to generate this bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal.</p>
+
+<p>Let’s go one step further, though.  Let’s connect this controller to a
+<a href="/doc/wbspec_b4.pdf">Wishbone bus</a>, so
+that we can send values to our core across such an interface.</p>
+
+<h2 id="adding-wishbone-control">Adding Wishbone Control</h2>
+
+<p>Let’s now turn this into a fairly complete
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+audio controller.  To do this, we’ll add a user configurable sample rate,
+some registers to control the power control wires in the
+<a href="https://store.digilentinc.com/pmod-amp2-audio-amplifier">PModAMP2</a>,
+and a means of sending audio samples to the controller.  Finally, we’ll add an
+interrupt line to let the <a href="/about/zipcpu.html">bus master</a>
+know that another sample is needed.</p>
+
+<p>A more capable controller would include a
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+so as to minimize the cost of servicing this controller, but I’ll leave that
+as an exercise for the student.  For now, we’ll follow the development used
+for the <a href="https://github.com/ZipCPU/s6soc">S6SoC</a>,
+where the whole goal was to <a href="/blog/2017/06/12/minimizing-luts.html">minimize the amount of the
+logic</a>, and leave the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a> out.</p>
+
+<p>If you’ve never built a
+<a href="/doc/wbspec_b4.pdf">wishbone</a>
+slave before, you might wish to read our
+<a href="/zipcpu/2017/05/29/simple-wishbone.md">previous discussion</a>
+as a background reference first.</p>
+
+<p>Our first task is going to be creating a reconfigurable sample rate.  In a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+system, the sample rate is determined by the number of clocks per sample
+duration.  We’ll call this number of samples <code class="highlighter-rouge">w_reload_value</code>–something you’ve
+already seen above.  The
+<a href="https://github.com/ZipCPU/wbpwmaudio/blob/master/rtl/wbpwmaudio.v">wbpwmaudio</a>
+code offers two methods of setting this value.  These two methods are selectable
+at design time via the <code class="highlighter-rouge">VARIABLE_RATE</code> parameter.  If <code class="highlighter-rouge">VARIABLE_RATE</code> is zero
+(false), then the timer will always reload its value from a fixed
+parameter value, <code class="highlighter-rouge">DEFAULT_RELOAD</code>, at the end of every interval.  If
+<code class="highlighter-rouge">VARIABLE_RATE</code> is true, on the other hand, then the timer will reload its
+value from a programmable register.</p>
+
+<p>Since we are using <a href="http://zipcpu.com/doc/wbspec_b4.pdf">wishbone</a> control,
+this register will need to be set from the bus any time <code class="highlighter-rouge">(i_wb_stb)</code> is high,
+indicating a bus cycle, <code class="highlighter-rouge">(i_wb_we)</code> is high, indicating a bus write cycle, and
+<code class="highlighter-rouge">(i_wb_addr)</code> is high, indicating we are writing to the second of two
+registers–the timer reload register.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">generate if (VARIABLE_RATE != 0)
+begin
+	reg	[(TIMING_BITS-1):0]	r_reload_value;
+	initial	r_reload_value = DEFAULT_RELOAD;
+	always @(posedge i_clk) // Data write
+		if ((i_wb_stb)&amp;&amp;(i_wb_addr)&amp;&amp;(i_wb_we))
+			r_reload_value &lt;= i_wb_data[(TIMING_BITS-1):0];
+	assign	w_reload_value = r_reload_value;
+end else begin
+	assign	w_reload_value = DEFAULT_RELOAD;
+end endgenerate</code></pre></figure>
+
+<p>We’ve already seen above how this affects our timer: when the timer runs out,
+it gets reset with this value.  Likewise, <code class="highlighter-rouge">ztimer</code> is set to be true any
+time the timer has run out.</p>
+
+<p>This is also going to control when the design accepts the next sample:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (ztimer)
+		sample_out &lt;= next_sample;</code></pre></figure>
+
+<p><code class="highlighter-rouge">next_sample</code> is a one-sample buffer.  It allows the
+<a href="/about/zipcpu.html">CPU</a>
+or any other
+<a href="/blog/2017/06/08/simple-wb-master.html">bus master</a>ing
+audio controller
+a full sample interval in order to reload the value.</p>
+
+<p>Setting this one-sample buffer will be our next step.  In this case, we’ll
+set it any time a bus write takes place <code class="highlighter-rouge">(i_wb_stb)&amp;&amp;(i_wb_we)</code> to the
+zero address of this port <code class="highlighter-rouge">(!i_wb_addr)</code>.
+Alternatively, if we are using a fixed sample rate, we’ll ignore the address
+and just set the sample.  In this case, we’ll set the sample based upon the
+16-bit sample value on the input
+<a href="/doc/wbspec_b4..pdf">wishbone bus</a>
+data lines.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	next_valid = 1'b1;
+initial	next_sample = 16'h8000;
+always @(posedge i_clk) // Data write
+	if ((i_wb_stb)&amp;&amp;(i_wb_we)
+			&amp;&amp;((!i_wb_addr)||(VARIABLE_RATE==0)))
+	begin
+		// Write with two's complement data, convert it
+		// internally to binary offset
+		next_sample &lt;= { !i_wb_data[15], i_wb_data[14:0] };
+		next_valid &lt;= 1'b1;
+		if (i_wb_data[16])
+			o_aux &lt;= i_wb_data[(NAUX+20-1):20];
+	end else if (ztimer)
+		next_valid &lt;= 1'b0;</code></pre></figure>
+
+<p>There’s a couple things to notice here.  First, notice the negation of bit
+fifteen–a 16-bit sample’s most significant bit.  This is the
+<a href="https://en.wikipedia.org/wiki/Twos_complement">two’s complement</a>
+sign bit.  Flipping the sign bit is the way to convert
+<a href="https://en.wikipedia.org/wiki/Twos_complement">two’s complement</a> values,
+ranging from <code class="highlighter-rouge">-2^(N-1)</code> to <code class="highlighter-rouge">2^(N-1)-1</code> to the
+<a href="https://en.wikipedia.org/wiki/Offset_binary">offset binary</a> values, ranging
+from <code class="highlighter-rouge">0</code> to <code class="highlighter-rouge">2^N-1</code>, that a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+modulator needs.  Second, you’ll want to notice the <code class="highlighter-rouge">next_valid</code> logic.
+This logic tells us whether or not the sample in our buffer is a valid
+sample or not.  Upon any write, this value is set high to indicate we have a
+valid sample in our buffer.  Whereas
+any time the sample is moved from the one-sample buffer into the
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+modulation code as <code class="highlighter-rouge">sample_out</code>, the <code class="highlighter-rouge">next_valid</code> bit will be cleared to
+indicate that there’s no valid sample in the buffer.</p>
+
+<p>In this code, <code class="highlighter-rouge">next_sample</code> is set any time an audio sample is written to the
+controller.  This is then fed to our output-sample value when the period
+ends.  We’ll also note, upon setting this value, that the value is
+valid (<code class="highlighter-rouge">next_valid</code>).  We’ll keep this valid signal true until our <code class="highlighter-rouge">next_sample</code>
+value moves into the
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+output processing stage (above) as <code class="highlighter-rouge">sample_out</code>.</p>
+
+<p>You may also notice the <code class="highlighter-rouge">o_aux</code> value above.  I use the bits in <code class="highlighter-rouge">o_aux</code> to
+control two bits which can then be used to control the gain and shutdown pins
+from within this controller.  So that we can choose whether or not to send
+samples or updated control pins, we require that bit sixteen be set if you
+want to update the control pins, otherwise we leave the control pins alone.</p>
+
+<p>At this point, we can move on and examine the values this controller
+returns from the bus.  As in our <a href="/zipcpu/2017/05/29/simple-wishbone.html">first discussion of how to make a wishbone
+peripheral</a>,
+we’ll set the bus output lines no matter whether we are writing or reading.
+It just simplifies the logic.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">generate if (VARIABLE_RATE == 0)
+begin
+	assign o_wb_data = { {(12-NAUX){1'b0}}, o_aux,
+				3'h0, o_int, sample_out };
+end else begin
+	reg	[31:0]	r_wb_data;
+	always @(posedge i_clk)
+		if (i_wb_addr)
+			r_wb_data &lt;= w_reload_value;
+		else
+			r_wb_data &lt;= { {(12-NAUX){1'b0}}, o_aux,
+					3'h0, o_int, sample_out };
+	assign	o_wb_data = r_wb_data;
+end endgenerate</code></pre></figure>
+
+<p>Selecting between which register to output took us one clock, so we’ll wait
+one clock before acknowledge the clock in order to keep the acknowledgement
+aligned with the data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_wb_ack = 1'b0;
+always @(posedge i_clk)
+	o_wb_ack &lt;= (i_wb_stb);</code></pre></figure>
+
+<p>Further, the value(s) returned by this routine are always ready.  This routine
+never has a reason to stall the bus.  (Repeated writes to the data register
+will just over-write the buffer value.)  So, we’ll just keep the stall line low.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	o_wb_stall = 1'b0;</code></pre></figure>
+
+<p>Finally, we’ll add in one further flair: an interrupt line to tell the
+<a href="/about/zipcpu.html">CPU</a>
+when the buffer is no longer valid and can be refilled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">assign	o_int &lt;= (!next_valid);</code></pre></figure>
+
+<p>While I suppose
+<a href="/doc/wbspec_b4.pdf">wishbone</a>
+support isn’t necessary for every core we present, this core already has it
+and it was fun to present how a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+generator might be created as a bus slave.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>That just about wraps up this post!</p>
+
+<p>We’ve now gone over and discussed the traditional
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+development, presenting how a
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal can be used as a cheap
+<a href="https://en.wikipedia.org/wiki/Digital-to-analog_converter">digital to analog converter</a>.</p>
+
+<p>We then presented a new approach to 
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+that we called the “bit-reversed
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>”
+approach.  We pointed out how this approach spreads the unwanted
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+<a href="https://en.wikipedia.org/wiki/Harmonic">harmonic</a>
+energy into higher frequencies, relieving some of the stress on
+the anti-aliasing filter.  This approach also separated the timer
+determining the edges of the
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a>
+signal from the sample generator, with the purpose of removing some of the
+noise associated with the periodic signal associated with no signal.</p>
+
+<p>I have personally listened to the quality of the output of this amplifier.
+My test signal has been a doorbell sound.  The doorbell comes out sounding
+pure, with no noticable audio distortions.</p>
+
+<p>No, I’m not suggesting this is “professional” audio quality, but it is better
+than the alternative.</p>
+
+<p>Perhaps I may encourage you to try <a href="https://github.com/ZipCPU/wbpwmaudio">this component
+IP</a>
+yourself, to hear how it sounds?</p>
+
+<p>Hmm … perhaps I should show you instead how this component may be
+simply and easily be integrated into a basic debugging bus, so that you
+can hear the sound quality for yourself?  That will have to remain, though,
+as a lesson for another day.</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>And whosoever shall fall on this stone shall be broken: but on whomsoever it shall fall, it will grind him to powder.</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
