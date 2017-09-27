@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Understanding the effects of Quantization</title>
+  <meta name="description" content="Some time ago, I described onthis blog how to use aCORDIC algorithm to rotate x,yvectorsby an arbitrary angleand how to build arectangular to polar conversio...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/09/27/quantization.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Understanding the effects of Quantization</h1>
+    <p class="post-meta"><time datetime="2017-09-27T00:00:00-04:00" itemprop="datePublished">Sep 27, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Some time ago, I described on
+<a href="http://zipcpu.com/">this blog</a> how to use a
+<a href="/dsp/2017/08/30/cordic.md">CORDIC algorithm to rotate <code class="highlighter-rouge">x,y</code>
+vectors</a>
+by an arbitrary <a href="/dsp/2017/06/15/no-pi-for-you.html">angle</a>
+and <a href="/dsp/2017/09/01/topolar.md">how to build a
+rectangular to polar conversion</a>
+using the same basic methods.
+What I didn’t post was a test bench for those two routines.  As a result, the
+presentations are really incomplete.  While I have <em>declared</em> that they work,
+I have not <em>proven</em> that they work.  Neither have I demonstrated how well they
+work.</p>
+
+<p>What makes matters even more difficult is that proving that a <a href="/dsp/2017/08/30/cordic.md">(core generated)
+CORDIC algorithm</a>
+works is not trivial.  While generating a straight-forward test bench may be
+simple for one set of
+<a href="/dsp/2017/08/30/cordic.md">CORDIC parameters</a>,
+the same test bench may not work for all parameters.  In particular,
+the arbitrary parameters of input, phase, internal
+accumulator, and output bit widths are all going to have an affect on the
+performance of the overall
+<a href="/dsp/2017/08/30/cordic.md">CORDIC algorithm</a>.
+How shall we understand how well
+<a href="https://github.com/ZipCPU/cordic/blob/master/rtl/cordic.v">this algorithm</a>
+works for any <a href="https://github.com/ZipCPU/cordic/blob/master/rtl/cordic.h">particular set of
+parameters</a>?</p>
+
+<p>To answer these questions, let’s examine
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+effects.  We’ll start by reviewing the definitions of some
+<a href="https://en.wikipedia.org/wiki/Probability">probabilistic</a>
+quantities: the
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>,
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>, and <a href="https://en.wikipedia.org/wiki/Standard_deviation">standard
+deviation</a>.
+We’ll then examine
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+noise according to these properties.
+Using these results, we can then draw some very general rules of thumb that we
+can then use in a later post to build a <a href="https://github.com/ZipCPU/cordic/blob/master/bench/cpp/cordic_tb.cpp">test
+bench</a>
+for our <a href="/dsp/2017/08/30/cordic.md">CORDIC algorithm</a>.
+Indeed, the results presented below will be generic enough that we may apply
+them to many other algorithms as well.</p>
+
+<h2 id="some-quick-statistics">Some quick statistics</h2>
+
+<p>Understanding
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+effects requires a very basic understanding of
+<a href="https://en.wikipedia.org/wiki/Probability">probability</a>.
+<a href="https://en.wikipedia.org/wiki/Probability">Probability</a> involves the study
+of <a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a>, and
+how they behave.</p>
+
+<p>In the study of <a href="https://en.wikipedia.org/wiki/Probability">probability</a>,
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a> are
+characterized by their <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a>.
+A <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a>
+is basically a function that can be used to define the
+<a href="https://en.wikipedia.org/wiki/Probability">probability</a>
+that a <a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>
+attains a particular value.  The two requirements on a <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a>
+function are first that all of the elements are non-negative,
+and second that the sum of all of the elements must be one.</p>
+
+<p>There are two basic types of
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">probability functions</a>:
+<a href="https://en.wikipedia.org/wiki/Probability_mass_function">probability mass functions
+(PMF)</a> and
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">probability density functions
+(PDF)</a>.</p>
+
+<p>For <a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a> drawn
+from a discrete set of values, the <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a>
+is described by a
+<a href="https://en.wikipedia.org/wiki/Probability_mass_function">PMF</a>.
+The <a href="https://en.wikipedia.org/wiki/Probability_mass_function">PMF</a>
+describes the probability of a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a>
+equalling a specific
+value from a discrete set.</p>
+
+<p>One discrete set that will interest us within the
+<a href="/dsp/2017/08/30/cordic.md">CORDIC</a> algorithm
+is the set of two possibilities, each of which may be selected with equal
+probability.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-bicordic-probability.png" alt="PMF for the CORDIC probability of rotation direction" width="285" /></td></tr></table>
+
+<p>The other type of
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">probability function</a>
+describes a <em>continuous random variable</em>.
+This is the type we shall focus on today.  Continuous probability distributions
+are defined by a <a href="https://en.wikipedia.org/wiki/Probability_density_function">probability density
+function (PDF)</a>.
+Unlike the
+<a href="https://en.wikipedia.org/wiki/Probability_mass_function">PMF</a>
+discussed above,
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">PDF</a>’s
+are used to determine whether or not a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random number</a>
+falls within a range of values, as in:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-range-probability.png" alt="Probability of a random variable landing within a continuous variable range" width="310" /></td></tr></table>
+
+<p>These two functions, whether the
+<a href="https://en.wikipedia.org/wiki/Probability_mass_function">PMF</a>
+or the
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">PDF</a>
+as appropriate, completely characterize
+how a <a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>
+is selected from among the possible values it may obtain.</p>
+
+<p>Now that we can describe a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>,
+the next step is to draw some conclusions from it.  To keep
+things simple, we’ll examine three functions of a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>.  The first
+is the <a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>.
+From there, we can define the
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>,
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>, and even the
+<a href="https://en.wikipedia.org/wiki/Standard_deviation">standard
+deviation</a>.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+of a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>
+is defined as the sum, taken over all values the variable might assume, of the
+product of the probability of the variable taking on that value and whatever
+the expectation function is.  While that sounds pretty confusing, the equation
+itself for an <a href="https://en.wikipedia.org/wiki/Expected_value">expected
+value</a> is simpler
+than the description I just gave.  For a continuous probability distribution
+over the <a href="https://en.wikipedia.org/wiki/Real_number">real number</a> system
+the <a href="https://en.wikipedia.org/wiki/Expected_value">expectation</a> is defined by,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-expected-value-fn.png" alt="Equation defining the expected value of a random variable" width="320" /></td></tr></table>
+
+<p>where <code class="highlighter-rouge">X</code> is our
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>,
+<code class="highlighter-rouge">g(X)</code> is an arbitrary function of the
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>, <code class="highlighter-rouge">X</code>,
+<code class="highlighter-rouge">f(X)</code> is the
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">PDF</a> associated
+with this <a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>,
+and the integral is taken over all
+<a href="https://en.wikipedia.org/wiki/Real_number">real number</a>s.
+We’ll use this expression to define the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+of a function, <code class="highlighter-rouge">g(X)</code>, which we’ll then note as <code class="highlighter-rouge">E{g(X)}</code>.</p>
+
+<p>Even this appears more complicated than it need be, since in our discussions
+below we’ll let <code class="highlighter-rouge">g(X)</code> be simple things such as <code class="highlighter-rouge">X</code>, <code class="highlighter-rouge">X^2</code> or even the sum
+of two <a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a>,
+<code class="highlighter-rouge">X+Y</code>.  We’re also going to let <code class="highlighter-rouge">f(X)</code> be something as simple as the constant
+<code class="highlighter-rouge">1</code> between <code class="highlighter-rouge">-1/2</code> and <code class="highlighter-rouge">1/2</code>, and zero other wise.  In other words, don’t
+let the formula scare you: it’s easier than it looks.</p>
+
+<p>Further, because the 
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">PDF</a>
+is unitless, the units of the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+are the same as the units of <code class="highlighter-rouge">g(X)</code>.  Hence, if <code class="highlighter-rouge">g(X)</code> is <code class="highlighter-rouge">X^2</code>, and <code class="highlighter-rouge">X</code> is
+a voltage, then the units would be voltage squared.</p>
+
+<p>From this definition of the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expectation</a>
+we can now define the
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>.
+The
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+is defined
+as the <a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a> of the
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a> itself,
+<code class="highlighter-rouge">E{X}</code>.  We’ll use the Greek character <em>mu</em> to represent it, sometimes
+noting it as a <code class="highlighter-rouge">u</code>.  If we just use the equation for
+<a href="https://en.wikipedia.org/wiki/Expected_value">expectation</a>
+presented above, then this
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+is calculated from,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-defn-mean.png" alt="Equation defining the mean of a random variable" width="202" /></td></tr></table>
+
+<p>You may be familiar with the
+<a href="https://en.wikipedia.org/wiki/Statistics">statistical</a>
+process of
+<a href="https://en.wikipedia.org/wiki/Average">averaging</a>.
+a set of measured values in order to estimate a
+<a href="https://en.wikipedia.org/wiki/Average#Statistical_location">mean</a>.
+This is subtly different from the definition of the
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+of a <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a> that we
+just presented above.  In the case of the
+<a href="https://en.wikipedia.org/wiki/Statistics">statistical</a>
+<a href="https://en.wikipedia.org/wiki/Average#Statistical_location">mean</a>,
+a set of samples are drawn from a random distribution, and then averaged.
+The result of this method is a new
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>, which is
+often used to infer information about the <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a> of the
+set of <a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>s
+from which the <a href="https://en.wikipedia.org/wiki/Statistics">statistical</a>
+<a href="https://en.wikipedia.org/wiki/Average#Statistical_location">mean</a>
+was computed.  The
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+defined above, however, is completely characterized by the (assumed known)
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a>
+of the <a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>
+in question.</p>
+
+<p>The next useful quantity we will be interested in is the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+of a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random number</a>.
+This is defined by the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+of the
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>,
+minus its
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>,
+squared.  We’ll represent this value with a <code class="highlighter-rouge">V[X]</code>, to note that it is the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a> of the
+<a href="https://en.wikipedia.org/wiki/Random_variable">random value</a> <code class="highlighter-rouge">X</code>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-defn-variance.png" alt="Equation defining the variance of a random variable" width="477" /></td></tr></table>
+
+<p>We’ll use this definition of the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+later to analyze the errors within our
+<a href="/dsp/2017/08/30/cordic.md">CORDIC calculation</a>.</p>
+
+<p>The third useful quantity is the
+<a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a>.
+The <a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a>
+is defined by the square root of the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>.  We’ll use the Greek
+letter <em>sigma</em> to represent this quantity.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-defn-stdev.png" alt="Equation defining the standard deviation of a random variable" width="145" /></td></tr></table>
+
+<p>Perhaps you noticed above that the units of
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+were the units of <code class="highlighter-rouge">X</code> squared.  (<code class="highlighter-rouge">f(X)</code> has no units)
+The reason why we even need a
+<a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a>
+at all is so that we can have a value that represents the spread of a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>,
+but with the same units as <code class="highlighter-rouge">X</code>.  This will make it easier to talk about and
+reason about the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>, even though the
+<a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a>
+measure itself doesn’t fundamentally offer any new information beyond
+what is already contained within the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>.</p>
+
+<p>The above discussion may well be the shortest discussion of
+<a href="https://en.wikipedia.org/wiki/Probability">probability</a>
+you will ever come across.  As such, it’s rather incomplete.  I would
+encourage anyone interested to either read the wikipedia articles cited above,
+or to take courses in both
+<a href="https://en.wikipedia.org/wiki/Probability">probability</a>
+and
+<a href="https://en.wikipedia.org/wiki/Statistics">statistics</a>
+to learn more.  It’s a fun field.</p>
+
+<p>For now, we now have the basics of what we need to examine
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+effects.</p>
+
+<h2 id="quantization-noise">Quantization Noise</h2>
+
+<p><a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">Quantization</a>
+is the process that takes a continuous value and representing
+that value by a single value from a discrete set.  Electrically, perhaps the
+most classic example of
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+is an
+<a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">analog to digital converter (ADC)</a>.
+<a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">Such a converter</a>
+takes an input voltage, which may best be represented as a
+continuous value, and turns it into one of a number of
+discrete values.  Fig 1 below shows an example of this.</p>
+
+<table align="center" style="float: none"><caption>Fig 1: Converting a continuous waveform into discrete values</caption><tr><td><img src="/img/quantized-sine.png" alt="Figure showing an example quantized sinewave" width="780" /></td></tr></table>
+
+<p>In this example, the blue sinewave was the original value, and the discontinuous
+red lines represent a set of discrete values that each of the voltages within
+the sinewave were mapped on to.</p>
+
+<p><a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">ADC</a>’s
+also
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)"><em>sample</em></a>
+signals. 
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">Sampled</a>
+signals are also discrete in time, and not just in value.
+For our purposes in this post, we’ll postpone the study of
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampling</a>
+for later, and just focus on the 
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+effects.</p>
+
+<table style="float: right"><caption>Fig 2: An example quantization function</caption><tr><td><img src="/img/quantized-fun.png" alt="Notional quantization function" width="240" /></td></tr></table>
+
+<p>In general, the
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantizater</a>
+within an <a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">ADC</a>
+may be considered to be a function
+with a continuous input, <code class="highlighter-rouge">x</code>, and a discrete output, <code class="highlighter-rouge">y</code>.  One such function
+is shown in Fig 2 at right.  A well built
+<a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">ADC</a>
+will have evenly spaced discrete sample samples, <code class="highlighter-rouge">y</code>, and it will map all
+voltages, <code class="highlighter-rouge">x</code>, to their nearest sample value, <code class="highlighter-rouge">y</code>.  What
+this means is that the difference between a sample value and the value it
+represents, <code class="highlighter-rouge">y-x</code>, will always be half the distance between samples or less.</p>
+
+<p>Of course,
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantizing</a>
+any signal will distort the signal.  This is easily seen by the
+simple fact that the red and blue lines in Fig 1 above are <em>different</em>.  The
+desired value was shown in blue, the reality at the output of the
+<a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">ADC</a>
+is shown in red.  It is the difference between the two signals forms
+the topic of our discussion below.</p>
+
+<p>Let’s define the difference between the original voltage and its quantized
+representation
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error.  As an example, the
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error associated with Fig 1 above is shown below in dark green in Fig 3 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 3: Quantization error, shown in green</caption><tr><td><img src="/img/quantized-err.png" alt="Showing the quantization error associated with a sine wave" width="780" /></td></tr></table>
+
+<p>This means that we can consider any received waveform to be the sum of two
+signals.  The first is the signal of interest, shown in blue above.  The
+second is the
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error signal shown in green in Fig 3.</p>
+
+<p>Our goal will be to understand the statistics of this
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error.</p>
+
+<p>To analyze this error, we’ll first notice that for a single sample, the
+difference between the analog voltage and the
+<a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">ADC</a>
+result lies between
+<code class="highlighter-rouge">-1/2</code> and <code class="highlighter-rouge">1/2</code> of a
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+level.  In Fig 3 above, there are two thin lines running
+horizontally at <code class="highlighter-rouge">-1/2</code> and <code class="highlighter-rouge">1/2</code>.  These lines illustrate the bounds of this
+error.</p>
+
+<p>We’re going to treat this error as a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>
+and assume that all of these differences are both
+<a href="https://en.wikipedia.org/wiki/Independence_(probability_theory)">independent</a>
+and identically distributed.  As one final assumption, we’ll assume that these
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+errors are <a href="https://en.wikipedia.org/wiki/Uniform_distribution_(continuous)">uniformly
+distributed</a>
+between <code class="highlighter-rouge">-1/2</code> and <code class="highlighter-rouge">1/2</code>, with the same units as our sampled values have.
+(You <em>could</em> do this in units of Voltage, it’s just a touch more complex.)</p>
+
+<p>That gives us our
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">PDF</a>,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-quantization-pdf.png" alt="The PDF of quantization noise" width="263" /></td></tr></table>
+
+<p>and allows us to characterize our
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+“noise”.  It also greatly simplifies any math we’ll need to do in order to
+calculate <a href="https://en.wikipedia.org/wiki/Expected_value">expectations</a>,
+since we can now drop the <code class="highlighter-rouge">f(X)</code> function and then only need to integrate from
+<code class="highlighter-rouge">-1/2</code> to <code class="highlighter-rouge">1/2</code>.</p>
+
+<p>For example, using this
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">PDF</a>,
+we can now prove that the
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+of this error is zero.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-mean-quantization-develop.png" alt="Proving quantization noise is zero mean" width="296" /></td></tr></table>
+
+<p>In many ways, though, this proof is backwards.  If all you did was to <em>look</em>
+at Fig 3 above, you could visually <em>see</em> that the
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+of any
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error <em>should</em> be zero.  The amount of time the green line is above zero
+can be seen to be equal to the amount of time it spends below zero.  Therefore,
+this mathematical proof really only (partially) validates our <a href="https://en.wikipedia.org/wiki/Uniform_distribution_(continuous)">choice of
+distribution</a>,
+rather than telling us anything new about our error.</p>
+
+<p>A zero
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+distribution will make our
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+calculation simpler, since we no longer need to the
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+as part of the calculation.  With a zero
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>,
+we now have</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-variance-nomean.png" alt="Equation for variance with no mean" width="296" /></td></tr></table>
+
+<p>for our
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>.  In other words, the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a> of this
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+noise is simply given by the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+of <code class="highlighter-rouge">X^2</code>.</p>
+
+<p>We can now evaluate the integral, and quantify the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+of any
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-quantization-variance-dev.png" alt="Equation for variance with no mean" width="375" /></td></tr></table>
+
+<p>If you look at the units of this
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>,
+you’ll notice that they are the units of <code class="highlighter-rouge">X</code> squared.  (<code class="highlighter-rouge">f(X)</code> and <code class="highlighter-rouge">dX</code> are
+unitless.)  For this reason, it
+doesn’t make sense to compare values of <code class="highlighter-rouge">X</code> against this
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a> at all.  For example,
+to ask whether or not the results of the
+<a href="/dsp/2017/08/30/cordic.md">CORDIC</a>
+are within some number of <a href="https://en.wikipedia.org/wiki/Variance">variance</a>’s
+from the right answer would involve a units mismatch.
+The <a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a>,
+however, captures this same information while maintaining the same units that
+<code class="highlighter-rouge">X</code> had.  Since it’s just the square root of the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>, the
+<a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a> of any
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error is simply the square root of <code class="highlighter-rouge">1/12</code> or equivalently</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-quantization-stdev.png" alt="Equation for variance with no mean" width="176" /></td></tr></table>
+
+<p>Although this is the “proper” mathematical form for this
+<a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a>,
+I still tend to think of it as the square root of one over twelve.</p>
+
+<p>These results, both for the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a> and the
+<a href="https://en.wikipedia.org/wiki/Standard_deviation">standard deviation</a> of
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error, are the fundamental results of this section.
+We’re going to need these results as we try to calculate the errors we might
+expect from a
+<a href="/dsp/2017/08/30/cordic.md">CORDIC</a>–or any other
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a>
+algorithm for that matter.  First, though, let’s look at what happens to this
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+and its <a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+when we apply a mathematical algorithm to our signal–such as we will within the
+<a href="/dsp/2017/08/30/cordic.md">CORDIC</a>.</p>
+
+<h2 id="rules-for-thumb">Rules for thumb</h2>
+
+<p>Two rules of thumb will help us facilitate using the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+of the
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error to estimate algorithmic performance.  These two rules regard how
+multiplying by a constant affects the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>,
+as well as how adding two
+<a href="https://en.wikipedia.org/wiki/Random_variable">random values</a>
+together affects the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>.</p>
+
+<p>The first rule deals with multiplying a
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>
+by a constant number.  This operation increases the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a> in the
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>
+by the square of the constant.  This follows from the definition of
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-variance-scale-dev.png" alt="Equation showing how scale affects variance" width="593" /></td></tr></table>
+
+<p>For our second rule, we’d like to add two
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a>’s together.
+We’ll insist on two assumptions.  The first is that the two
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a> are
+continuous and <a href="https://en.wikipedia.org/wiki/Independence_(probability_theory)">independently
+distributed</a>,
+and the second is that they both have zero
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>.
+From there, let’s look at the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+of the sum of two
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a>.</p>
+
+<p>The proof of our property is a touch more complex than the last one since any
+time you have two
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a>
+you have to deal with a joint
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">distribution</a>.
+In general, the joint
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">distribution</a>s
+is a bi-variate
+<a href="https://en.wikipedia.org/wiki/Probability_density_function">PDF</a>,
+such as <code class="highlighter-rouge">f(X,Y)</code>.  Further, the single integral now becomes a double integral
+over both <code class="highlighter-rouge">X</code> and <code class="highlighter-rouge">Y</code>.  However, since we assumed that these two <a href="https://en.wikipedia.org/wiki/Random_variable">random
+variables</a> would be
+<a href="https://en.wikipedia.org/wiki/Independence_(probability_theory)">independent</a>,
+their combined
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">distribution</a>
+can be expressed as a product of the
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">distribution</a>
+for <code class="highlighter-rouge">X</code>, <code class="highlighter-rouge">f(X)</code>, and the
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">distribution</a>
+for <code class="highlighter-rouge">Y</code>, <code class="highlighter-rouge">g(Y)</code>.  <code class="highlighter-rouge">g(Y)</code> in this case is a different function from the <code class="highlighter-rouge">g(X)</code>
+above, since in this case it is the
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">distribution</a>
+function for the
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a> <code class="highlighter-rouge">Y</code>.
+We’ll still need to integrate over both <code class="highlighter-rouge">X</code> and <code class="highlighter-rouge">Y</code>, but
+this simplification will help us split the double integral into two separate
+single integrals.</p>
+
+<p>Now that we have our terms, we can now develop an expression for the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+of the sum of two
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a>:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-variance-sum-dev.png" alt="Deriving the variance of the sum of two random variables" width="688" /></td></tr></table>
+
+<p>In sum, the
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+of the sum of two
+<a href="https://en.wikipedia.org/wiki/Independence_(probability_theory)">independent</a>
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a>, such as the
+<code class="highlighter-rouge">X</code> and <code class="highlighter-rouge">Y</code> above,
+is the sum of their individual
+<a href="https://en.wikipedia.org/wiki/Variance">variances</a>.</p>
+
+<p>Just for completeness then, here are the two properties we’ll need later.</p>
+
+<p>The first property is how scale affects
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-variance-scale.png" alt="Equation showing how scale affects variance" width="193" /></td></tr></table>
+
+<p>To generate this property, we assumed that the
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variable</a> had zero
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>.
+The property actually holds of
+<a href="https://en.wikipedia.org/wiki/Random_variable">random variables</a> with non-zero
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>s
+as well, but I’ll leave that as an exercise for the student.</p>
+
+<p>The second property was the <a href="https://en.wikipedia.org/wiki/Variance">variance</a>
+of the sum of two
+<a href="https://en.wikipedia.org/wiki/Random_variable">random numbers</a>:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-variance-sum.png" alt="Equation showing the variance of the sum of two values" width="283" /></td></tr></table>
+
+<p>This property was dependent upon the assumptions of zero
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>,
+and
+<a href="https://en.wikipedia.org/wiki/Independence_(probability_theory)">independent</a>
+<a href="https://en.wikipedia.org/wiki/Probability_distribution">distribution</a>s.
+However, as with the first property, the zero
+<a href="https://en.wikipedia.org/wiki/Mean#Mean_of_a_probability_distribution">mean</a>
+assumption only simplified our proof–it wasn’t required.</p>
+
+<p>Using these two properties, we can now return to our
+<a href="/dsp/2017/08/30/cordic.md">CORDIC</a> algorithm(s) and
+consider the question of whether or not the algorithm(s) even work.</p>
+
+<h2 id="coming-up">Coming up</h2>
+
+<p>As we look forward to future posts, I’ll try to keep those discussions simpler.
+I apologize for depth of this discussion, but if you want to prove how good an
+algorithm such as the
+<a href="/dsp/2017/08/30/cordic.md">CORDIC algorithm</a> is, you are
+going to need some of this math.  (If you know another way, let me know.)
+From here on out, I’m going to try to just use these results rather than
+rehashing today’s lessons.</p>
+
+<table style="float: right"><tr><td><img src="/img/from-quantization.svg" alt="Roadmap forward from this quantization discussion" width="283" /></td></tr></table>
+
+<p>If you found these lessons informative, then that’s wonderful!  If you’ve
+never heard any of this before and it actually makes sense today, then I’m
+flattered.  The concepts aren’t necessarily that simple.</p>
+
+<p>On the other hand, if you are not familiar with the study of
+<a href="https://en.wikipedia.org/wiki/Probability">probability</a> at all, then you
+may have found that the proofs and discussions above, regarding <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distributions</a> and
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantization</a>
+error, read like a foreign language.  If you feel like that is you, then let
+me commend to you the study of
+<a href="https://en.wikipedia.org/wiki/Probability">probability</a>.  I found the
+coursework to be a lot of fun, and enjoyed the study myself.</p>
+
+<p>This lesson, though, sets us up to build the
+test bench
+that we need to put together for our
+<a href="/dsp/2017/08/30/cordic.md">CORDIC algorithm</a>.
+Once we have proven the
+<a href="/dsp/2017/08/30/cordic.md">CORDIC</a>’s
+capabilities, we can then turn around and use it to create a generic
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filtering</a>
+test bench.  With a generic filtering test bench, we can then build and test
+several
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filtering</a>
+approaches that can be used within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.</p>
+
+<p>If the Lord wills, then that’s where we’ll go next.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Behold, this have I found, saith the preacher, counting one by one, to fin the account (Eccl 7:27)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
