@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Implementing the Moving Average (Boxcar) filter</title>
+  <meta name="description" content="When we first examinedfiltering, we looked atthe two simplest digital filtersI knew of: a filter that averages adjacentvalues, and afilter that recursivelyav...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/10/16/boxcar.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Implementing the Moving Average (Boxcar) filter</h1>
+    <p class="post-meta"><time datetime="2017-10-16T00:00:00-04:00" itemprop="datePublished">Oct 16, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>When we <a href="/dsp/2017/08/19/simple-filter.html">first examined
+filtering</a>, we looked at
+the two simplest <a href="https://en.wikipedia.org/wiki/Digital_filter">digital filters</a>
+I knew of: a <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/smplfir.v">filter that averages adjacent
+values</a>, and a
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/iiravg.v">filter that recursively
+averages</a>
+multiple numbers together.  These two simple filters required only a
+<a href="/blog/2017/06/12/minimizing-luts.html">few FPGA resources</a>,
+and so they were easy to implement.  Sadly, they weren’t very configurable and
+so their filtering capability was quite limited.</p>
+
+<p>We then came back to the topic and discussed how to create a
+<a href="/dsp/2017/09/15/fastfir.html">generic Finite Impulse Response (FIR) filter</a>.  Such a
+<a href="/dsp/2017/09/15/fastfir.html">generic</a>
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is <em>very</em> configurable.  Using the approach I presented, you can describe <em>any</em>
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a> in logic.
+We then came back to the topic a bit later, and <a href="/dsp/2017/09/29/cheaper-fast-fir.html">discussed how to
+create</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/fastfir.v">a filter</a>
+that required fewer
+<a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>,
+while still maintaining the complete configurability of any
+<a href="/dsp/2017/09/15/fastfir.html">generic</a>
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<p>The problem with both of these generic approaches is their cost.  As with
+most
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filters</a>,
+this cost is often measured in the number of multiplies (i.e. the number of
+taps).  While the number of
+<a href="https://en.wikipedia.org/wiki/Logic_block">logic block</a>’s
+and <a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>
+is also of interest, even this logic scales with the number of filter
+taps required.</p>
+
+<p>As an example of this problem, suppose you wanted to select an
+<a href="https://en.wikipedia.org/wiki/Frequency_modulation">FM</a>
+<a href="https://en.wikipedia.org/wiki/FM_broadcast_band">broadcast</a>
+signal (200 kHz) from somewhere within the
+<a href="https://en.wikipedia.org/wiki/Frequency_modulation">FM</a>
+<a href="https://en.wikipedia.org/wiki/FM_broadcast_band">broadcast band</a> (87-108MHz
+<a href="https://en.wikipedia.org/wiki/Radio_frequency">RF</a>
+in the US).  Now suppose you also wanted to do all of this processing within
+your <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>,
+and that you could afford a <a href="https://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists/">$99
+Arty</a> (plus an
+<a href="https://en.wikipedia.org/wiki/Frequency_modulation">FM</a> antenna, pre-amp, 
+<a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">ADC</a>, etc.).
+The <a href="https://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists/">Arty</a> contains an
+<a href="https://www.xilinx.com/support/documentation/data_sheets/ds180_7Series_Overview.pdf">Artix-7/35T</a>
+<a href="https://www.xilinx.com">Xilinx</a>
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+with 90 DSP slices.  That means you can implement 90 multiplies within your
+logic on any given clock tick.  This would allow you to create a
+<a href="/dsp/2017/09/15/fastfir.html">generic</a>
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+with 89 taps.  (Most
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+have an <a href="https://en.wikipedia.org/wiki/Parks-McClellan_filter_design_algorithm">odd number of
+taps</a>.) 
+With an 89 tap <a href="/dsp/2017/09/15/fastfir.html">generic
+filter</a>, you’d
+only be able to get about a 6dB separation between your channel and any other
+<a href="https://en.wikipedia.org/wiki/Frequency_modulation">FM</a> channel, and even
+the rest of your
+<a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">ADC</a>’s
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>.
+Such performance is pitiful.  It’s a far cry from the 70dB that I was taught
+to design to.  Indeed, it would take an
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+of roughly <em>ten thousand</em> taps to provide a required 70dB separation.</p>
+
+<p>Not only does the
+<a href="https://www.xilinx.com/support/documentation/data_sheets/ds180_7Series_Overview.pdf">Artix 7/35T</a> (<a href="https://www.digikey.com/product-detail/en/xilinx-enc/XC7A35T-1FTG256C/122-1910-ND/5039074">$35</a>)
+on the <a href="https://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists/">$99 Arty</a>
+not have this many taps, <em>none of the
+<a href="https://www.xilinx.com">Xilinx</a>
+<a href="https://www.xilinx.com/support/documentation/data_sheets/ds180_7Series_Overview.pdf">7-series parts</a>
+ has enough multiplies (DSP blocks) to implement a filter this large</em>.
+The closest is the heftiest Virtex-7, which has 2,820 DSP elements.  I couldn’t
+find this on <a href="https://www.digikey.com">Digikey</a> today, though.  The
+closest Virtex 7 that I can find today on <a href="https://www.digikey.com">Digikey</a>
+is the <a href="https://www.digikey.com/product-detail/en/xilinx-inc/XC7V2000T-1FHG1761C/XC7V2000T-1FHG1761C-ND/3925283">Virtex 7/2000T with 2,160 DSP blocks for
+$18,000</a>.  In other words, money won’t buy you
+out of this problem.</p>
+
+<p>On the other hand, if you could
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+your signal down to less than 2MHz, without using any multiplies, you can then
+save your multiplies for a later step when you could share a single multiply
+between multiple taps.  Indeed, if you could do that then you might be able to
+select an <a href="https://en.wikipedia.org/wiki/Frequency_modulation">FM</a> channel
+for the cost of only a pair of multiplies–sparing your other 88 multiplies for
+some other purpose.</p>
+
+<p>This is where the
+<a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+comes into play.
+A <a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+requires no multiplies, only two additions, two incrementing pointers, and
+some block RAM.  Although the
+<a href="https://en.wikipedia.org/wiki/Moving_average">filter</a>
+has a <code class="highlighter-rouge">-13</code> dB <a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>, applying the
+<a href="https://en.wikipedia.org/wiki/Moving_average">filter</a>
+in a cascaded fashion <code class="highlighter-rouge">N</code> times would give you a
+<code class="highlighter-rouge">-13 * N</code> dB
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>.
+Six rounds of
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">such a filter</a>
+may well be sufficient, especially when each
+<a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+round uses only a
+<a href="/blog/2017/06/12/minimizing-luts.html">minimum amount</a> of
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+logic.</p>
+
+<p>So, let’s take a look at what it takes to implement a
+<a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+(I’ll call it a
+<a href="https://en.wikipedia.org/wiki/Boxcar_function">boxcar</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+based upon the fact that the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+of this <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is a <a href="https://en.wikipedia.org/wiki/Boxcar_function">boxcar function</a>.)
+We’ll start by examining how to build a
+<a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> in general,
+and then discuss an initial (broken) implementation of such a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+We’ll then simplify the basic idea a bit more, and show
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">an example</a>
+of how a “<a href="https://en.wikipedia.org/wiki/Moving_average">boxcar filter</a>” <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">might
+be implemented</a>.
+We’ll then round out the discussion with a discussion on performance,
+explaining what sort of
+<a href="https://en.wikipedia.org/wiki/Frequency_response">response</a>
+you might expect from this filter.</p>
+
+<h2 id="the-formula">The Formula</h2>
+
+<p>Since what we’re doing might not look so clear when we dig into <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">the code
+itself</a>, let’s
+pause for a moment first to discuss what we are intending to do.
+Our goal is to create a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+that adds an adjacent <code class="highlighter-rouge">N</code> samples together.  As time progresses, the values
+that will get averaged together will also rotate through our window as well.
+This is why the operation is called a
+“<a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>”: because
+the choice of which samples get averaged together moves with time.</p>
+
+<table style="float: right"><caption>Fig 1: A Generic Filter Implementation structure</caption><tr><td><img src="/img/fir-form.svg" alt="Generic FIR implementation structure" width="380" /></td></tr></table>
+
+<p>Let’s back up a small step first, though.  If you recall
+<a href="/dsp/2017/09/15/fastfir.html">from before</a>,
+a <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/fastfir.v">generic FIR
+filter</a>
+has the form shown in Fig 1.  In that figure, you can see how each incoming
+input sample goes into a delay line (at the top) and, at each stage of the
+delay line, gets multiplied by a constant.  (The constant isn’t shown.)
+All of the multiplication products are then added together to form the output.</p>
+
+<p>Formally, we might write the operation of this filter as,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/fir-convolution.png" alt="Formula for an FIR Convolution" width="388" /></td></tr></table>
+
+<p>where there are <code class="highlighter-rouge">N</code> taps to the filter, <code class="highlighter-rouge">x[n]</code> is a sequence of input samples,
+<code class="highlighter-rouge">h[k]</code> is the sequence of <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients, and <code class="highlighter-rouge">y[n]</code> is the output of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> fits this form as well,
+with the unique feature that all the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients, <code class="highlighter-rouge">h[k]</code> are all ones.  This means that the multiplies are all
+by one, and so they they can be removed from the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">implementation</a>.</p>
+
+<p>Hence, you might draw this simplified
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+as shown in Fig 2, without the multiplies.</p>
+
+<table align="center" style="float: none"><caption>Fig 2: A Conceptual Moving Average Implementation structure</caption><tr><td><img src="/img/fir-mvavg-form.svg" alt="A conceptual moving average filter implementation structure" width="380" /></td></tr></table>
+
+<p>Formally, we might write this as,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-mvavg-raw.png" alt="Moving Average filter" width="216" /></td></tr></table>
+
+<p>With this simplification, the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+has turned into nothing more than a
+summation of a set of input values made on every clock tick.</p>
+
+<p>Even in this form, we’re not ready to implement this
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> yet.
+Instead, consider what would happen if we subtracted two of these <code class="highlighter-rouge">y[n]</code>
+values from each other.  You can see this conceptually in Fig 3.</p>
+
+<table align="center" style="float: none"><caption>Fig 3: Subtracting one output from another</caption><tr><td><img src="/img/fir-mvavg-subtract.svg" alt="Moving averages--subtracting the previous output from the current one" width="480" /></td></tr></table>
+
+<p>Did you catch that?  The difference between two adjacent outputs of our
+filter, <code class="highlighter-rouge">y[n]-y[n-1]</code> is given by the difference between two input samples,
+<code class="highlighter-rouge">x[n]-x[n-N]</code>.</p>
+
+<p>Mathematically, we could write this as,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-mvavg.png" alt="Moving Average filter simplified" width="356" /></td></tr></table>
+
+<p>This subtle change in formula, from the generic formula for a convolution to
+the one above, will spare us a lot of logic–allowing us to use a running
+accumulator and a block RAM instead of hardware multiplies and a lot of
+<a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>.</p>
+
+<p>Further, despite this formula referencing <code class="highlighter-rouge">y[n-1]</code>, it is <em>not</em> an
+<a href="https://en.wikipedia.org/wiki/Infinite_impulse_response">IIR filter</a>.
+Careful design will keep it from becoming one.</p>
+
+<p>Let’s look at how we might
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">implement</a>
+this <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<h2 id="the-basic-equations">The Basic Equations</h2>
+
+<p>A very quick, though incomplete, draft of this algorithm might look like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_ce)
+begin
+	// Write the incoming sample to memory
+	mem[wraddr] &lt;= i_sample;
+	wraddr &lt;= wraddr + 1'b1;
+
+	// Read the x[n-N] value from memory
+	memval &lt;= mem[rdaddr];
+	rdaddr &lt;= rdaddr + 1'b1;
+
+	// Subtract x[n-N] from the incoming sample, x[n]
+	// sub = x[n] - x[n-N]
+	sub &lt;= (i_sample - memval);
+
+	// Add the result to the last output
+	// y[n] = y[n-1] + sub = y[n-1]+x[n]-x[n-N]
+	acc &lt;= acc + sub;
+
+	// rounded() is shorthand for what we wish to do
+	// but not really valid Verilog
+	o_result &lt;= rounded(acc);
+end</code></pre></figure>
+
+<p>Walking through this implementation, our first step was to write this
+new sample to memory, and update our write pointer.  At the same time, we
+read the value out from <code class="highlighter-rouge">N</code> samples ago, and updated our read pointer.</p>
+
+<p>We then subtracted the value we read from memory, <code class="highlighter-rouge">memval</code> also known as
+<code class="highlighter-rouge">x[n-N]</code>, from the new value, <code class="highlighter-rouge">i_sample</code> or <code class="highlighter-rouge">x[n]</code>, we just received.  The
+result of that subtraction was then added into our accumulator, <code class="highlighter-rouge">y[n]</code>, just
+like we discussed in the last section.  The final step was to
+<a href="/dsp/2017/07/22/rounding.html">round</a>
+the output to the desired number of bits and we were done.</p>
+
+<p>You’ll find by the end of this article that our finished
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">algorithm</a>,
+is not going to be all that much more complex than the algorithm above,
+although you may also find that it doesn’t look much like the algorithm above.</p>
+
+<h2 id="reset">Reset</h2>
+
+<p>The first problem with our first attempt is making certain that the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">the filter</a>
+has a proper initial value.  One mistake in the accumulator, one mistake
+that gets <code class="highlighter-rouge">y[n]</code> wrong, and
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">this filter</a>
+might be turned into an
+<a href="https://en.wikipedia.org/wiki/Infinite_impulse_response">IIR filter</a> with
+an unwanted DC offset.  To keep that from happening, let’s create a reset
+capability so that we can guarantee the filter starts in a known configuration.</p>
+
+<p>Specifically, at the time of reset, the accumulator must be set to zero,
+as with any intermediate calculation values, such as <code class="highlighter-rouge">sub</code> and <code class="highlighter-rouge">memval</code>.</p>
+
+<p>The other thing we’ll need to pay attention to is the memory.  One difficulty
+when using block RAM, as with all memories I know of, is that there’s no
+circuitry for initializing all of our memory at once.  Instead, we’ll
+“pretend” the memory is zero for a number of clocks following a reset, and
+then we’ll use the memory as normal.</p>
+
+<p>Hence, we’ll need to modify our code such as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_reset)
+begin
+	acc &lt;= 0;
+	full &lt;= 1'b0;
+	sub  &lt;= 0;
+	wraddr &lt;= 0;
+	rdaddr &lt;= -navg;
+end else if (i_ce)
+begin
+	wraddr &lt;= wraddr + 1'b1;
+	rdaddr &lt;= rdaddr + 1'b1;
+	//
+	full &lt;= (full)||(rdaddr == 0);
+	if (full)
+		// Value read from memory is valid
+		sub &lt;= i_sample - memval;
+	else
+		// Value read from memory was never initialized
+		// We'll assume here that it is zero
+		sub &lt;= i_sample;
+
+	acc &lt;= acc + sub.
+end</code></pre></figure>
+
+<p>This creates a new value, <code class="highlighter-rouge">full</code>, which we can use to determine whether the
+memory value is valid or not.</p>
+
+<p>These are the big broad-brush differences between the quick draft above,
+and what we’re about to present below.  Our next step, then, will be to build
+our final algorithm.</p>
+
+<h2 id="the-actual-algorithm">The Actual Algorithm</h2>
+
+<p>Let’s now use the lessons from above to build our <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">verilog
+algorithm</a>.
+Feel free to examine the <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">final code
+here</a>,
+as you follow along below.</p>
+
+<p>As a step number one, we’ll make <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">this
+filter</a>
+as generic as we can.  To do that, we’ll parameterize our input width,
+<code class="highlighter-rouge">IW</code>, and output width, <code class="highlighter-rouge">OW</code>.  Further, we’ll parameterize the number of
+averages allowable, which we shall controll by the log (based two) of the
+maximum number of averages, <code class="highlighter-rouge">LGMEM</code>.  This will allow us to average by
+any amount between <code class="highlighter-rouge">1</code> and <code class="highlighter-rouge">(1&lt;&lt;LGMEM)-1</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">parameter	IW=16,		// Input bit-width
+		LGMEM=6,	// Size of the memory
+		OW=(IW+LGMEM);	// Output bit-width</code></pre></figure>
+
+<p>Hence, if you want to average fifty-five 16-bit values together, you’d set <code class="highlighter-rouge">IW</code>
+to 16 and <code class="highlighter-rouge">LGMEM</code> to 6.  If you want an output without any
+<a href="/dsp/2017/07/22/rounding.html">rounding</a>,
+then the output width, <code class="highlighter-rouge">OW</code>,
+<a href="/dsp/2017/07/21/bit-growth.html">needs to be set to</a>
+the input width plus the log of the number of averages.  In the example of
+averaging fifty-five 16-bit items together, this means we’d need an output
+width of <code class="highlighter-rouge">16+6</code>, or <code class="highlighter-rouge">OW=22</code>.  Any fewer output bits than that will require
+<a href="/dsp/2017/07/22/rounding.html">rounding</a>
+the internal result to the desired number of output bits.</p>
+
+<p>We’ll also allow the number of averages to be configurable as well–or not,
+if the <code class="highlighter-rouge">FIXED_NAVG</code> parameter is set.  If <code class="highlighter-rouge">FIXED_NAVG</code> is set, then the number
+of averages will be fixed, and set by an <code class="highlighter-rouge">INITIAL_AVG</code> parameter.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">parameter [0:0]	FIXD_NAVG=1'b0;	// True if number of averages is fixed
+
+// Always assume we'll be averaging by the maximum amount, unless told
+// otherwise.  Minus one, in two's complement, will become this number
+// when interpreted as an unsigned number.
+parameter [(LGMEM-1):0]	INITIAL_AVG = -1;</code></pre></figure>
+
+<p>If <code class="highlighter-rouge">FIXED_NAVG</code> is not set, we’ll allow the user to set the number of averages
+they want.  However, because of the dependence of the feedback relationship,
+<code class="highlighter-rouge">y[n]</code> on <code class="highlighter-rouge">y[n-1]</code>, we’ll insist that the number of averages must not change
+except on an <code class="highlighter-rouge">i_reset</code> signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">wire	[(LGMEM-1):0]	w_requested_navg;
+assign w_requested_navg = (FIXED_NAVG) ? INITIAL_NAVG : i_navg;</code></pre></figure>
+
+<p>As we’ll see later, the only part of our algorithm that depends upon this
+number of averages is the initial/reset value of the memory read address.
+For this reason, we won’t store the value in a register.  We’ll come back to
+this later when we discuss the read address.</p>
+
+<p>That brings us to the logic required for accessing memory–both writing and
+then reading.  Of these two, the write address is simple: we’ll start writing
+to the first address of memory (address zero) on our first data
+sample, and then rotate through memory locations from there.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	wraddr = 0;
+always @(posedge i_clk)
+	if (i_reset)
+		wraddr &lt;= 0;
+	else if (i_ce)
+		wraddr &lt;= wraddr + 1'b1;</code></pre></figure>
+
+<p>What that means, though, is that we have to implement the time difference
+between the initial value and the value <code class="highlighter-rouge">N</code> samples ago using the <em>read</em>
+memory address.  We’ll do so by initializing the read address to the negative
+number of averages.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	rdaddr = 0;
+always @(posedge i_clk)
+	if (i_reset)
+		rdaddr &lt;= -w_requested_navg;
+	else if (i_ce)
+		rdaddr &lt;= rdaddr + 1'b1;</code></pre></figure>
+
+<p>As with the write address, we increment the read address on every sample clock.</p>
+
+<p>Following the address calculation, we’ll write out incoming sample to memory,
+and read our delayed sample from memory as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_ce)
+		mem[wraddr] &lt;= i_sample;
+
+// ...
+
+initial	memval = 0;
+always @(posedge i_clk)
+	if (i_ce)
+		memval &lt;= mem[rdaddr];</code></pre></figure>
+
+<p>So far, this is all straightforward.  Other than initial values, we haven’t
+really deviated from our initial draft above.  However, things get a little
+trickier when adding the input sample to this logic.  In particular, if we
+want our input value to be aligned with the output of the memory read, <code class="highlighter-rouge">memval</code>,
+associated with <code class="highlighter-rouge">x[n-N]</code>, then we’ll need to delay the input by one sample.</p>
+
+<p>It’s not really that obvious why this would be so.  Why does the input need to
+be delayed by a sample?  The answer has to do with pipeline scheduling.
+So, let’s look at how the internal values within our algorithm get set on
+subsequent clocks, as shown in Fig 4.</p>
+
+<table align="center" style="float: none"><caption>Fig 4: Scheduling the moving average pipeline</caption><tr><td><img src="/img/mvavg-pipeline.svg" alt="Table, showing when the various values are getting assigned" width="780" /></td></tr></table>
+
+<p>This figure shows a list of all of our internal registers, binned within the
+clocks they are set within–starting on the clock before a particular sample,
+<code class="highlighter-rouge">i_sample[t]</code>, is provided, <code class="highlighter-rouge">t-1</code> until four clocks later at <code class="highlighter-rouge">t+4</code>.  Hence, since <code class="highlighter-rouge">memval</code> depends upon <code class="highlighter-rouge">rdaddr</code>, it
+shows in the clock following the one when <code class="highlighter-rouge">rdaddr</code> gets set.  Likewise, since
+the memory is set following the write address being set, <code class="highlighter-rouge">mem[wraddr]</code> gets
+set following <code class="highlighter-rouge">wraddr</code>.</p>
+
+<p>While our presentation through <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">the
+code</a> below
+is going to be in chronological order, from time <code class="highlighter-rouge">t</code> through <code class="highlighter-rouge">t+4</code>, the chart
+above was built/scheduled backwards.  <code class="highlighter-rouge">o_result</code> is the
+<a href="/dsp/2017/07/22/rounding.html">rounded</a>
+version of <code class="highlighter-rouge">acc</code>.  It took
+one clock to calculate.  <code class="highlighter-rouge">acc</code> is the sum of the last accumulator and the
+result of the subtraction, <code class="highlighter-rouge">sub</code>.  Further, we know that we want to subtract
+our new input value from the last memory value, <code class="highlighter-rouge">memval</code>, etc.</p>
+
+<p>So why do we have the register <code class="highlighter-rouge">preval</code> in this pipeline chart?  It doesn’t
+seem to do anything, so why is it there?</p>
+
+<p>The answer is simple: we needed to delay the input by one clock in order to get
+it to line up with the memory that was just written and then read.</p>
+
+<p>For example, let’s suppose we only wished to average one
+element–a pass-through filter.  Hence, we’d want to add
+our new value, <code class="highlighter-rouge">x[n]</code>, and subtract the prior value, <code class="highlighter-rouge">x[n-1]</code>, delayed by only
+one clock.  Given that’s what we want to do, let’s follow that new value through
+this pipeline schedule in Fig 5 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 5: Tracing the last sample through the moving average pipeline</caption><tr><td><img src="/img/mvavg-pipeline-trace.svg" alt="Table, showing when the various values are getting assigned" width="780" /></td></tr></table>
+
+<p><code class="highlighter-rouge">i_sample[t-1]</code> shows up at time <code class="highlighter-rouge">t-1</code>, and gets written into memory,
+<code class="highlighter-rouge">mem[wraddr]</code>, at time
+<code class="highlighter-rouge">t</code>.  It can then be read at time <code class="highlighter-rouge">t+1</code> into <code class="highlighter-rouge">memval</code>, and then subtracted
+from the new value at <code class="highlighter-rouge">t+2</code> to create <code class="highlighter-rouge">sub</code>.  This time, <code class="highlighter-rouge">t+2</code>, is the earliest
+the last value can be read back from memory.  This is also the time when we
+need our new value, <code class="highlighter-rouge">x[n]</code>–one clock after it shows up.  To get the new sample
+value from when it is given to us into this clock period, we need to delay it
+by a single cycle, placing it into <code class="highlighter-rouge">preval</code> for that purpose.</p>
+
+<p>The logic necessary to do this is trivial–unlike the reasoning behind it above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	preval = 0;
+always @(posedge i_clk)
+	if (i_reset)
+		preval &lt;= 0;
+	else if (i_ce)
+		preval &lt;= i_sample;</code></pre></figure>
+
+<p>The other thing we’re going to need to know, at the same time we want to
+know the value we just read from memory, is whether we’ve written enough
+times to the memory for the values read out of the memory to be valid.  I’ve
+chosen to call this <code class="highlighter-rouge">full</code>, to indicate that the tapped-delay line memory has
+been filled.</p>
+
+<p>Since we initialized the write address at zero, and then wrote to the zero
+address in our first clock, we know that the value read from memory will
+be valid as soon as we read from the zero address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	full   = 1'b0;
+always @(posedge i_clk)
+	if (i_reset)
+		full &lt;= 0;
+	else if (i_ce)
+		full &lt;= (full)||(rdaddr==0);</code></pre></figure>
+
+<p>We’ve now set all of the values shown in the time <code class="highlighter-rouge">t+1</code> column from Figs 4 and 5
+above, so we’ll move on to the next clock.  In this clock, we’ll subtract
+the sample falling off the end of our average list from our new sample.  We’ll
+place this result into <code class="highlighter-rouge">sub</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	sub = 0;
+always @(posedge i_clk)
+if (i_reset)
+	sub &lt;= 0;
+else if (i_ce)
+begin
+	if (full)
+		sub &lt;= { preval[(IW-1)], preval }
+				- { memval[(IW-1)], memval };
+	else
+		sub &lt;= { preval[(IW-1)], preval };
+end</code></pre></figure>
+
+<p>The rest is simple.  We add this difference to our accumulated value, creating
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">our filter</a>’s
+output value, <code class="highlighter-rouge">y[n]</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	acc = 0;
+always @(posedge i_clk)
+	if (i_reset)
+		acc &lt;= 0;
+	else if (i_ce)
+		acc &lt;= acc + { {(LGMEM-1){sub[IW]}}, sub };</code></pre></figure>
+
+<p>The final stage of our pipeline
+<a href="/dsp/2017/07/22/rounding.html">rounds</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">our filter</a>’s
+outputs to the number of bits requested by the parameter, <code class="highlighter-rouge">OW</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">generate
+if (IW+LGMEM == OW)
+	// No rounding required, output is the acc
+	assign	rounded = acc;
+else if (IW+LGMEM == OW + 1)
+	// Need to drop one bit, round towards even
+	assign	rounded = acc + { {(OW){1'b0}}, acc[1] };
+else // if (IW+LGMEM &gt; OW + 1)
+	// Drop more than one bit, rounding towards even
+	assign	rounded = acc + {
+			{(OW){1'b0}}, acc[(IW+LGMEM-OW)],
+			{(IW+LGMEM-OW-1){!acc[(IW+LGMEM-OW)]}} };
+endgenerate</code></pre></figure>
+
+<p>Once we are done
+<a href="/dsp/2017/07/22/rounding.html">rounding</a>
+the output value, we’ll take an extra clock stage
+to deal with any delay associated with
+<a href="/dsp/2017/07/22/rounding.html">rounding</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+	if (i_reset)
+		o_result &lt;= 0;
+	else if (i_ce)
+		o_result &lt;= rounded[(IW+LGMEM-1):(IW+LGMEM-OW)];</code></pre></figure>
+
+<p>While we might’ve skipped this delay if we didn’t need to drop any bits,
+doing so would cause our filter to have a different delay depending on how
+it was configured.  Rather than deal with that maintenance headache, the
+result is always delayed
+(<a href="/dsp/2017/07/22/rounding.html">rounded</a>
+or not) by one clock here.</p>
+
+<h2 id="performance">Performance</h2>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of a <a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is well known.  It’s easy enough to calculate that it makes a good assignment
+for the beginning student.  It’s given by,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-mvavg-H.png" alt="H = sin(pi fN)/sin(pi f)" width="308" /></td></tr></table>
+
+<p>If you examine this
+<a href="https://en.wikipedia.org/wiki/Frequency_response">response</a>,
+it’s really not that great.  At best, you can get a
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+of -13 dB from
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">this filter</a>.
+That’s better than the -6dB
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a> from our
+<a href="https://en.wikipedia.org/wiki/Frequency_modulation">FM</a>
+example above, but still a far cry from the -70dB we might like.</p>
+
+<p>On the other hand, if you cascade <code class="highlighter-rouge">M</code>  filters
+of this type together, you can get a much deeper
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>.
+To illustrate this,
+Fig 6 below shows, in blue, the response of a
+<a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+that averages five adjacent values together.  The other lines on the chart show
+what happens after cascading
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">this filter</a>
+with itself two, three, four, five, or six times.</p>
+
+<table align="center" style="float: none"><caption>Fig 6: Moving average frequency response</caption><tr><td><img src="/img/mvavg-response.png" alt="Image showing this filters response function" width="714" /></td></tr></table>
+
+<p>The <a href="https://www.gnu.org/software/octave">Octave</a> code used to create this
+figure can be found
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/boxcar.m">here</a>.</p>
+
+<p>There are two important things to notice from this figure.  First, the
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+of the filter, when cascaded, can get <em>very</em> deep.  After cascading six of
+these together, the
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+is <code class="highlighter-rouge">-78</code> dB–pretty impressive.  The second thing to notice is that the
+“<a href="https://en.wikipedia.org/wiki/Passband">passband</a>”
+is no longer flat.  As a result, we’ll need to follow
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">this filter</a>
+with another one to clean up any distortion of our signal of interest.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>While a
+<a href="https://en.wikipedia.org/wiki/Moving_average">moving average</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is a far cry from a well-designed
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">low-pass filter</a>, it’s also a
+very simple <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+to implement.  From an engineering trade-off standpoint, this simplicity
+makes it a very attractive component for dealing with many
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a>
+requirements on an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.</p>
+
+<p>We’re not done with our lessons on
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filtering</a>,
+though.  I’ve still got plans to discuss
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filters</a>,
+<a href="https://en.wikipedia.org/wiki/Half-band_filter">half-band filters</a>,
+<a href="https://en.wikipedia.org/wiki/Hilbert_transform">Hilbert transforms</a>,
+and more.  Further, I’d like to discuss not only their high speed
+implementations, but also some slower implementations that would be appropriate
+for those designs where there are many clocks between input samples.</p>
+
+<p>Even at that, we’re not done, since <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/boxcar.v">the filter
+above</a>,
+when cascaded with itself any number of times and <em>followed by a downsampler</em>,
+can be built without needing a block RAM.</p>
+
+<p>We are also going to want to discuss how to go about proving that these
+filters work.  What sort of test bench is appropriate for testing
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filters</a>?</p>
+
+<p>These, however, are lessons still to come.</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Lo, this only have I found, that God hath made man upright; but they have sought out many inventions. (Eccl 7:29)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
