@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>The Interface to a Generic Filtering Testbench</title>
+  <meta name="description" content="We’ve now presented several approaches to filtering within anFPGAon this blog.  We talked about two ofthe simplest filters, ageneric filter implementation,a ...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/11/04/genfil-tb.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">The Interface to a Generic Filtering Testbench</h1>
+    <p class="post-meta"><time datetime="2017-11-04T00:00:00-04:00" itemprop="datePublished">Nov 4, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>We’ve now presented several approaches to filtering within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+on <a href="http://zipcpu.com/">this blog</a>.  We talked about <a href="/dsp/2017/08/19/simple-filter.html">two of
+the simplest filters</a>, a
+<a href="/dsp/2017/09/15/fastfir.html">generic filter implementation</a>,
+a <a href="/dsp/2017/09/29/cheaper-fast-fir.html">cheaper version of the
+same</a>, and even how
+to build a <a href="/dsp/2017/10/16/boxcar.html">moving average
+filter</a>.</p>
+
+<p>What we haven’t discussed is how to test
+<a href="https://github.com/ZipCPU/dspfilters">these filters</a>.</p>
+
+<p>Just to make matters worse,
+<a href="https://github.com/ZipCPU/dspfilters">these filters</a>
+are only the tip of the iceberg of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>
+we’d like to test.  Not only do we have the
+<a href="https://github.com/ZipCPU/dspfilters">current set of filters to test</a>,
+but I’d also like to present Verilog logic for
+<a href="https://en.wikipedia.org/wiki/Linear_phase">Symmetric filters</a>,
+<a href="https://en.wikipedia.org/wiki/Half-band_filter">Half-band filters</a>,
+<a href="https://en.wikipedia.org/wiki/Hilbert_transform">Hilbert transforms</a>
+and even some slower versions of those same
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>.</p>
+
+<p>Each of these filters is going to need a test bench.  At the same time,
+these test benches are going to have a lot of code in common between
+each other.  Let’s consider, today, what functionality a generic
+<a href="https://www.veripool.org/wiki/verilator">Verilator based</a>
+filtering test bench requires, so that we can then create a filter test
+bench engine that can be used, and modified if needed, to test all of these
+filters.</p>
+
+<h2 id="abstracting-a-logic-filter">Abstracting a logic filter</h2>
+
+<table style="float: right"><caption>Fig 1: A Generic Filter portlist</caption><tr><td><img src="/img/fir-ports.svg" alt="A list of the ports of a generic filter: reset, setting taps (i_tap_wr, i_tap), and samples (i_ce, i_sample, and o_sample)" width="380" /></td></tr></table>
+
+<p>The first step is going to be abstracting what a filter looks like in
+general so that one basic test bench can support many filters.  For this,
+we can draw upon the design of our most
+<a href="/dsp/2017/09/15/fastfir.html">generic filter</a>, and see a
+set of ports looking roughly like Fig 1.  There’s an <code class="highlighter-rouge">i_reset</code> strobe
+to clear the filter’s internal memory, an <code class="highlighter-rouge">i_tap_wr</code> signal to indicate that
+the filter is being loaded with new taps through <code class="highlighter-rouge">i_tap</code>, and an <code class="highlighter-rouge">i_ce</code> signal
+to indicate both that a new sample is ready at <code class="highlighter-rouge">i_sample</code> and that a sample
+is ready to be read out at <code class="highlighter-rouge">o_sample</code>.</p>
+
+<p>Almost all of our <a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+filters, to date, have had a form similar to this one.
+The biggest exception is the <a href="/dsp/2017/10/16/boxcar.html">boxcar
+filter</a>–but with a <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/rtl/boxwrapper.v">simple
+wrapper</a>
+even this filter can be made to fit this form.</p>
+
+<p>Now, given this form, let’s consider the questions that need to be answered
+by a test bench:</p>
+
+<ol>
+  <li>
+    <p>Does the filter have the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+we expect it to have?</p>
+  </li>
+  <li>
+    <p>Does this filter faithfully apply the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+to any signal we give it?</p>
+  </li>
+  <li>
+    <p>Will a carefully constructed input stream overflow the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>?</p>
+  </li>
+  <li>
+    <p>What is the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of this filter?  If the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is a <a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filter</a>,
+what is it’s <a href="https://en.wikipedia.org/wiki/Passband">passband</a>
+ripple and <a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+depth (as measured)?</p>
+  </li>
+</ol>
+
+<p><a href="https://en.wikipedia.org/wiki/Infinite_impulse_response">IIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>
+will have different needs from 
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>.
+For now, we’ll just focus on the 
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+variety in determining how to abstract this test bench.</p>
+
+<p>Digital
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+based filters in particular also have some <em>properties</em> that will affect
+how we interact with them from one test bench to the next.  For many of our
+filters, these are <code class="highlighter-rouge">parameter</code>s within our design.  Those same parameters will
+affect how we interact with the filter to answer the questions above.
+The <em>properties</em> that a test harness for all filters will need to know are:</p>
+
+<ul>
+  <li>
+    <p><code class="highlighter-rouge">IW</code>, the number of bits per input sample</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">TW</code>, the number of bits per tap</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">OW</code>, the number of bits per output sample</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">DELAY</code>, the delay between an impulse input and the first sample that
+responds to that input.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">NTAPS</code>, the number of taps in the filter</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">NCLOCKS</code>, the minimum number of clocks between successive input clock
+ enables</p>
+  </li>
+</ul>
+
+<p>Our purpose today will be to build a generic filtering test harness.  The goal
+for this harness will be to handle all of the various
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+properties we just discussed above,
+to interact with a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+of the form shown in Fig 1., and then to answer about the filter’s performance
+based upon the questions above.  You can imagine that this test harness will
+have the form shown in Fig 2, where the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+itself fits within a virtual socket in this virtual test harness.</p>
+
+<table style="float: none"><caption>Fig 2: C++/Verilator Filtering Test Harness</caption><tr><td><img src="/img/fir-tb-harness.svg" alt="A picture showing inputs to a filter test harness, as well as conclusions one would like to draw" width="640" /></td></tr></table>
+
+<p>The harness won’t quite be a complete test bench, but rather a component of
+a complete test bench.  As such it should make it easier to build
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+test benches using this harness.</p>
+
+<h2 id="building-a-test-harness">Building a test harness</h2>
+
+<p>All of these actions and properties can easily be encapsulated by a <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">C++ test
+object</a>
+that will provide us conceptualized access to our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<p>We’ll need to make the C++ class that encapsulates this object easily
+inheritable, as (for example) the meaning of the taps loaded into one
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+(such as a generic one) might be very different from another (such
+as a <a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filter</a>).
+Hence, most of these methods will be virtual.</p>
+
+<p>Let’s outline what <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.h">one such filter test
+harness</a>
+might look like.  We’ll let it inherit from a basic
+<a href="/blog/2017/06/21/looking-at-verilator.html">TESTB</a>
+class, such as we’ve <a href="/blog/2017/06/21/looking-at-verilator.html">discussed
+before</a>.
+This
+<a href="/blog/2017/06/21/looking-at-verilator.html">TESTB</a>
+class, if you recall, primarily provided us with the ability to <code class="highlighter-rouge">tick()</code>
+the clock by raising and then lowering the clock input pin, as well as
+recording our simulation to a <a href="/blog/2017/07/31/vcd.html">VCD
+file</a>.  The final function of
+this <a href="/blog/2017/06/21/looking-at-verilator.html">TESTB</a>
+class is to give us access to a simple <code class="highlighter-rouge">reset()</code> function which will set
+the <code class="highlighter-rouge">i_reset</code> pin and toggle the clock.</p>
+
+<p>We’ll define our test harness class with some defaults–things that can be
+overridden later by the test bench that uses this harness.  Further, since
+we don’t know what the class name of our actual filter is going to be until
+build time, we’ll make the test harness class, <code class="highlighter-rouge">FILTERTB</code>, a template class.
+That way, the compiler can fill in the template details once they are known.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span> <span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="k">class</span> <span class="nc">FILTERTB</span> <span class="o">:</span> <span class="k">public</span> <span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;</span> <span class="p">{</span>
+	<span class="kt">int</span>	<span class="o">*</span><span class="n">m_hk</span><span class="p">;</span>
+	<span class="kt">FILE</span>	<span class="o">*</span><span class="n">result_fp</span><span class="p">;</span></code></pre></figure>
+
+<p>Remember all of those properties we said that a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a> would have?
+These will be variables of our object.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="n">m_delay</span><span class="p">,</span> <span class="n">m_iw</span><span class="p">,</span> <span class="n">m_ow</span><span class="p">,</span> <span class="n">m_tw</span><span class="p">,</span> <span class="n">m_ntaps</span><span class="p">,</span> <span class="n">m_nclks</span><span class="p">;</span>
+<span class="k">public</span><span class="o">:</span>
+	<span class="n">FILTERTB</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_hk</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+		<span class="n">m_delay</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span>
+		<span class="n">m_iw</span>    <span class="o">=</span> <span class="mi">16</span><span class="p">;</span>
+		<span class="n">m_ow</span>    <span class="o">=</span> <span class="mi">16</span><span class="p">;</span>
+		<span class="n">m_tw</span>    <span class="o">=</span> <span class="mi">12</span><span class="p">;</span>
+		<span class="n">m_ntaps</span> <span class="o">=</span> <span class="mi">128</span><span class="p">;</span>
+		<span class="n">m_nclks</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">result_fp</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>The test harness will need to know what these properties are.
+Hence, we’ll start out by handling the setting and referencing of these various
+properties.  This won’t actually change anything about the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> generated
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> code itself,
+nor will these values connect to the values often set by parameters within the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+(though it probably should), these routines will just let the actual test
+bench tell tell the test harness what properties are associated with the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<p>There’s the number of bits allocated to the input sample, IW.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="nf">IW</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="p">)</span>    <span class="p">{</span> <span class="n">m_iw</span> <span class="o">=</span> <span class="n">k</span><span class="p">;</span>    <span class="k">return</span> <span class="n">m_iw</span><span class="p">;</span> <span class="p">}</span>
+	<span class="kt">int</span>	<span class="n">IW</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="k">const</span>    <span class="p">{</span> <span class="k">return</span> <span class="n">m_iw</span><span class="p">;</span> <span class="p">}</span></code></pre></figure>
+
+<p>OW is the number of bits allocated to output samples.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="n">OW</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="k">const</span>    <span class="p">{</span> <span class="k">return</span> <span class="n">m_ow</span><span class="p">;</span> <span class="p">}</span>
+	<span class="kt">int</span>	<span class="n">OW</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="p">)</span>    <span class="p">{</span> <span class="n">m_ow</span> <span class="o">=</span> <span class="n">k</span><span class="p">;</span>    <span class="k">return</span> <span class="n">m_ow</span><span class="p">;</span> <span class="p">}</span></code></pre></figure>
+
+<p>TW is the number of bits allocated to each of the taps.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="n">TW</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="k">const</span>    <span class="p">{</span> <span class="k">return</span> <span class="n">m_tw</span><span class="p">;</span> <span class="p">}</span>
+	<span class="kt">int</span>	<span class="n">TW</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="p">)</span>    <span class="p">{</span> <span class="n">m_tw</span> <span class="o">=</span> <span class="n">k</span><span class="p">;</span>    <span class="k">return</span> <span class="n">m_tw</span><span class="p">;</span> <span class="p">}</span></code></pre></figure>
+
+<p>DELAY is the number of clocks between an input and the first
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+response that it impacts.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="n">DELAY</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">m_delay</span><span class="p">;</span> <span class="p">}</span>
+	<span class="kt">int</span>	<span class="n">DELAY</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="p">)</span> <span class="p">{</span> <span class="n">m_delay</span> <span class="o">=</span> <span class="n">k</span><span class="p">;</span> <span class="k">return</span> <span class="n">m_delay</span><span class="p">;</span> <span class="p">}</span></code></pre></figure>
+
+<p>Slower <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s,
+may require multiple clocks between each global CE signal, <code class="highlighter-rouge">i_ce</code>.
+We’ll keep track of this feature/capability in the CKPCE, the clocks
+per CE parameter.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="n">CKPCE</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">m_nclks</span><span class="p">;</span> <span class="p">}</span>
+	<span class="kt">int</span>	<span class="n">CKPCE</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_nclks</span> <span class="o">=</span> <span class="n">k</span><span class="p">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_nclks</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span>
+			<span class="n">m_nclks</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span>
+		<span class="k">return</span> <span class="n">m_nclks</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>The minimum number of clocks per CE’s is just one, something enforced above.</p>
+
+<p><code class="highlighter-rouge">NTAPS</code> is the number of filter coefficients, or taps in this filter–it is the
+length of the <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse
+response</a>.
+Our test harness will use this to know how many samples following an
+impulse need to be examined.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="n">NTAPS</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="k">const</span> <span class="p">{</span> <span class="k">return</span> <span class="n">m_ntaps</span><span class="p">;</span> <span class="p">}</span></code></pre></figure>
+
+<p>We’ll cache this <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse
+response</a>
+(more later), so any time the number of taps changes (such as with the
+<a href="/dsp/2017/10/16/boxcar.html">boxcar</a> filter), the cache
+will need to be reloaded as well.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="nf">NTAPS</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_ntaps</span> <span class="o">=</span> <span class="n">k</span><span class="p">;</span>
+		<span class="n">clear_cache</span><span class="p">();</span>
+		<span class="k">return</span> <span class="n">m_ntaps</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Now with those properties aside, we can start looking at methods (actions) this
+filtering test harness will need to handle.  As you’ll notice from below,
+we’ll make most of these virtual–so that different types of
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s can
+change them if need be.</p>
+
+<p><a href="/blog/2017/06/21/looking-at-verilator.html">We discussed</a>
+the <code class="highlighter-rouge">tick()</code> method as a generic method that will call
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+and simply step the clock by one tick.  It will also record any results into
+<a href="/blog/2017/07/31/vcd.html">a VCD file</a>
+(or other file) that may need to be recorded–if desired.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="n">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">);</span></code></pre></figure>
+
+<p>You may remember some time ago how I recommended <a href="/dsp/2017/07/24/dsp-debugging.html">debugging DSP algorithms
+graphically</a>.
+That recommendation applies to
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+as well.  For those cases where you
+want to output the results of your filtering operation to examine,
+our test harness allows us to open a file wherein we’ll place both
+input values and output values.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">record_results</span><span class="p">(</span><span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="n">fname</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">result_fp</span> <span class="o">=</span> <span class="n">fopen</span><span class="p">(</span><span class="n">fname</span><span class="p">,</span> <span class="s">"w"</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>In order to apply test vectors and receive independent results, we’ll need to
+be able to reset the <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+to clear any internal state.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="n">reset</span><span class="p">(</span><span class="kt">void</span><span class="p">);</span></code></pre></figure>
+
+<p>For our test structure, we want to be able to load
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients into our design.  This will involve sending a vector of integers,
+of a given length, to the <code class="highlighter-rouge">i_tap</code> port.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="n">load</span><span class="p">(</span><span class="kt">int</span>  <span class="n">ntaps</span><span class="p">,</span>  <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">);</span></code></pre></figure>
+
+<p>The <code class="highlighter-rouge">apply()</code> method will send the given data to the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+as input samples, and return the result from applying the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="n">apply</span><span class="p">(</span><span class="kt">int</span> <span class="n">nlen</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">);</span></code></pre></figure>
+
+<p>The <code class="highlighter-rouge">test()</code> method is nearly identical to the <code class="highlighter-rouge">apply()</code> method, with the
+single exception that the <code class="highlighter-rouge">test()</code> method <code class="highlighter-rouge">reset()</code>s the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+first.  This will be important for
+sending any particular test vectors to the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>, and for making certain
+that there aren’t any unintended consequences in the result.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="n">test</span><span class="p">(</span><span class="kt">int</span>  <span class="n">nlen</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">);</span></code></pre></figure>
+
+<p>As it will turn out, lots of methods are going to depend upon the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.
+Let’s overload the <code class="highlighter-rouge">[]</code> operator to return coefficients from
+<a href="https://en.wikipedia.org/wiki/Impulse_response">that response</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="k">operator</span><span class="p">[](</span><span class="k">const</span> <span class="kt">int</span> <span class="n">tap</span><span class="p">);</span></code></pre></figure>
+
+<p>Further, rather than calculating the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.
+over and over again, we’ll calculate it once and cache the results.  That
+means that any time there is a change in the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s coefficients,
+we’ll need to be able to clear this cache.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">clear_cache</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_hk</span><span class="p">)</span>
+			<span class="k">delete</span><span class="p">[]</span> <span class="n">m_hk</span><span class="p">;</span>
+		<span class="n">m_hk</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>While we have a method above for loading coefficients into our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+let’s create another method that not only loads coefficients into our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+but also verifies that the resulting
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+contains the coefficients that we want.</p>
+
+<p>As with many of these methods, this method is virtual so that
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+with less than generic tap structures, such as
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filter</a>’s
+as one example, can overload this function and provide their own test method.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="n">testload</span><span class="p">(</span><span class="kt">int</span>  <span class="n">nlen</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">);</span></code></pre></figure>
+
+<p>With all of the above functionality, there’s no reason why we can’t apply
+particular known inputs to this
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+in order to measure its
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>.
+Since this is likely to be a common request, we’ll make a method for doing
+this and place it into our test harness as well.  The <code class="highlighter-rouge">nfreq</code> describes how
+many frequencies we are interested examining, and the result will be placed
+into the <code class="highlighter-rouge">response</code> buffer.
+The algorithm will work by placing complex exponential test vectors into the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+We can use <code class="highlighter-rouge">mag</code> to control the amplitude of these test vectors,
+with a <code class="highlighter-rouge">mag</code> of one being the largest magnitude the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+will accept without overflow.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="n">response</span><span class="p">(</span><span class="kt">int</span> <span class="n">nfreq</span><span class="p">,</span> <span class="n">COMPLEX</span> <span class="o">*</span><span class="n">response</span><span class="p">,</span> <span class="kt">double</span> <span class="n">mag</span><span class="o">=</span> <span class="mf">1.0</span><span class="p">);</span></code></pre></figure>
+
+<p>Finally, we’ll add two further canned tests.  The first, <code class="highlighter-rouge">test_overflow()</code>,
+checks whether a carefully constructed input designed to overflow the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+does or does not.  A true value means that the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+passed this test.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">bool</span>	<span class="n">test_overflow</span><span class="p">(</span><span class="kt">void</span><span class="p">);</span></code></pre></figure>
+
+<p>The second test is appropriate for
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filters</a>
+only.  This test will measure the highest
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a> frequency, the lowest
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a> frequency, the depth of the
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>, and the ripple across the
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>.  It will work for most
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass</a>
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+functions, but perhaps not for all
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filters</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="n">measure_lowpass</span><span class="p">(</span><span class="kt">double</span> <span class="o">&amp;</span><span class="n">fp</span><span class="p">,</span> <span class="kt">double</span> <span class="o">&amp;</span><span class="n">fs</span><span class="p">,</span> <span class="kt">double</span> <span class="o">&amp;</span><span class="n">depth</span><span class="p">,</span> <span class="kt">double</span> <span class="o">&amp;</span><span class="n">ripple</span><span class="p">);</span>
+<span class="p">};</span></code></pre></figure>
+
+<p>Together, these are the methods (actions) we’ll teach our test harness how to
+apply to all
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s,
+These methods are declared in <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.h">this C++ header
+file</a>.
+We’ll discuss <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">how to implement
+them</a>
+in the next section.  For now, let me challenge you to ask the question: have
+we gotten everything?  Are there other particular capabilities that a generic
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+test harness should have–capabilities that we’ve overlooked?  Feel free to
+write me and tell me about anything I’ve missed.</p>
+
+<h2 id="test-harness-method-details">Test harness method details</h2>
+
+<p>Let’s now turn to the details of how this <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness is
+implemented</a>.
+In general, we’ll just work our way through the various methods associated with
+this <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness C++
+class</a>,
+discussing how to implement each along the way.</p>
+
+<h3 id="handling-different-data-widths">Handling different data widths</h3>
+
+<p>The first thing we are going to implement is a helper method for adjusting the
+number of bits in a number.  Since
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+will return numbers with only <code class="highlighter-rouge">N</code> bits in them, we’d like to be able to
+sign extend these values to their full <code class="highlighter-rouge">int</code> capability.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">static</span> <span class="kt">int</span>	<span class="nf">sbits</span><span class="p">(</span><span class="kt">uint32_t</span> <span class="n">val</span><span class="p">,</span> <span class="kt">int</span> <span class="n">b</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">int</span>	<span class="n">s</span><span class="p">;</span>
+
+	<span class="n">s</span> <span class="o">=</span> <span class="p">(</span><span class="n">val</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="o">*</span><span class="mi">8</span><span class="o">-</span><span class="n">b</span><span class="p">));</span>
+	<span class="n">s</span> <span class="o">&gt;&gt;=</span> <span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="o">*</span><span class="mi">8</span><span class="o">-</span><span class="n">b</span><span class="p">);</span>
+	<span class="k">return</span>	<span class="n">s</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>Likewise, if the value is unsigned, we’ll also like to extend the value–this
+time with zero bits.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">static</span> <span class="kt">unsigned</span>	<span class="nf">ubits</span><span class="p">(</span><span class="kt">uint32_t</span> <span class="n">val</span><span class="p">,</span> <span class="kt">int</span> <span class="n">b</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">return</span>	<span class="n">val</span> <span class="o">&amp;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">b</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>These are just two helper functions that we’ll need when sending bit limited
+data to
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>, and when interpreting
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>’s
+results.</p>
+
+<h3 id="advancing-the-state-of-the-test-bench">Advancing the state of the test bench</h3>
+
+<p>As you may recall from the discussion of the
+<a href="/blog/2017/06/21/looking-at-verilator.html">TESTB</a>
+class, it has a <code class="highlighter-rouge">tick()</code> method within it to handle toggling the clock for us.
+What it doesn’t have is a means of recording samples for later study
+with Matlab or
+<a href="https://www.gnu.org/software/octave/">Octave</a>.  We’ll create that here.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">bool</span>	<span class="n">ce</span><span class="p">;</span>
+	<span class="kt">int</span>	<span class="n">vec</span><span class="p">[</span><span class="mi">2</span><span class="p">];</span>
+
+	<span class="n">ce</span> <span class="o">=</span> <span class="p">(</span><span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span><span class="p">);</span>
+	<span class="n">vec</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">sbits</span><span class="p">(</span><span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_sample</span><span class="p">,</span> <span class="n">IW</span><span class="p">());</span>
+
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">tick</span><span class="p">();</span>
+
+	<span class="n">vec</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">sbits</span><span class="p">(</span><span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_result</span><span class="p">,</span> <span class="n">OW</span><span class="p">());</span>
+
+	<span class="k">if</span> <span class="p">((</span><span class="n">ce</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">result_fp</span><span class="p">))</span>
+		<span class="n">fwrite</span><span class="p">(</span><span class="n">vec</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="kt">int</span><span class="p">),</span> <span class="mi">2</span><span class="p">,</span> <span class="n">result_fp</span><span class="p">);</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>As you can see from above, anytime the <code class="highlighter-rouge">i_ce</code> flag is true, the input value
+and corresponding output value will be written to a file (if open) for
+later analysis.</p>
+
+<h3 id="resetting-the-filter">Resetting the Filter</h3>
+
+<p>The <code class="highlighter-rouge">reset()</code> function just sets the <code class="highlighter-rouge">i_reset</code> signal for one clock tick.  Just
+to be safe, we’ll make sure the other indication lines are zeros as well.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">reset</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap</span>   <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_sample</span><span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span>    <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap_wr</span><span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">reset</span><span class="p">();</span>
+
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_reset</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>We’ll use this function to make certain the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+starts from a clean state at the beginning of any tests.</p>
+
+<p>There is a consequence, though, to creating a clean test bench that only
+provides expected and reasonable inputs, such as setting the reset with all of
+these other inputs set to zero.  In particular, this method of testing logic
+may not be as complete as a more formal approach that will examine all possible
+inputs to our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+module–both the reasonable as well as the unreasonable.</p>
+
+<p>In our approach today, we’ll just stick to the reasonable
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+inputs.</p>
+
+<h3 id="applying-the-filter-to-a-known-input">Applying the filter to a known input</h3>
+
+<p>The core function of any
+<a href="https://en.wikipedia.org/wiki/Linear_system">linear filter operation</a>
+is to apply the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+to a given set of data samples.  That’s the purpose of the <code class="highlighter-rouge">apply()</code> function
+below.  We’ll start by making sure we’re not holding wires high from any prior
+context that didn’t clean up properly behind itself.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">apply</span><span class="p">(</span><span class="kt">int</span> <span class="n">nlen</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
+<span class="c1">// printf("FILTERTB::apply(%d, ...)\n", nlen);
+</span>	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_reset</span>  <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap_wr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span>     <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">tick</span><span class="p">();</span></code></pre></figure>
+
+<p>Now that we’re set up, let’s walk through each of the input samples.
+For each input sample, we’ll place it on the <code class="highlighter-rouge">i_sample</code> input to the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+and then read the result from the <code class="highlighter-rouge">o_result</code> output of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">nlen</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// Make sure the CE line is high
+</span>		<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span>     <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+
+		<span class="c1">// Strip off any excess bits
+</span>		<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_sample</span><span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">IW</span><span class="p">());</span>
+
+		<span class="c1">// Apply the filter
+</span>		<span class="n">tick</span><span class="p">();</span>
+
+		<span class="c1">// Sign extend the result
+</span>		<span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">sbits</span><span class="p">(</span><span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_result</span><span class="p">,</span> <span class="n">OW</span><span class="p">());</span></code></pre></figure>
+
+<p>Although all of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+we’ve looked at so far accept one input value
+and produce one output value on each clock, not every
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is of this type.
+There’s a lot to be gained by sharing resources across clocks if the
+sample rate can be guaranteed to be less than half of the system clock rate.
+To make sure that we can still test
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+of this variety, we’ll tick our clock <code class="highlighter-rouge">m_nclk-1</code> additional times
+here–while holding <code class="highlighter-rouge">i_ce</code> low.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">m_nclks</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span>     <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+			<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">m_nclks</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+				<span class="n">tick</span><span class="p">();</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span>     <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>This is fundamentally how to feed any
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a>,
+so having this capability within our <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test
+harness</a>,
+only makes.</p>
+
+<h3 id="loading-new-filter-coefficients">Loading new filter coefficients</h3>
+
+<p>For any <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+that doesn’t have fixed taps, we’ll need to be able to load a new set of
+coefficients into the <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+As we’ve designed this, doing so requires setting the
+<code class="highlighter-rouge">i_tap_wr</code> input, and then ticking the clock once to load each new coefficient
+into the <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">load</span><span class="p">(</span><span class="kt">int</span>  <span class="n">ntaps</span><span class="p">,</span>  <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
+<span class="c1">// printf("FILTERTB::load(%d, ...)\n", ntaps);
+</span>	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_reset</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span>    <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap_wr</span><span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">ntaps</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// Strip off any excess bits
+</span>		<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">TW</span><span class="p">());</span>
+
+		<span class="c1">// Apply the filter
+</span>		<span class="n">tick</span><span class="p">();</span>
+	<span class="p">}</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap_wr</span><span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>When we are done loading a new set of coefficients into the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+we’ll clear our cached <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse
+response</a> values.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">clear_cache</span><span class="p">();</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>These will need to be rebuilt, but we’ll hold off on that task until they
+are referenced.</p>
+
+<h3 id="getting-the-results-from-a-test-vector">Getting the results from a test vector</h3>
+
+<p>A function that is very similar to the <code class="highlighter-rouge">apply()</code> method is the <code class="highlighter-rouge">test()</code> method
+below.  The idea behind the <code class="highlighter-rouge">test()</code> method is that we wish to determine the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+response to a given test vector.  This method differs from the <code class="highlighter-rouge">apply()</code>
+method in only a few small respects.</p>
+
+<p>First, the <code class="highlighter-rouge">test()</code> function begins with a <code class="highlighter-rouge">reset()</code> to clear any internal
+values within the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.  The
+<code class="highlighter-rouge">apply()</code> method didn’t clear any internal 
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> state.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">test</span><span class="p">(</span><span class="kt">int</span>  <span class="n">nlen</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
+	<span class="k">const</span>	<span class="n">bool</span>	<span class="n">debug</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+	<span class="n">assert</span><span class="p">(</span><span class="n">nlen</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span>
+
+	<span class="n">reset</span><span class="p">();</span></code></pre></figure>
+
+<p>We then call the filter <code class="highlighter-rouge">nlen</code> times to feed the test vector into the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+Well, not quite.  We’re going to pass the test vector followed by a series
+of zeros–one for each delay value.  That way, we can quietly remove any
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+delay effects from the test vectors response–something not done within the
+<code class="highlighter-rouge">apply()</code> function.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_reset</span>  <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap_wr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+
+	<span class="kt">int</span>	<span class="n">tstcounts</span> <span class="o">=</span> <span class="n">nlen</span><span class="o">+</span><span class="n">DELAY</span><span class="p">();</span>
+	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">tstcounts</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>Here’s the next difference: after the first <code class="highlighter-rouge">nlen</code> samples, the next several
+samples are all set to zero.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="c1">// Strip off any excess bits
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">i</span> <span class="o">&gt;=</span> <span class="n">nlen</span><span class="p">)</span>
+			<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_sample</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">else</span>
+			<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_sample</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">IW</span><span class="p">());</span>
+
+		<span class="c1">// Apply the filter
+</span>		<span class="n">tick</span><span class="p">();</span>
+
+		<span class="c1">// Sign extend the result
+</span>		<span class="n">v</span> <span class="o">=</span> <span class="n">sbits</span><span class="p">(</span><span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_result</span><span class="p">,</span> <span class="n">OW</span><span class="p">());</span></code></pre></figure>
+
+<p>Further, we’ll only record the results after an initial <code class="highlighter-rouge">DELAY()</code> number of
+samples have been passed into the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">i</span> <span class="o">&gt;=</span> <span class="n">DELAY</span><span class="p">())</span> <span class="p">{</span>
+			<span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="o">-</span><span class="n">DELAY</span><span class="p">()]</span> <span class="o">=</span> <span class="n">v</span><span class="p">;</span>
+		<span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">debug</span><span class="p">)</span>
+			<span class="n">printf</span><span class="p">(</span><span class="s">"Discard : %2d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">v</span><span class="p">);</span>
+
+		<span class="c1">// Deal with any filters requiring multiple clocks
+</span>		<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">1</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">m_nclks</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">tick</span><span class="p">();</span>
+	<span class="p">}</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>As you’ll see shortly, this <code class="highlighter-rouge">test()</code> method is going to feature prominently
+in any more sophisticated test—such as measuring the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+in the next section.</p>
+
+<h3 id="measuring-the-impulse-response">Measuring the Impulse Response</h3>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a> of a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is defined by its response to a single non-zero value.
+Many of our test components will depend upon this value, so it’s important
+that we have a means to both initially measure it, and then to use that
+measurement later without requiring it to be measured over and again.  This is
+the purpose of the <code class="highlighter-rouge">[]</code> operator within the <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test
+harness</a>.</p>
+
+<p>Our operator starts out with some very basic parameter checks, just to make
+certain that we handle responses for out of bounds requests properly.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">int</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="k">operator</span><span class="p">[](</span><span class="k">const</span> <span class="kt">int</span> <span class="n">tap</span><span class="p">)</span> <span class="p">{</span>
+
+	<span class="k">if</span> <span class="p">((</span><span class="n">tap</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">tap</span> <span class="o">&gt;=</span> <span class="mi">2</span><span class="o">*</span><span class="n">NTAPS</span><span class="p">()))</span>
+		<span class="k">return</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Measuring a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+is actually just as simple as creating an
+input to the filter with one non-zero entry (the first one), and then
+recording how the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+responds to it, hence the name
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.
+Here we do exactly that, save that we
+we use the maximum negative value for our impulse.  We pick this choice for
+two reasons: first, because the maximum negative value is larger in
+magnitude than the maximum positive value and so this becomes a test for
+overflow.  Second, by using a <em>really</em> large number, we can also
+make certain that our result isn’t lost when/if any
+<a href="/dsp/2017/07/22/rounding.html">bits are dropped</a>
+at the end.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">else</span> <span class="nf">if</span> <span class="p">(</span><span class="o">!</span><span class="n">m_hk</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">int</span>	<span class="n">nlen</span> <span class="o">=</span> <span class="mi">2</span><span class="o">*</span><span class="n">NTAPS</span><span class="p">();</span>
+		<span class="n">m_hk</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">[</span><span class="n">nlen</span><span class="p">];</span>
+
+		<span class="c1">// Create an input vector with a single impulse in it
+</span>		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">nlen</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">m_hk</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="c1">// Set our one value to nonzero.  This is the impulse.
+</span>		<span class="n">m_hk</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">IW</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">));</span>
+
+		<span class="c1">// Apply the filter to the impulse vector
+</span>		<span class="n">test</span><span class="p">(</span><span class="n">nlen</span><span class="p">,</span> <span class="n">m_hk</span><span class="p">);</span></code></pre></figure>
+
+<p>Once we get our test vector back, the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+coefficient we are looking for will be the response from the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+times the value of our impulse.  Hence, we’ll divide the initial impulse value
+back out and record each sample of our
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="c1">// Set our m_hk vector based upon the results
+</span>		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">nlen</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+			<span class="kt">int</span>	<span class="n">shift</span><span class="p">;</span>
+			<span class="n">shift</span> <span class="o">=</span> <span class="n">IW</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+			<span class="n">m_hk</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">&gt;&gt;=</span> <span class="n">shift</span><span class="p">;</span>
+			<span class="n">m_hk</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="n">m_hk</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+		<span class="p">}</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Once we’ve determined the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+once, we’ll just look it up for future requests–sparing us the cycles of
+calculating it over and over again.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">return</span> <span class="n">m_hk</span><span class="p">[</span><span class="n">tap</span><span class="p">];</span>
+<span class="p">}</span></code></pre></figure>
+
+<h3 id="checking-whether-the-filter-load-worked">Checking whether the filter load worked</h3>
+
+<p>The <code class="highlighter-rouge">testload()</code> function is simply a <code class="highlighter-rouge">load()</code>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients function followed by a request for the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>,
+and then a comparison of whether or not the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+truly matches the one we wanted.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">testload</span><span class="p">(</span><span class="kt">int</span> <span class="n">nlen</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
+<span class="c1">// printf("FILTERTB::testload(%d, ...)\n", nlen);
+</span>	<span class="n">load</span><span class="p">(</span><span class="n">nlen</span><span class="p">,</span> <span class="n">data</span><span class="p">);</span>
+	<span class="n">reset</span><span class="p">();</span>
+
+	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">nlen</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span></code></pre></figure>
+
+<p>We’ll now compare the measured coefficient, <code class="highlighter-rouge">(*this)[k]</code>, against the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficient we expect, found in <code class="highlighter-rouge">data[k]</code>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="kt">int</span>	<span class="n">m</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)[</span><span class="n">k</span><span class="p">];</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">!=</span> <span class="n">m</span><span class="p">)</span>
+			<span class="n">printf</span><span class="p">(</span><span class="s">"Err: Data[k] = %d != (*this)[k] = %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">data</span><span class="p">[</span><span class="n">k</span><span class="p">],</span> <span class="n">m</span><span class="p">);</span>
+		<span class="n">assert</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">==</span> <span class="n">m</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>We’ll also insist that any coefficients beyond the ones we expect to set
+should have been read as zero.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="n">nlen</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="mi">2</span><span class="o">*</span><span class="n">DELAY</span><span class="p">();</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">assert</span><span class="p">(</span><span class="mi">0</span> <span class="o">==</span> <span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)[</span><span class="n">k</span><span class="p">]);</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>This function has been made virtual so that other
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> types,
+such as those whose coefficients are partially fixed
+(<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a>),
+<a href="https://en.wikipedia.org/wiki/Half-band_filter">half-band</a>,
+<a href="https://en.wikipedia.org/wiki/Hilbert_transform">Hilbert</a>,
+etc), may adjust both how their actual coefficients are loaded, and then also
+how those loaded coefficients correspond with resulting
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.</p>
+
+<h3 id="checking-for-overflow">Checking for overflow</h3>
+
+<p>The purpose of the <code class="highlighter-rouge">test_overflow()</code> routine is to test whether or not, if the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is given a carefully constructed input designed to overflow the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+that the filter will return the correct result.  If the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+response doesn’t match what we think it should,
+this will be an indication of a potential overflow.</p>
+
+<table style="float: right"><caption>Fig 3: The Overflow Check Test-Vector</caption><tr><td><img src="/img/fir-overflow-chk.svg" alt="A test vector for use when checking for overflow, having maximum values that match the signs of the filters impulse response" width="380" /></td></tr></table>
+
+<p>The waveform (test vector) itself is chosen from all maximum values, as shown
+in Fig 3.  In this figure, a desired
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+is shown in black.  The discretized version of that same response is shown in
+blue–those are the results that the <code class="highlighter-rouge">[]</code> operator will return.  The samples
+in red show the test vector we’ll use.</p>
+
+<p>The magnitude of the coefficients in the test vector is full scale–whether
+the maximum positive integer that can be represented in <code class="highlighter-rouge">IW</code> bits or the
+maximum negative integer.  The signs are adjusted so that when the test
+sequence lines up with the internal taps of our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+as shown in Fig 3,
+the individual coefficients times the test vector’s coefficients will produce
+the maximum possible positive value.  Once all these maximum possible positive
+values are accumulated, we’ll have the maximum output value that the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+can produce.  Any failure to match this maximum output value will be an
+indication that the <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+couldn’t keep up with full-scale values.</p>
+
+<p>That will be our approach below.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="n">bool</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">test_overflow</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+<span class="c1">// printf("TESTING-BIBO\n");
+</span>	<span class="kt">int</span>	<span class="n">nlen</span> <span class="o">=</span> <span class="mi">2</span><span class="o">*</span><span class="n">NTAPS</span><span class="p">();</span>
+	<span class="kt">int</span>	<span class="o">*</span><span class="n">input</span>  <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">[</span><span class="n">nlen</span><span class="p">],</span>
+		<span class="o">*</span><span class="n">output</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">int</span><span class="p">[</span><span class="n">nlen</span><span class="p">];</span>
+	<span class="kt">int</span>	<span class="n">maxv</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">IW</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+	<span class="n">bool</span>	<span class="n">pass</span> <span class="o">=</span> <span class="nb">true</span><span class="p">,</span> <span class="n">tested</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+
+	<span class="c1">// maxv = 1;
+</span>
+	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">nlen</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// input[v] * (*this)[(NTAPS-1)-v]
+</span>		<span class="k">if</span> <span class="p">((</span><span class="o">*</span><span class="k">this</span><span class="p">)[</span><span class="n">NTAPS</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="o">-</span><span class="n">k</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>
+			<span class="n">input</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="n">maxv</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+		<span class="k">else</span>
+			<span class="n">input</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span>  <span class="n">maxv</span><span class="p">;</span>
+		<span class="n">output</span><span class="p">[</span><span class="n">k</span><span class="p">]</span><span class="o">=</span> <span class="n">input</span><span class="p">[</span><span class="n">k</span><span class="p">];</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Now that we’ve put this test signal together, let’s see what the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+does with it.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">test</span><span class="p">(</span><span class="n">nlen</span><span class="p">,</span> <span class="n">output</span><span class="p">);</span></code></pre></figure>
+
+<p>Now, for every one of those
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+outputs, …</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">nlen</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">long</span>	<span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">bool</span>	<span class="n">all</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span></code></pre></figure>
+
+<p>let’s calculate what the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+output <em>should have</em> been.  This involves evaluating the
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution equation</a>
+(the slow way), and then verifying that we get the output we expect.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">v</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">v</span><span class="o">&lt;</span><span class="n">NTAPS</span><span class="p">();</span> <span class="n">v</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">k</span><span class="o">-</span><span class="n">v</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+				<span class="n">acc</span> <span class="o">+=</span> <span class="n">input</span><span class="p">[</span><span class="n">k</span><span class="o">-</span><span class="n">v</span><span class="p">]</span> <span class="o">*</span> <span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)[</span><span class="n">v</span><span class="p">];</span>
+				<span class="k">if</span> <span class="p">(</span><span class="n">acc</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">)</span>
+					<span class="n">all</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+			<span class="p">}</span> <span class="k">else</span>
+				<span class="n">all</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+		<span class="p">}</span></code></pre></figure>
+
+<p>It would also be nice to have some confidence that the test vector worked
+as desired.  This is the purpose of the <code class="highlighter-rouge">all</code> and <code class="highlighter-rouge">tested</code> variables.
+If the test vector works as desired, then it should hit (at some point) a
+sweet spot where all of the signs line up.  If this happens, then we set
+<code class="highlighter-rouge">all</code> to true.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">all</span><span class="p">)</span>
+			<span class="n">tested</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span></code></pre></figure>
+
+<p>Any failure of the output to match our calculated (expected) value indicates
+that something went wrong–perhaps a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+overflow, perhaps something else in the implementation of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+Either way, you’ll want to know.
+Here are two ways to find out: the assertion below, which will cause the test
+to end abruptly with an error, and a boolean <code class="highlighter-rouge">pass</code>.  Hence, if you comment
+out the assertion, the <code class="highlighter-rouge">pass</code> boolean will still tell you the answer.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">pass</span> <span class="o">=</span> <span class="p">(</span><span class="n">pass</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">==</span> <span class="n">acc</span><span class="p">);</span>
+		<span class="n">assert</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">==</span> <span class="n">acc</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Finally, now that we are done comparing every output with its expected value,
+let’s clean up any allocated values and return.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">delete</span><span class="p">[]</span> <span class="n">input</span><span class="p">;</span>
+	<span class="k">delete</span><span class="p">[]</span> <span class="n">output</span><span class="p">;</span>
+	<span class="k">return</span> <span class="p">(</span><span class="n">pass</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">tested</span><span class="p">);</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>As you may have noticed, this test not only checks that the output doesn’t
+overflow, but it also offers a rudimentary check that the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+even works in general–by comparing the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s output to a
+locally calculated <a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>.
+However, as a general <a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+checker, this routine is not sufficient.
+For this reason, we’ll need some other tests to fully convince us
+that this <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+works.</p>
+
+<h3 id="saved-for-later">Saved for Later</h3>
+
+<p>There are two other required components of this generic filtering <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness</a>:
+a function to calculate the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a> of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">response</span><span class="p">(</span><span class="kt">int</span> <span class="n">nfreq</span><span class="p">,</span>
+		<span class="n">COMPLEX</span> <span class="o">*</span><span class="n">rvec</span><span class="p">,</span> <span class="kt">double</span> <span class="n">mag</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">// ...
+</span><span class="p">}</span></code></pre></figure>
+
+<p>and a second function to answer the question of how well did the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>’s
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+actually match a desired response.  As we mentioned above, this second
+function (as built) will only be relevant to
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filters</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span> <span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">measure_lowpass</span><span class="p">(</span><span class="kt">double</span> <span class="o">&amp;</span><span class="n">fp</span><span class="p">,</span>
+		<span class="kt">double</span> <span class="o">&amp;</span><span class="n">fs</span><span class="p">,</span> <span class="kt">double</span> <span class="o">&amp;</span><span class="n">depth</span><span class="p">,</span> <span class="kt">double</span> <span class="o">&amp;</span><span class="n">ripple</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">// ...
+</span><span class="p">}</span></code></pre></figure>
+
+<p>Building these two components of our
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness</a>,
+however, will have to wait for another day and another post.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>And David girded his sword upon his armour, and he assayed to go; for he had not proved it.  And David said unto Saul, I cannot go with these; for I have not proved them.  And David put them off him.  (1Sam 39)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

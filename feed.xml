@@ -6,14 +6,989 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 30 Oct 2017 12:39:13 -0400</pubDate>
-    <lastBuildDate>Mon, 30 Oct 2017 12:39:13 -0400</lastBuildDate>
+    <pubDate>Sat, 04 Nov 2017 07:12:29 -0400</pubDate>
+    <lastBuildDate>Sat, 04 Nov 2017 07:12:29 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>http://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>The Interface to a Generic Filtering Testbench</title>
+        <description>&lt;p&gt;We’ve now presented several approaches to filtering within an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+on &lt;a href=&quot;http://zipcpu.com/&quot;&gt;this blog&lt;/a&gt;.  We talked about &lt;a href=&quot;/dsp/2017/08/19/simple-filter.html&quot;&gt;two of
+the simplest filters&lt;/a&gt;, a
+&lt;a href=&quot;/dsp/2017/09/15/fastfir.html&quot;&gt;generic filter implementation&lt;/a&gt;,
+a &lt;a href=&quot;/dsp/2017/09/29/cheaper-fast-fir.html&quot;&gt;cheaper version of the
+same&lt;/a&gt;, and even how
+to build a &lt;a href=&quot;/dsp/2017/10/16/boxcar.html&quot;&gt;moving average
+filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;What we haven’t discussed is how to test
+&lt;a href=&quot;https://github.com/ZipCPU/dspfilters&quot;&gt;these filters&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Just to make matters worse,
+&lt;a href=&quot;https://github.com/ZipCPU/dspfilters&quot;&gt;these filters&lt;/a&gt;
+are only the tip of the iceberg of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filters&lt;/a&gt;
+we’d like to test.  Not only do we have the
+&lt;a href=&quot;https://github.com/ZipCPU/dspfilters&quot;&gt;current set of filters to test&lt;/a&gt;,
+but I’d also like to present Verilog logic for
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Linear_phase&quot;&gt;Symmetric filters&lt;/a&gt;,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Half-band_filter&quot;&gt;Half-band filters&lt;/a&gt;,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Hilbert_transform&quot;&gt;Hilbert transforms&lt;/a&gt;
+and even some slower versions of those same
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filters&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Each of these filters is going to need a test bench.  At the same time,
+these test benches are going to have a lot of code in common between
+each other.  Let’s consider, today, what functionality a generic
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator based&lt;/a&gt;
+filtering test bench requires, so that we can then create a filter test
+bench engine that can be used, and modified if needed, to test all of these
+filters.&lt;/p&gt;
+
+&lt;h2 id=&quot;abstracting-a-logic-filter&quot;&gt;Abstracting a logic filter&lt;/h2&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1: A Generic Filter portlist&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/fir-ports.svg&quot; alt=&quot;A list of the ports of a generic filter: reset, setting taps (i_tap_wr, i_tap), and samples (i_ce, i_sample, and o_sample)&quot; width=&quot;380&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The first step is going to be abstracting what a filter looks like in
+general so that one basic test bench can support many filters.  For this,
+we can draw upon the design of our most
+&lt;a href=&quot;/dsp/2017/09/15/fastfir.html&quot;&gt;generic filter&lt;/a&gt;, and see a
+set of ports looking roughly like Fig 1.  There’s an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt; strobe
+to clear the filter’s internal memory, an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_tap_wr&lt;/code&gt; signal to indicate that
+the filter is being loaded with new taps through &lt;code class=&quot;highlighter-rouge&quot;&gt;i_tap&lt;/code&gt;, and an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt; signal
+to indicate both that a new sample is ready at &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sample&lt;/code&gt; and that a sample
+is ready to be read out at &lt;code class=&quot;highlighter-rouge&quot;&gt;o_sample&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Almost all of our &lt;a href=&quot;https://en.wikipedia.org/wiki/Finite_impulse_response&quot;&gt;FIR&lt;/a&gt;
+filters, to date, have had a form similar to this one.
+The biggest exception is the &lt;a href=&quot;/dsp/2017/10/16/boxcar.html&quot;&gt;boxcar
+filter&lt;/a&gt;–but with a &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/rtl/boxwrapper.v&quot;&gt;simple
+wrapper&lt;/a&gt;
+even this filter can be made to fit this form.&lt;/p&gt;
+
+&lt;p&gt;Now, given this form, let’s consider the questions that need to be answered
+by a test bench:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Does the filter have the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+we expect it to have?&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Does this filter faithfully apply the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+to any signal we give it?&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Will a carefully constructed input stream overflow the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;?&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;What is the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_response&quot;&gt;frequency response&lt;/a&gt;
+of this filter?  If the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+is a &lt;a href=&quot;https://en.wikipedia.org/wiki/Low-pass_filter&quot;&gt;lowpass filter&lt;/a&gt;,
+what is it’s &lt;a href=&quot;https://en.wikipedia.org/wiki/Passband&quot;&gt;passband&lt;/a&gt;
+ripple and &lt;a href=&quot;https://en.wikipedia.org/wiki/Stopband&quot;&gt;stopband&lt;/a&gt;
+depth (as measured)?&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Infinite_impulse_response&quot;&gt;IIR&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filters&lt;/a&gt;
+will have different needs from 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Finite_impulse_response&quot;&gt;FIR&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filters&lt;/a&gt;.
+For now, we’ll just focus on the 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Finite_impulse_response&quot;&gt;FIR&lt;/a&gt;
+variety in determining how to abstract this test bench.&lt;/p&gt;
+
+&lt;p&gt;Digital
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+based filters in particular also have some &lt;em&gt;properties&lt;/em&gt; that will affect
+how we interact with them from one test bench to the next.  For many of our
+filters, these are &lt;code class=&quot;highlighter-rouge&quot;&gt;parameter&lt;/code&gt;s within our design.  Those same parameters will
+affect how we interact with the filter to answer the questions above.
+The &lt;em&gt;properties&lt;/em&gt; that a test harness for all filters will need to know are:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;IW&lt;/code&gt;, the number of bits per input sample&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;TW&lt;/code&gt;, the number of bits per tap&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;OW&lt;/code&gt;, the number of bits per output sample&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;DELAY&lt;/code&gt;, the delay between an impulse input and the first sample that
+responds to that input.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;NTAPS&lt;/code&gt;, the number of taps in the filter&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;NCLOCKS&lt;/code&gt;, the minimum number of clocks between successive input clock
+ enables&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Our purpose today will be to build a generic filtering test harness.  The goal
+for this harness will be to handle all of the various
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+properties we just discussed above,
+to interact with a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+of the form shown in Fig 1., and then to answer about the filter’s performance
+based upon the questions above.  You can imagine that this test harness will
+have the form shown in Fig 2, where the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+itself fits within a virtual socket in this virtual test harness.&lt;/p&gt;
+
+&lt;table style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2: C++/Verilator Filtering Test Harness&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/fir-tb-harness.svg&quot; alt=&quot;A picture showing inputs to a filter test harness, as well as conclusions one would like to draw&quot; width=&quot;640&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The harness won’t quite be a complete test bench, but rather a component of
+a complete test bench.  As such it should make it easier to build
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+test benches using this harness.&lt;/p&gt;
+
+&lt;h2 id=&quot;building-a-test-harness&quot;&gt;Building a test harness&lt;/h2&gt;
+
+&lt;p&gt;All of these actions and properties can easily be encapsulated by a &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;C++ test
+object&lt;/a&gt;
+that will provide us conceptualized access to our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;We’ll need to make the C++ class that encapsulates this object easily
+inheritable, as (for example) the meaning of the taps loaded into one
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+(such as a generic one) might be very different from another (such
+as a &lt;a href=&quot;https://en.wikipedia.org/wiki/Linear_phase&quot;&gt;symmetric filter&lt;/a&gt;).
+Hence, most of these methods will be virtual.&lt;/p&gt;
+
+&lt;p&gt;Let’s outline what &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.h&quot;&gt;one such filter test
+harness&lt;/a&gt;
+might look like.  We’ll let it inherit from a basic
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;TESTB&lt;/a&gt;
+class, such as we’ve &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;discussed
+before&lt;/a&gt;.
+This
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;TESTB&lt;/a&gt;
+class, if you recall, primarily provided us with the ability to &lt;code class=&quot;highlighter-rouge&quot;&gt;tick()&lt;/code&gt;
+the clock by raising and then lowering the clock input pin, as well as
+recording our simulation to a &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD
+file&lt;/a&gt;.  The final function of
+this &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;TESTB&lt;/a&gt;
+class is to give us access to a simple &lt;code class=&quot;highlighter-rouge&quot;&gt;reset()&lt;/code&gt; function which will set
+the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt; pin and toggle the clock.&lt;/p&gt;
+
+&lt;p&gt;We’ll define our test harness class with some defaults–things that can be
+overridden later by the test bench that uses this harness.  Further, since
+we don’t know what the class name of our actual filter is going to be until
+build time, we’ll make the test harness class, &lt;code class=&quot;highlighter-rouge&quot;&gt;FILTERTB&lt;/code&gt;, a template class.
+That way, the compiler can fill in the template details once they are known.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;FILTERTB&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;FILE&lt;/span&gt;	&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;result_fp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Remember all of those properties we said that a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;digital filter&lt;/a&gt; would have?
+These will be variables of our object.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;m_delay&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_iw&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_ow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_tw&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_ntaps&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;public&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;NULL&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_delay&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_iw&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;16&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_ow&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;16&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_tw&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;12&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_ntaps&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;128&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;result_fp&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;NULL&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The test harness will need to know what these properties are.
+Hence, we’ll start out by handling the setting and referencing of these various
+properties.  This won’t actually change anything about the
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt; generated
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt; code itself,
+nor will these values connect to the values often set by parameters within the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+(though it probably should), these routines will just let the actual test
+bench tell tell the test harness what properties are associated with the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;There’s the number of bits allocated to the input sample, IW.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_iw&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_iw&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_iw&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;OW is the number of bits allocated to output samples.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;OW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_ow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;OW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_ow&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_ow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;TW is the number of bits allocated to each of the taps.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;TW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_tw&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;TW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;    &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_tw&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_tw&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;DELAY is the number of clocks between an input and the first
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+response that it impacts.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_delay&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_delay&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_delay&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Slower &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;s,
+may require multiple clocks between each global CE signal, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt;.
+We’ll keep track of this feature/capability in the CKPCE, the clocks
+per CE parameter.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;CKPCE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;CKPCE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The minimum number of clocks per CE’s is just one, something enforced above.&lt;/p&gt;
+
+&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;NTAPS&lt;/code&gt; is the number of filter coefficients, or taps in this filter–it is the
+length of the &lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse
+response&lt;/a&gt;.
+Our test harness will use this to know how many samples following an
+impulse need to be examined.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;NTAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_ntaps&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll cache this &lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse
+response&lt;/a&gt;
+(more later), so any time the number of taps changes (such as with the
+&lt;a href=&quot;/dsp/2017/10/16/boxcar.html&quot;&gt;boxcar&lt;/a&gt; filter), the cache
+will need to be reloaded as well.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;NTAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_ntaps&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;clear_cache&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_ntaps&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now with those properties aside, we can start looking at methods (actions) this
+filtering test harness will need to handle.  As you’ll notice from below,
+we’ll make most of these virtual–so that different types of
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;s can
+change them if need be.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;We discussed&lt;/a&gt;
+the &lt;code class=&quot;highlighter-rouge&quot;&gt;tick()&lt;/code&gt; method as a generic method that will call
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+and simply step the clock by one tick.  It will also record any results into
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;a VCD file&lt;/a&gt;
+(or other file) that may need to be recorded–if desired.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You may remember some time ago how I recommended &lt;a href=&quot;/dsp/2017/07/24/dsp-debugging.html&quot;&gt;debugging DSP algorithms
+graphically&lt;/a&gt;.
+That recommendation applies to
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;s
+as well.  For those cases where you
+want to output the results of your filtering operation to examine,
+our test harness allows us to open a file wherein we’ll place both
+input values and output values.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;record_results&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fname&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;result_fp&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;fopen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fname&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;w&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In order to apply test vectors and receive independent results, we’ll need to
+be able to reset the &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+to clear any internal state.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;For our test structure, we want to be able to load
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+coefficients into our design.  This will involve sending a vector of integers,
+of a given length, to the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_tap&lt;/code&gt; port.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;load&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;  &lt;span class=&quot;n&quot;&gt;ntaps&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;  &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;apply()&lt;/code&gt; method will send the given data to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+as input samples, and return the result from applying the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;apply&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;test()&lt;/code&gt; method is nearly identical to the &lt;code class=&quot;highlighter-rouge&quot;&gt;apply()&lt;/code&gt; method, with the
+single exception that the &lt;code class=&quot;highlighter-rouge&quot;&gt;test()&lt;/code&gt; method &lt;code class=&quot;highlighter-rouge&quot;&gt;reset()&lt;/code&gt;s the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+first.  This will be important for
+sending any particular test vectors to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;, and for making certain
+that there aren’t any unintended consequences in the result.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;  &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As it will turn out, lots of methods are going to depend upon the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;.
+Let’s overload the &lt;code class=&quot;highlighter-rouge&quot;&gt;[]&lt;/code&gt; operator to return coefficients from
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;that response&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;k&quot;&gt;operator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[](&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Further, rather than calculating the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;.
+over and over again, we’ll calculate it once and cache the results.  That
+means that any time there is a change in the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s coefficients,
+we’ll need to be able to clear this cache.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;clear_cache&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;k&quot;&gt;delete&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;NULL&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;While we have a method above for loading coefficients into our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+let’s create another method that not only loads coefficients into our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+but also verifies that the resulting
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+contains the coefficients that we want.&lt;/p&gt;
+
+&lt;p&gt;As with many of these methods, this method is virtual so that
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;s
+with less than generic tap structures, such as
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Linear_phase&quot;&gt;symmetric filter&lt;/a&gt;’s
+as one example, can overload this function and provide their own test method.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;testload&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;  &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;With all of the above functionality, there’s no reason why we can’t apply
+particular known inputs to this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+in order to measure its
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_response&quot;&gt;frequency response&lt;/a&gt;.
+Since this is likely to be a common request, we’ll make a method for doing
+this and place it into our test harness as well.  The &lt;code class=&quot;highlighter-rouge&quot;&gt;nfreq&lt;/code&gt; describes how
+many frequencies we are interested examining, and the result will be placed
+into the &lt;code class=&quot;highlighter-rouge&quot;&gt;response&lt;/code&gt; buffer.
+The algorithm will work by placing complex exponential test vectors into the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.
+We can use &lt;code class=&quot;highlighter-rouge&quot;&gt;mag&lt;/code&gt; to control the amplitude of these test vectors,
+with a &lt;code class=&quot;highlighter-rouge&quot;&gt;mag&lt;/code&gt; of one being the largest magnitude the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+will accept without overflow.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;virtual&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;response&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nfreq&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;COMPLEX&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;response&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mag&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Finally, we’ll add two further canned tests.  The first, &lt;code class=&quot;highlighter-rouge&quot;&gt;test_overflow()&lt;/code&gt;,
+checks whether a carefully constructed input designed to overflow the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+does or does not.  A true value means that the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+passed this test.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;test_overflow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The second test is appropriate for
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Low-pass_filter&quot;&gt;lowpass filters&lt;/a&gt;
+only.  This test will measure the highest
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Passband&quot;&gt;passband&lt;/a&gt; frequency, the lowest
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Stopband&quot;&gt;stopband&lt;/a&gt; frequency, the depth of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Stopband&quot;&gt;stopband&lt;/a&gt;, and the ripple across the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Passband&quot;&gt;passband&lt;/a&gt;.  It will work for most
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Low-pass_filter&quot;&gt;lowpass&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_response&quot;&gt;frequency response&lt;/a&gt;
+functions, but perhaps not for all
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Low-pass_filter&quot;&gt;lowpass filters&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;measure_lowpass&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;depth&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ripple&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Together, these are the methods (actions) we’ll teach our test harness how to
+apply to all
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;s,
+These methods are declared in &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.h&quot;&gt;this C++ header
+file&lt;/a&gt;.
+We’ll discuss &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;how to implement
+them&lt;/a&gt;
+in the next section.  For now, let me challenge you to ask the question: have
+we gotten everything?  Are there other particular capabilities that a generic
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+test harness should have–capabilities that we’ve overlooked?  Feel free to
+write me and tell me about anything I’ve missed.&lt;/p&gt;
+
+&lt;h2 id=&quot;test-harness-method-details&quot;&gt;Test harness method details&lt;/h2&gt;
+
+&lt;p&gt;Let’s now turn to the details of how this &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;test harness is
+implemented&lt;/a&gt;.
+In general, we’ll just work our way through the various methods associated with
+this &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;test harness C++
+class&lt;/a&gt;,
+discussing how to implement each along the way.&lt;/p&gt;
+
+&lt;h3 id=&quot;handling-different-data-widths&quot;&gt;Handling different data widths&lt;/h3&gt;
+
+&lt;p&gt;The first thing we are going to implement is a helper method for adjusting the
+number of bits in a number.  Since
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
+will return numbers with only &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; bits in them, we’d like to be able to
+sign extend these values to their full &lt;code class=&quot;highlighter-rouge&quot;&gt;int&lt;/code&gt; capability.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;sbits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint32_t&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;val&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;sizeof&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;sizeof&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;s&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Likewise, if the value is unsigned, we’ll also like to extend the value–this
+time with zero bits.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;ubits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint32_t&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;val&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;val&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;These are just two helper functions that we’ll need when sending bit limited
+data to
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;, and when interpreting
+&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;’s
+results.&lt;/p&gt;
+
+&lt;h3 id=&quot;advancing-the-state-of-the-test-bench&quot;&gt;Advancing the state of the test bench&lt;/h3&gt;
+
+&lt;p&gt;As you may recall from the discussion of the
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;TESTB&lt;/a&gt;
+class, it has a &lt;code class=&quot;highlighter-rouge&quot;&gt;tick()&lt;/code&gt; method within it to handle toggling the clock for us.
+What it doesn’t have is a means of recording samples for later study
+with Matlab or
+&lt;a href=&quot;https://www.gnu.org/software/octave/&quot;&gt;Octave&lt;/a&gt;.  We’ll create that here.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;ce&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sbits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_sample&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sbits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;OW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ce&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;result_fp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;fwrite&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;sizeof&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;),&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;result_fp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As you can see from above, anytime the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt; flag is true, the input value
+and corresponding output value will be written to a file (if open) for
+later analysis.&lt;/p&gt;
+
+&lt;h3 id=&quot;resetting-the-filter&quot;&gt;Resetting the Filter&lt;/h3&gt;
+
+&lt;p&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;reset()&lt;/code&gt; function just sets the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt; signal for one clock tick.  Just
+to be safe, we’ll make sure the other indication lines are zeros as well.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_tap&lt;/span&gt;   &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_sample&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_tap_wr&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll use this function to make certain the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+starts from a clean state at the beginning of any tests.&lt;/p&gt;
+
+&lt;p&gt;There is a consequence, though, to creating a clean test bench that only
+provides expected and reasonable inputs, such as setting the reset with all of
+these other inputs set to zero.  In particular, this method of testing logic
+may not be as complete as a more formal approach that will examine all possible
+inputs to our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+module–both the reasonable as well as the unreasonable.&lt;/p&gt;
+
+&lt;p&gt;In our approach today, we’ll just stick to the reasonable
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+inputs.&lt;/p&gt;
+
+&lt;h3 id=&quot;applying-the-filter-to-a-known-input&quot;&gt;Applying the filter to a known input&lt;/h3&gt;
+
+&lt;p&gt;The core function of any
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Linear_system&quot;&gt;linear filter operation&lt;/a&gt;
+is to apply the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+to a given set of data samples.  That’s the purpose of the &lt;code class=&quot;highlighter-rouge&quot;&gt;apply()&lt;/code&gt; function
+below.  We’ll start by making sure we’re not holding wires high from any prior
+context that didn’t clean up properly behind itself.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;apply&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;// printf(&quot;FILTERTB::apply(%d, ...)\n&quot;, nlen);
+&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_tap_wr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;     &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now that we’re set up, let’s walk through each of the input samples.
+For each input sample, we’ll place it on the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sample&lt;/code&gt; input to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+and then read the result from the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_result&lt;/code&gt; output of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Make sure the CE line is high
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;     &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Strip off any excess bits
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_sample&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ubits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Apply the filter
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Sign extend the result
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sbits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;OW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Although all of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s
+we’ve looked at so far accept one input value
+and produce one output value on each clock, not every
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+is of this type.
+There’s a lot to be gained by sharing resources across clocks if the
+sample rate can be guaranteed to be less than half of the system clock rate.
+To make sure that we can still test
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;s
+of this variety, we’ll tick our clock &lt;code class=&quot;highlighter-rouge&quot;&gt;m_nclk-1&lt;/code&gt; additional times
+here–while holding &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt; low.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;     &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+			&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+				&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;     &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This is fundamentally how to feed any
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;digital filter&lt;/a&gt;,
+so having this capability within our &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;test
+harness&lt;/a&gt;,
+only makes.&lt;/p&gt;
+
+&lt;h3 id=&quot;loading-new-filter-coefficients&quot;&gt;Loading new filter coefficients&lt;/h3&gt;
+
+&lt;p&gt;For any &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+that doesn’t have fixed taps, we’ll need to be able to load a new set of
+coefficients into the &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+As we’ve designed this, doing so requires setting the
+&lt;code class=&quot;highlighter-rouge&quot;&gt;i_tap_wr&lt;/code&gt; input, and then ticking the clock once to load each new coefficient
+into the &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;load&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;  &lt;span class=&quot;n&quot;&gt;ntaps&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;  &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;// printf(&quot;FILTERTB::load(%d, ...)\n&quot;, ntaps);
+&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;    &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_tap_wr&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ntaps&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Strip off any excess bits
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_tap&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ubits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;TW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Apply the filter
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_tap_wr&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;When we are done loading a new set of coefficients into the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+we’ll clear our cached &lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse
+response&lt;/a&gt; values.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;n&quot;&gt;clear_cache&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;These will need to be rebuilt, but we’ll hold off on that task until they
+are referenced.&lt;/p&gt;
+
+&lt;h3 id=&quot;getting-the-results-from-a-test-vector&quot;&gt;Getting the results from a test vector&lt;/h3&gt;
+
+&lt;p&gt;A function that is very similar to the &lt;code class=&quot;highlighter-rouge&quot;&gt;apply()&lt;/code&gt; method is the &lt;code class=&quot;highlighter-rouge&quot;&gt;test()&lt;/code&gt; method
+below.  The idea behind the &lt;code class=&quot;highlighter-rouge&quot;&gt;test()&lt;/code&gt; method is that we wish to determine the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s
+response to a given test vector.  This method differs from the &lt;code class=&quot;highlighter-rouge&quot;&gt;apply()&lt;/code&gt;
+method in only a few small respects.&lt;/p&gt;
+
+&lt;p&gt;First, the &lt;code class=&quot;highlighter-rouge&quot;&gt;test()&lt;/code&gt; function begins with a &lt;code class=&quot;highlighter-rouge&quot;&gt;reset()&lt;/code&gt; to clear any internal
+values within the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.  The
+&lt;code class=&quot;highlighter-rouge&quot;&gt;apply()&lt;/code&gt; method didn’t clear any internal 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt; state.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;  &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;debug&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;assert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We then call the filter &lt;code class=&quot;highlighter-rouge&quot;&gt;nlen&lt;/code&gt; times to feed the test vector into the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.
+Well, not quite.  We’re going to pass the test vector followed by a series
+of zeros–one for each delay value.  That way, we can quietly remove any
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+delay effects from the test vectors response–something not done within the
+&lt;code class=&quot;highlighter-rouge&quot;&gt;apply()&lt;/code&gt; function.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_tap_wr&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;tstcounts&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tstcounts&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Here’s the next difference: after the first &lt;code class=&quot;highlighter-rouge&quot;&gt;nlen&lt;/code&gt; samples, the next several
+samples are all set to zero.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;c1&quot;&gt;// Strip off any excess bits
+&lt;/span&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_sample&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_sample&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ubits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Apply the filter
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Sign extend the result
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sbits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;OW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Further, we’ll only record the results after an initial &lt;code class=&quot;highlighter-rouge&quot;&gt;DELAY()&lt;/code&gt; number of
+samples have been passed into the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;debug&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Discard : %2d&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Deal with any filters requiring multiple clocks
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As you’ll see shortly, this &lt;code class=&quot;highlighter-rouge&quot;&gt;test()&lt;/code&gt; method is going to feature prominently
+in any more sophisticated test—such as measuring the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+in the next section.&lt;/p&gt;
+
+&lt;h3 id=&quot;measuring-the-impulse-response&quot;&gt;Measuring the Impulse Response&lt;/h3&gt;
+
+&lt;p&gt;The &lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt; of a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+is defined by its response to a single non-zero value.
+Many of our test components will depend upon this value, so it’s important
+that we have a means to both initially measure it, and then to use that
+measurement later without requiring it to be measured over and again.  This is
+the purpose of the &lt;code class=&quot;highlighter-rouge&quot;&gt;[]&lt;/code&gt; operator within the &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;test
+harness&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Our operator starts out with some very basic parameter checks, just to make
+certain that we handle responses for out of bounds requests properly.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;operator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[](&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tap&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;||&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tap&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NTAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()))&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Measuring a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+is actually just as simple as creating an
+input to the filter with one non-zero entry (the first one), and then
+recording how the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+responds to it, hence the name
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;.
+Here we do exactly that, save that we
+we use the maximum negative value for our impulse.  We pick this choice for
+two reasons: first, because the maximum negative value is larger in
+magnitude than the maximum positive value and so this becomes a test for
+overflow.  Second, by using a &lt;em&gt;really&lt;/em&gt; large number, we can also
+make certain that our result isn’t lost when/if any
+&lt;a href=&quot;/dsp/2017/07/22/rounding.html&quot;&gt;bits are dropped&lt;/a&gt;
+at the end.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NTAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Create an input vector with a single impulse in it
+&lt;/span&gt;		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Set our one value to nonzero.  This is the impulse.
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Apply the filter to the impulse vector
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Once we get our test vector back, the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+coefficient we are looking for will be the response from the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+times the value of our impulse.  Hence, we’ll divide the initial impulse value
+back out and record each sample of our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;c1&quot;&gt;// Set our m_hk vector based upon the results
+&lt;/span&gt;		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+			&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;shift&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;shift&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;shift&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Once we’ve determined the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+once, we’ll just look it up for future requests–sparing us the cycles of
+calculating it over and over again.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_hk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tap&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;h3 id=&quot;checking-whether-the-filter-load-worked&quot;&gt;Checking whether the filter load worked&lt;/h3&gt;
+
+&lt;p&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;testload()&lt;/code&gt; function is simply a &lt;code class=&quot;highlighter-rouge&quot;&gt;load()&lt;/code&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+coefficients function followed by a request for the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;,
+and then a comparison of whether or not the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+truly matches the one we wanted.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;testload&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;// printf(&quot;FILTERTB::testload(%d, ...)\n&quot;, nlen);
+&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;load&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll now compare the measured coefficient, &lt;code class=&quot;highlighter-rouge&quot;&gt;(*this)[k]&lt;/code&gt;, against the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+coefficient we expect, found in &lt;code class=&quot;highlighter-rouge&quot;&gt;data[k]&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;m&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Err: Data[k] = %d != (*this)[k] = %d&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;assert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll also insist that any coefficients beyond the ones we expect to set
+should have been read as zero.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;assert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This function has been made virtual so that other
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt; types,
+such as those whose coefficients are partially fixed
+(&lt;a href=&quot;https://en.wikipedia.org/wiki/Linear_phase&quot;&gt;symmetric&lt;/a&gt;),
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Half-band_filter&quot;&gt;half-band&lt;/a&gt;,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Hilbert_transform&quot;&gt;Hilbert&lt;/a&gt;,
+etc), may adjust both how their actual coefficients are loaded, and then also
+how those loaded coefficients correspond with resulting
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;checking-for-overflow&quot;&gt;Checking for overflow&lt;/h3&gt;
+
+&lt;p&gt;The purpose of the &lt;code class=&quot;highlighter-rouge&quot;&gt;test_overflow()&lt;/code&gt; routine is to test whether or not, if the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+is given a carefully constructed input designed to overflow the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+that the filter will return the correct result.  If the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s
+response doesn’t match what we think it should,
+this will be an indication of a potential overflow.&lt;/p&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3: The Overflow Check Test-Vector&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/fir-overflow-chk.svg&quot; alt=&quot;A test vector for use when checking for overflow, having maximum values that match the signs of the filters impulse response&quot; width=&quot;380&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The waveform (test vector) itself is chosen from all maximum values, as shown
+in Fig 3.  In this figure, a desired
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
+is shown in black.  The discretized version of that same response is shown in
+blue–those are the results that the &lt;code class=&quot;highlighter-rouge&quot;&gt;[]&lt;/code&gt; operator will return.  The samples
+in red show the test vector we’ll use.&lt;/p&gt;
+
+&lt;p&gt;The magnitude of the coefficients in the test vector is full scale–whether
+the maximum positive integer that can be represented in &lt;code class=&quot;highlighter-rouge&quot;&gt;IW&lt;/code&gt; bits or the
+maximum negative integer.  The signs are adjusted so that when the test
+sequence lines up with the internal taps of our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,
+as shown in Fig 3,
+the individual coefficients times the test vector’s coefficients will produce
+the maximum possible positive value.  Once all these maximum possible positive
+values are accumulated, we’ll have the maximum output value that the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+can produce.  Any failure to match this maximum output value will be an
+indication that the &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+couldn’t keep up with full-scale values.&lt;/p&gt;
+
+&lt;p&gt;That will be our approach below.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;test_overflow&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;// printf(&quot;TESTING-BIBO\n&quot;);
+&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NTAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;input&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;output&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;maxv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;pass&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tested&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// maxv = 1;
+&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// input[v] * (*this)[(NTAPS-1)-v]
+&lt;/span&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NTAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;input&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;maxv&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;input&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;  &lt;span class=&quot;n&quot;&gt;maxv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;output&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;input&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now that we’ve put this test signal together, let’s see what the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+does with it.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;output&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now, for every one of those
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+outputs, …&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;acc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;all&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;let’s calculate what the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+output &lt;em&gt;should have&lt;/em&gt; been.  This involves evaluating the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolution equation&lt;/a&gt;
+(the slow way), and then verifying that we get the output we expect.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NTAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+			&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+				&lt;span class=&quot;n&quot;&gt;acc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;input&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+				&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;acc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+					&lt;span class=&quot;n&quot;&gt;all&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+			&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+				&lt;span class=&quot;n&quot;&gt;all&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;It would also be nice to have some confidence that the test vector worked
+as desired.  This is the purpose of the &lt;code class=&quot;highlighter-rouge&quot;&gt;all&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;tested&lt;/code&gt; variables.
+If the test vector works as desired, then it should hit (at some point) a
+sweet spot where all of the signs line up.  If this happens, then we set
+&lt;code class=&quot;highlighter-rouge&quot;&gt;all&lt;/code&gt; to true.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;all&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;tested&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Any failure of the output to match our calculated (expected) value indicates
+that something went wrong–perhaps a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+overflow, perhaps something else in the implementation of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.
+Either way, you’ll want to know.
+Here are two ways to find out: the assertion below, which will cause the test
+to end abruptly with an error, and a boolean &lt;code class=&quot;highlighter-rouge&quot;&gt;pass&lt;/code&gt;.  Hence, if you comment
+out the assertion, the &lt;code class=&quot;highlighter-rouge&quot;&gt;pass&lt;/code&gt; boolean will still tell you the answer.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;n&quot;&gt;pass&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pass&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;output&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;acc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;assert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;output&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;acc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Finally, now that we are done comparing every output with its expected value,
+let’s clean up any allocated values and return.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;delete&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;input&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;delete&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;output&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pass&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tested&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As you may have noticed, this test not only checks that the output doesn’t
+overflow, but it also offers a rudimentary check that the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+even works in general–by comparing the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;’s output to a
+locally calculated &lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolution&lt;/a&gt;.
+However, as a general &lt;a href=&quot;https://en.wikipedia.org/wiki/Convolution&quot;&gt;convolution&lt;/a&gt;
+checker, this routine is not sufficient.
+For this reason, we’ll need some other tests to fully convince us
+that this &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
+works.&lt;/p&gt;
+
+&lt;h3 id=&quot;saved-for-later&quot;&gt;Saved for Later&lt;/h3&gt;
+
+&lt;p&gt;There are two other required components of this generic filtering &lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;test harness&lt;/a&gt;:
+a function to calculate the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_response&quot;&gt;frequency response&lt;/a&gt; of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;response&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nfreq&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;COMPLEX&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rvec&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mag&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// ...
+&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;and a second function to answer the question of how well did the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filters&lt;/a&gt;’s
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_response&quot;&gt;frequency response&lt;/a&gt;
+actually match a desired response.  As we mentioned above, this second
+function (as built) will only be relevant to
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Low-pass_filter&quot;&gt;lowpass filters&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;measure_lowpass&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+		&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;depth&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ripple&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// ...
+&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Building these two components of our
+&lt;a href=&quot;https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp&quot;&gt;test harness&lt;/a&gt;,
+however, will have to wait for another day and another post.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;And David girded his sword upon his armour, and he assayed to go; for he had not proved it.  And David said unto Saul, I cannot go with these; for I have not proved them.  And David put them off him.  (1Sam 39)&lt;/em&gt;</description>
+        <pubDate>Sat, 04 Nov 2017 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/dsp/2017/11/04/genfil-tb.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/11/04/genfil-tb.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>Good Software Engineering Principles Apply to Students Too</title>
@@ -4854,571 +5829,6 @@ builds is availble for your inspection and learning pleasure.&lt;/p&gt;
         <pubDate>Fri, 06 Oct 2017 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/zipcpu/2017/10/06/autofpga-dataword.html</link>
         <guid isPermaLink="true">http://zipcpu.com/zipcpu/2017/10/06/autofpga-dataword.html</guid>
-        
-        
-        <category>zipcpu</category>
-        
-      </item>
-    
-      <item>
-        <title>A Brief Introduction to AutoFPGA</title>
-        <description>&lt;p&gt;You may have heard about
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;.  Perhaps you’ve found it on
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;github&lt;/a&gt;.  Perhaps you’ve read about it
-on my &lt;a href=&quot;/projects.html&quot;&gt;projects&lt;/a&gt; page.  Perhaps you had a
-chance to hear me &lt;a href=&quot;https://github.com/ZipCPU/autofpga/blob/master/doc/orconf17.pdf&quot;&gt;describe it
-at&lt;/a&gt;
-&lt;a href=&quot;https://orconf.org&quot;&gt;ORCONF, 2017&lt;/a&gt; or looked over
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga/blob/master/doc/orconf17.pdf&quot;&gt;my slides&lt;/a&gt;.
-It only seems fitting that I should share it with my readers
-&lt;a href=&quot;http://zipcpu.com/&quot;&gt;here&lt;/a&gt; as well.&lt;/p&gt;
-
-&lt;p&gt;Today, therefore, I’d like to discuss why I created
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;, and some of the problems with
-the alternatives.  I’ll briefly discuss the goals of
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;, and the license it is released
-under.  When done, I’ll discuss a &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo&quot;&gt;new
-project&lt;/a&gt; I just created based upon 
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;, which I’m hoping to use in the
-future to explain how
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; works.&lt;/p&gt;
-
-&lt;h2 id=&quot;why-autofpga--the-backstory&quot;&gt;Why AutoFPGA?  The backstory&lt;/h2&gt;
-
-&lt;p&gt;I started working on
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-after creating several independent
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; based projects, and getting
-annoyed that it felt like I kept rebuilding the wheel.  Each project needed
-to have a bus designed for it, it needed to have interrupts defined and
-assigned, peripherals needed to be integrated, and all these things changed
-from project to project.&lt;/p&gt;
-
-&lt;p&gt;Perhaps an overview of these projects might help make this clear.&lt;/p&gt;
-
-&lt;p&gt;The first &lt;a href=&quot;/doc/wbspec_b4.pdf&quot;&gt;wishbone&lt;/a&gt; based project I
-worked on was based around &lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt;’s
-&lt;a href=&quot;https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/&quot;&gt;Basys3&lt;/a&gt;
-board.  You can see the basic outline of the project in Fig 1, from before
-I added the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; to it.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1: Basys 3 design&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/basys3.svg&quot; alt=&quot;Basys3 Design outline&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;My purpose was to learn about how to do hardware design &lt;em&gt;on my own&lt;/em&gt;, without
-the office support team that I had when I first started learning
-hardware design.  You know, the difference between relying on the experience
-of other members of your team, versus needing to have that experience yourself?&lt;/p&gt;
-
-&lt;p&gt;Since it was my first design as part of
-&lt;a href=&quot;/about/gisselquist-technology.html&quot;&gt;Gisselquist Technology&lt;/a&gt;,
-there were a lot of new parts and pieces.  To highlight this new work, I’ve
-outlined it in blue within Fig 1 above.  Basically everything was new.&lt;/p&gt;
-
-&lt;p&gt;It was on the
-&lt;a href=&quot;https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/&quot;&gt;Basys3&lt;/a&gt;
-that I first built a
-&lt;a href=&quot;https://opencores.org/project,qspiflash&quot;&gt;flash controller&lt;/a&gt;,
-a &lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;UART&lt;/a&gt;, a VGA controller, and much more.
-Eventually, I built the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-on the
-&lt;a href=&quot;https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/&quot;&gt;Basys3&lt;/a&gt;,
-even though it’s not shown in Fig 1.&lt;/p&gt;
-
-&lt;p&gt;However, I wanted to try working on a
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc&quot;&gt;project&lt;/a&gt; that required an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-with a small form factor.  Previous designs I had worked on involved both a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
-and an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-working together, and I was curious to know if I could do all of the work
-within a bigger
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;I considered the
-&lt;a href=&quot;https://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module&quot;&gt;CMod S6&lt;/a&gt;,
-but ultimately chose to try
-&lt;a href=&quot;http://www.xess.com&quot;&gt;Xess.com&lt;/a&gt;’s
-&lt;a href=&quot;http://www.xess.com/shop/product/xula2-lx25&quot;&gt;XuLA2-LX25&lt;/a&gt;
-board. (I bought the &lt;a href=&quot;https://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module&quot;&gt;CMod
-S6&lt;/a&gt;
-later.)  The &lt;a href=&quot;http://www.xess.com/shop/product/xula2-lx25&quot;&gt;XuLA2-LX25&lt;/a&gt;
-had more capability, more logic within its
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
-had an &lt;a href=&quot;https://en.wikipedia.org/wiki/Secure_Digital&quot;&gt;SD card&lt;/a&gt; socket, and
-even &lt;a href=&quot;https://en.wikipedia.org/wiki/Synchronous_dynamic_random-access_memory&quot;&gt;SDRAM
-memory&lt;/a&gt;.
-In the end,
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc&quot;&gt;the design&lt;/a&gt; looked something like Fig 2.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2: XuLA2 LX25 SoC Design&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xula.svg&quot; alt=&quot;XuLA2-LX25 SoC Design outline&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;You can still find the &lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc&quot;&gt;project
-here&lt;/a&gt;, should you be interested in it.
-It does contain an
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/sdspi.v&quot;&gt;SD-Card controller&lt;/a&gt;,
-and an &lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/wbsdram.v&quot;&gt;SDRAM
-controller&lt;/a&gt;.
-You can see the other components of the design in Fig 2 above.
-It was the first full project that I released under an open-source license.
-(Unfortunately, it’s poorly documented, despite documentation existing for all
-the components.)&lt;/p&gt;
-
-&lt;p&gt;The good news was that, when building the
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc&quot;&gt;XuLA project&lt;/a&gt;, I
-was able to re-use a lot of the components I had initially built for
-my &lt;a href=&quot;https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/&quot;&gt;Basys3&lt;/a&gt;.  Still, looking at the amount of stuff
-in blue, there was still a lot of work involved in building the new design.&lt;/p&gt;
-
-&lt;p&gt;I also decided to toy around with the idea of seeing if I could
-“broadcast” on a local &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_modulation&quot;&gt;FM&lt;/a&gt;
-channel using the board, as I had &lt;a href=&quot;https://www.raspberrypi.org/magpi/raspberry-pi-fm-transmitter&quot;&gt;seen a friend
-do&lt;/a&gt; with
-his &lt;a href=&quot;https://www.raspberrypi.org/&quot;&gt;Raspberry Pi&lt;/a&gt;.  (It’s always fun to one-up
-a &lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt; developer with
-your &lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-design.) So, I created an
-&lt;a href=&quot;https://github.com/ZipCPU/wbfmtx&quot;&gt;WB FM transmitter hack&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;While the &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_modulation&quot;&gt;FM&lt;/a&gt; transmission
-approach worked like a charm, integrating it into
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc&quot;&gt;the project&lt;/a&gt; on
-a whim and then taking it out later was pretty annoying.  There was a lot
-of work involved, and several files that needed to be changed, and did I get
-it all done properly?  I think you get the idea.  If that wasn’t bad enough,
-what if I wanted to try the design again later, or demonstrate it for others?&lt;/p&gt;
-
-&lt;p&gt;When it was time to move forward with my next design, I wanted to try building
-something in an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
-logic limited environment–just to prove that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-would work on one of the &lt;em&gt;small architectures&lt;/em&gt; it had been built for.
-Could it really fit in the smallest
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-development board I could find?  So, I bought a &lt;a href=&quot;https://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module&quot;&gt;CMod
-S6&lt;/a&gt;
-featuring a
-Spartan 6LX4–the smallest
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-that &lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt; sells in its the Spartan 6 line.
-The challenge with this design was to make something &lt;em&gt;small&lt;/em&gt;.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3: S6-SoC Design&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/s6soc.svg&quot; alt=&quot;Outline of the S6SoC&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;For &lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;this project&lt;/a&gt;, I was able to reuse a lot
-of the components I had already built.  Looking in Fig 3, you’ll see only a
-small amount of development outlined in blue.  The biggest challenge to the
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;design&lt;/a&gt; was both building the bus logic, and
-keeping everything small.&lt;/p&gt;
-
-&lt;p&gt;This was also the first
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;project&lt;/a&gt; I ever built with time-slicing,
-but that’s another story.&lt;/p&gt;
-
-&lt;p&gt;Since I had never worked with
-&lt;a href=&quot;https://opencores.org/project,wbddr3&quot;&gt;DDR3 SDRAM&lt;/a&gt; before,
-I chose to work with
-&lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digitlent&lt;/a&gt;’s
-&lt;a href=&quot;https://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists/&quot;&gt;Arty&lt;/a&gt;
-for my next project so that I might learn about it.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4: OpenArty Design Overview&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/openarty.svg&quot; alt=&quot;Outline of the S6SoC&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The majority of the new work in this design was for the ethernet, the
-&lt;a href=&quot;https://opencores.org/project,wbddr3&quot;&gt;DDR3 SDRAM&lt;/a&gt; controller,
-the &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/wboled.v&quot;&gt;OLEDrgb&lt;/a&gt;,
-and the &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/rtl/busmaster.v&quot;&gt;bus&lt;/a&gt;
-(&lt;em&gt;again&lt;/em&gt;).  (Eventually, I had to shelve
-&lt;a href=&quot;https://opencores.org/project,wbddr3&quot;&gt;DDR3 SDRAM&lt;/a&gt; controller, choosing instead
-to use a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip&quot;&gt;Wishbone to AXI4 bridge&lt;/a&gt;.
-There was also a lot of work to raise the clock speed to 200MHz, but since
-the &lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt; MIG core could only run at 82MHz on the
-&lt;a href=&quot;https://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists/&quot;&gt;Arty&lt;/a&gt;,
-this work was shelved.)&lt;/p&gt;
-
-&lt;p&gt;When it came time to build an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/HDMI&quot;&gt;HDMI video&lt;/a&gt;
-processor, I chose to use the
-&lt;a href=&quot;https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications/&quot;&gt;Nexys Video&lt;/a&gt;.
-By this point in time, I had finally had enough of rebuilding the wheel on
-every design.&lt;/p&gt;
-
-&lt;p&gt;For every design up until that point, I had &lt;em&gt;hand-crafted&lt;/em&gt; an interconnect to
-connect all the components into the design.  (This is the horizontal blue line
-in each of the figures above.)  This interconnect would connect
-components to an internal &lt;a href=&quot;/doc/wbspec_b4.pdf&quot;&gt;Wishbone
-bus&lt;/a&gt;, and it would connect interrupts
-together from the various peripheral components to one of a couple of interrupt
-controllers.  You can see examples of my interconnects for the &lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/busmaster.v&quot;&gt;XuLA2-LX25
-here&lt;/a&gt;,
-the &lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/busmaster.v&quot;&gt;CMod S6 here&lt;/a&gt;,
-and the &lt;a href=&quot;https://github.com/ZipCPU/openarty/blob/master/busmaster.v&quot;&gt;Arty here&lt;/a&gt;.
-Addresses needed to be assigned, interrupts needed to be assigned,
-they both needed to be documented, and these things were just taking too much
-of my time.&lt;/p&gt;
-
-&lt;p&gt;To make matters worse, anytime I adjusted the number of addresses a specific
-peripheral might require, I might need to adjust its location in the address
-space I was creating.  This made for a lot of work.  As you may recall, I
-like to access my designs via a &lt;a href=&quot;/blog/2017/06/16/dbg-bus/forest.html&quot;&gt;bus based external controller from
-software&lt;/a&gt;,
-and that &lt;a href=&quot;/blog/2017/06/29/sw-dbg-interface.html&quot;&gt;software needs to know where things are located on the
-bus&lt;/a&gt;.
-The &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; also needs to know not only
-where things are located on the bus, but &lt;em&gt;if&lt;/em&gt; particular peripherals are a
-part of the design or not.&lt;/p&gt;
-
-&lt;p&gt;I’ve already discussed how annoying this was when (temporarily) integrating
-the &lt;a href=&quot;https://github.com/ZipCPU/wbfmtx&quot;&gt;FM transmitter hack&lt;/a&gt; into my
-&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc&quot;&gt;XuLA2-LX25 SoC design&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The need for a reconfiguration assistant also came up when I was working on my
-&lt;a href=&quot;https://en.wikipedia.org/wiki/HDMI&quot;&gt;HDMI video&lt;/a&gt; design.  At the time, I was
-struggling to understand what was going on within my (broken)
-&lt;a href=&quot;https://en.wikipedia.org/wiki/HDMI&quot;&gt;HDMI video&lt;/a&gt; stream.  I had decided that
-I needed to capture some of the video stream to block RAM via a
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt;, after which I was going to
-read the results back to find out what was going wrong with my design.  The
-problem with this was that video is a memory hog.  Therefore, my
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;wishbone scope&lt;/a&gt; needed a large block RAM.
-This meant that I needed to adjust the size of the block RAM that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-was using.  This necessitated changing the bus interconnect, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; loader, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/board/board.ld&quot;&gt;linker script&lt;/a&gt;,
-the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/main_tb.cpp&quot;&gt;simulation
-driver&lt;/a&gt;
-that will load the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-into simulated memory, and more—and all of this just to
-get the results of a one-time Video capture test.&lt;/p&gt;
-
-&lt;p&gt;This was why I wanted a capability like
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;.
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; simplifies the number of
-changes that need to be made to a design when reconfiguring it, working
-like a secretary (not a designer) to automatically connect things together,
-and then let you know what it did.&lt;/p&gt;
-
-&lt;h2 id=&quot;lessons-from-other-aggregators&quot;&gt;Lessons from Other Aggregators&lt;/h2&gt;
-
-&lt;p&gt;I think &lt;a href=&quot;/blog/2017/05/17/welcome.html&quot;&gt;I’ve mentioned that I’ve spent a lot of time answering
-questions&lt;/a&gt; on
-&lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt;’s
-&lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;forums&lt;/a&gt;.
-Many students will come to the &lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;forum&lt;/a&gt;
-declaring that they want to build a design
-in &lt;em&gt;&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt;&lt;/em&gt;,
-but what they really mean is that they want to build a design using the
-graphical design method
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt; supports.
-Interacting with these individuals has given me a lot of insight into the
-problems many students are struggling with as they work to create (and debug)
-their own designs.
-From my standpoint, it seems like the biggest problem these new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-students are struggling with &lt;em&gt;is&lt;/em&gt; the graphical design flow that they are so
-eager to learn.&lt;/p&gt;
-
-&lt;p&gt;Why is this?&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;The design flow &lt;em&gt;hides&lt;/em&gt; a lot of configuration detail.  It allows you to
-connect blocks together, but yet each block needs a lot of internal
-configuration that isn’t immediately visible once configured.  It takes a
-bit of digging to even get at this configuration information.&lt;/p&gt;
-
-    &lt;p&gt;As an example, I just recently helped one individual who was struggling to
-get his &lt;a href=&quot;https://en.wikipedia.org/wiki/HDMI&quot;&gt;HDMI video&lt;/a&gt; data lined up with
-his clock.  (He didn’t realize this was his problem until it was fixed.)
-The particular configurations necessary were hidden within both
-the SelectIO wizard and the clocking wizard, but neither wizard made the
-users choices available upon a cursory view of the project.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The design flows aren’t textual.  You can’t do a “diff” between two designs.&lt;/p&gt;
-
-    &lt;p&gt;This makes it hard to answer the question of “how is my design different
-from the example/reference design.”&lt;/p&gt;
-
-    &lt;p&gt;Indeed, I was actually rather surprised, when I
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga/blob/master/doc/orconf17.pdf&quot;&gt;presented&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-at &lt;a href=&quot;https://orconf.org&quot;&gt;ORCONF&lt;/a&gt; this year
-that I got cheers when I declared the whole processing flow to be
-“textual”, and said that you could run it from within a
-&lt;a href=&quot;https://www.gnu.org/software/make/&quot;&gt;Makefile&lt;/a&gt;.  (The same audience groaned
-during another presentation, when that presenter explained that his tool
-&lt;em&gt;only&lt;/em&gt; had a &lt;a href=&quot;https://en.wikipedia.org/wiki/Graphical_user_interface&quot;&gt;Graphical User Interface
-(GUI)&lt;/a&gt;.)&lt;/p&gt;
-
-    &lt;p&gt;I guess I hadn’t realized how much of a drag many of the modern graphical
-tools were becoming to the professional designer.
-This may be because
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Graphical_user_interface&quot;&gt;GUI&lt;/a&gt;’s tend to
-start up slowly.  It may be because
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Graphical_user_interface&quot;&gt;GUI&lt;/a&gt;’s tend to
-limit your design options to the
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/7/13&quot;&gt;road most people travel upon&lt;/a&gt;.
-However, for me the problem is twofold:  First, a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Graphical_user_interface&quot;&gt;GUI&lt;/a&gt;
-forces me to slow down and use a mouse.  Second, building a design can take
-a lot of work: I like the option of using
-&lt;a href=&quot;https://www.gnu.org/software/make/&quot;&gt;make&lt;/a&gt; to build &lt;em&gt;only&lt;/em&gt; those portions
-of the design that have changed.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;It isn’t clear how to place a scope or a probe into such a design, to see
-and understand what is going on within it.  For example, if you have
-component &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; connected to component &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt;, and the output of component &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt;
-is somehow wrong, how shall you know which of the two is
-misconfigured?&lt;/p&gt;
-
-    &lt;p&gt;Going back to the individual struggling to get
-&lt;a href=&quot;https://en.wikipedia.org/wiki/HDMI&quot;&gt;HDMI video&lt;/a&gt; working, he didn’t have
-any clear locations within his design where he could &lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;create a tap and
-see the problem&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;Sure, he could examine some wires via
-&lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt;’s
-&lt;a href=&quot;https://www.xilinx.com/products/intellectual-property/ila.html&quot;&gt;ILA&lt;/a&gt;,
-but what if you need to create an ad-hoc computer program to comprehend
-the output of the scope?  It wasn’t clear how to do this with the
-proprietary
-&lt;a href=&quot;https://www.xilinx.com/products/intellectual-property/ila.html&quot;&gt;ILA&lt;/a&gt;.
-Without it, it wasn’t clear how to identify where in the
-processing chain the problem was at.&lt;/p&gt;
-
-    &lt;p&gt;This, by the way, is one of the reasons that Open Source
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scopes&lt;/a&gt; are so necessary: their measured
-output values can easily be ingested into your own specialized debugging
-software to be processed as you see fit.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;At one time, when I asked some other users about graphical design methods,
-an online acquaintance noted that there doesn’t seem to be any way to “take
-the training wheels off” of these methods, so as to be able to dig down
-into the nuts and bolts of a design once you were ready to do so.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Finally, the &lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt; toolchain in particular has
-created a horrendous problem for 
-&lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt;’s support staff, in that every
-new version of
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt; breaks
-their demonstration projects.&lt;/p&gt;
-
-    &lt;p&gt;I’m not sure if this is because they rebuild or reconfigure their component
-libraries from  one version to the next, or if it is because they rebuild
-their TCL scripting interface, or what.  Indeed, I’ve
-struggled with the problem myself when I tried rebuilding my
-&lt;a href=&quot;https://github.com/ZipCPU/openarty&quot;&gt;OpenArty&lt;/a&gt; design with a newer version
-of &lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt;.
-The result of my effort was an error so obscure that not even the
-&lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt; support staff on &lt;a href=&quot;https://forums.xilinx.com&quot;&gt;their
-forum&lt;/a&gt; could identify.  (This is why you won’t
-find any of the
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt;
-output files/products in the
-&lt;a href=&quot;https://github.com/ZipCPU/openarty&quot;&gt;OpenArty&lt;/a&gt; repository.)&lt;/p&gt;
-
-    &lt;p&gt;As a result, &lt;a href=&quot;/digilent/2017/05/18/most-common-digilent-support-requests.html&quot;&gt;I watch students&lt;/a&gt;
-on the &lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt;
-&lt;a href=&quot;https://forum.digilentinc.com&quot;&gt;forum&lt;/a&gt; struggling to build the example
-designs provided for them unless they have the exact same version of
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt;.
-Indeed, telling the student which version of
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt; to use
-to build an example/demo is a &lt;a href=&quot;/digilent/2017/05/18/most-common-digilent-support-requests.html&quot;&gt;common Digilent support request
-response&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;Wouldn’t you rather be able to separate your component library updates
-from your tool updates, so that what works with one tool will work
-with others?&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;All of this leads me to the conclusion that, if I wanted to create an
-alternative, it would need to be OpenSource, and it would need to not take
-any of the design decisions away from the designer: all of the Verilog files
-would need to be available for view.&lt;/p&gt;
-
-&lt;p&gt;Indeed, I wanted something that would generate Verilog (and c++, and Make)
-project files that I could then inspect and understand–not something that
-would hide details that would become difficult to debug later.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;Any design flow or tool suite that hides “useless” or “irrelevant” details
-will also hide the location of your bug.  (&lt;a href=&quot;https://twitter.com/zipcpu&quot;&gt;ZipCPU tweet&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;h2 id=&quot;autofpgas-design-goals&quot;&gt;AutoFPGA’s Design Goals&lt;/h2&gt;
-
-&lt;p&gt;My goal for
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-was simple: to be able to run
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-with a list of peripherals, and have it automatically connect those
-peripherals together in a manner prescribed by their configuration files.
-Indeed, if you look in an &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo/blob/master/auto-data/Makefile&quot;&gt;example
-Makefile&lt;/a&gt;
-that calls
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;,
-you’ll find a line that just calls
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-with a list of components.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;autofpga global.txt bkram.txt buserr.txt clock.txt hexbus.txt		&lt;span class=&quot;se&quot;&gt;\&lt;/span&gt;
-	fixdata.txt pwrcount.txt rawreg.txt simhalt.txt	version.txt spio.txt&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;“&lt;a href=&quot;https://www.gnu.org/software/make/&quot;&gt;Make&lt;/a&gt;“able&lt;/p&gt;
-
-    &lt;p&gt;To keep things simple, I’d like to type
-“&lt;a href=&quot;https://www.gnu.org/software/make&quot;&gt;make&lt;/a&gt;” in a &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo/blob/master/Makefile&quot;&gt;top level
-directory&lt;/a&gt;,
-have &lt;a href=&quot;https://www.gnu.org/software/make&quot;&gt;make&lt;/a&gt;
-recurse as necessary into any sub-directories to process &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo/tree/master/auto-data/&quot;&gt;component
-configuration
-files&lt;/a&gt;, build
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo/tree/master/auto-generated/&quot;&gt;design files&lt;/a&gt;,
-assemble those files together, and build a project all from one
-&lt;a href=&quot;https://www.gnu.org/software/make&quot;&gt;make&lt;/a&gt; command.&lt;/p&gt;
-
-    &lt;p&gt;Okay, so … I don’t know how to do this with the proprietary vendor based
-tools (yet), and I don’t want to use a broken Tcl toolflow, but I do know
-how to do this much with both
-&lt;a href=&quot;http://www.clifford.at/yosys/&quot;&gt;yosys&lt;/a&gt;
-and
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;(No, I’m not saying that Tcl is broken, but rather that many of the tools
-that use it are–for the reasons discussed above.)&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;No new language&lt;/p&gt;
-
-    &lt;p&gt;Further, I don’t really want to create a new language for component
-interaction and connection.  While I understand that other tools exist,
-such as &lt;a href=&quot;https://en.wikipedia.org/wiki/IP-XACT&quot;&gt;IP-XACT&lt;/a&gt;,
-&lt;a href=&quot;https://myhdl.org&quot;&gt;MyHDL&lt;/a&gt;, or
-&lt;a href=&quot;https://github.com/m-labs/migen&quot;&gt;Migen&lt;/a&gt;, I didn’t want to require the
-developer to learn a knew language (XML, Python,
-&lt;a href=&quot;https://github.com/m-labs/migen/blob/master/fhdl.rst&quot;&gt;FHDL&lt;/a&gt;, etc.)
-in order to interact with
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;.  I also didn’t want to build
-a compiler.  I wanted
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; to be a
-product that I could use to create a production system, and I
-didn’t want to slow down too much to get there.&lt;/p&gt;
-
-    &lt;p&gt;For this reason, 
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; is primarily a
-Copy and Paste utility.  The configuration files will identify what
-things need to be copied and pasted where to create the desired output
-files.  As an example, a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/auto-data/flash.txt&quot;&gt;Quad SPI flash
-component&lt;/a&gt;
-doesn’t just need to connect to a
-&lt;a href=&quot;/doc/wbspec_b4.pdf&quot;&gt;wishbone bus&lt;/a&gt;, it also needs a little
-bit of tri-state code inserted at the top design level.  (It’s actually worse:
-since the flash clock line is shared with the load circuitry, a special
-&lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt; &lt;code class=&quot;highlighter-rouge&quot;&gt;STARTUPE2&lt;/code&gt; component is often required
-at the top design level as
-well.)&lt;/p&gt;
-
-    &lt;p&gt;I’ll need to leave it open for debate as to whether or not I created a
-“new language”, since the configuration files are neither Verilog nor are
-they C++, and they are definitely not Python.  Instead, the files consist
-of a simple series of “@KEY=VALUE” pairs, where the &lt;code class=&quot;highlighter-rouge&quot;&gt;VALUE&lt;/code&gt;s can take
-multiple lines–often containing pieces of Verilog or C++ code.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;No hidden design components&lt;/p&gt;
-
-    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; just creates text files.
-Since 
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; is primarily a copy and
-paste utility, comments within the 
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; configuration files will just
-get copied into their respective places.&lt;/p&gt;
-
-    &lt;p&gt;What this means is, when you have a problem with the design of one of your
-components, you can look back into that components configuration file and
-see what got copied and adjust it.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;While I like to think that
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-has met all of these goals and more, I’ll leave it to you and time to be the
-ultimate judge.&lt;/p&gt;
-
-&lt;h2 id=&quot;license&quot;&gt;License&lt;/h2&gt;
-
-&lt;p&gt;If you are wondering if you can legally use
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; for your project, the answer is
-that you can.  &lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; is a software
-program licensed under the
-&lt;a href=&quot;https://www.gnu.org/licenses/gpl.html&quot;&gt;GPLv3&lt;/a&gt;.  If you make changes to it,
-or improve it, I would love to have those changes returned to the
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; repository for others to use.&lt;/p&gt;
-
-&lt;p&gt;This license doesn’t cover &lt;em&gt;your&lt;/em&gt; intellectual property, only the
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; program itself.  Indeed, I
-consider &lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-to be a piece of software similar to a compiler.  As a result,
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; asserts no particular license
-on the files it creates, or the projects that use it.&lt;/p&gt;
-
-&lt;p&gt;Going one step further, all of my
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; projects specify their own
-license.  What I mean is that I require
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; created design files to have
-a license statement within them.  The license statement chosen if specified
-by the global &lt;code class=&quot;highlighter-rouge&quot;&gt;@LEGAL&lt;/code&gt; tag, such as you might find in one of my
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo/blob/master/auto-data/global.txt&quot;&gt;global configuration file&lt;/a&gt;s.
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; then copies &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo/blob/master/auto-data/legalgen.txt&quot;&gt;this
-license&lt;/a&gt;
-into the files it generates–adjusting the filename and project name as
-appropriate.  Hence while &lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-is released under &lt;a href=&quot;https://www.gnu.org/licenses/gpl.html&quot;&gt;GPLv3&lt;/a&gt;, I can choose
-to release (or not) any project that uses it.  Feel free to adjust the &lt;code class=&quot;highlighter-rouge&quot;&gt;@LEGAL&lt;/code&gt;
-tag to reference the license appropriate for your project.&lt;/p&gt;
-
-&lt;h2 id=&quot;a-simple-autofpga-design&quot;&gt;A Simple AutoFPGA Design&lt;/h2&gt;
-
-&lt;p&gt;Given all of that as background, I’d like to spend some time introducing
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;
-and discussing how to add (or remove) peripherals to(/from) a project.
-I’ve created a new project, 
-an &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo&quot;&gt;AutoFPGA Demo&lt;/a&gt;, which contains
-a series of simple peripherals that can easily become a part of any project
-using &lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;.  This should be
-simple enough for any new student to learn how to build and integrate
-components together using
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;I have more complicated demonstrations as well, such as the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt; project.
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt; contains a basic
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;, together with some simple
-peripherals and several bus structures.  Once we exhaust the lessons from the
-basic &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo&quot;&gt;AutoFPGA Demo&lt;/a&gt; project,
-we may turn there for some more examples to draw demonstrations from.&lt;/p&gt;
-
-&lt;p&gt;We’ll use &lt;a href=&quot;https://github.com/ZipCPU/autofpga-demo&quot;&gt;this example project&lt;/a&gt;
-project, as a demonstration over the next couple of posts, showing what can be
-done with &lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;.&lt;/p&gt;
-
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;And his disciples asked him, saying, 'Master, who did sin, this man, or his parents, that he was born blind?'&lt;/em&gt;</description>
-        <pubDate>Thu, 05 Oct 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/zipcpu/2017/10/05/autofpga-intro.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/zipcpu/2017/10/05/autofpga-intro.html</guid>
         
         
         <category>zipcpu</category>
