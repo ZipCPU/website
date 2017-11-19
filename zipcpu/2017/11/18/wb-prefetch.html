@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a prefetch module for the ZipCPU</title>
+  <meta name="description" content="Fig 1: Fundamental CPU loop">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/zipcpu/2017/11/18/wb-prefetch.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a prefetch module for the ZipCPU</h1>
+    <p class="post-meta"><time datetime="2017-11-18T00:00:00-05:00" itemprop="datePublished">Nov 18, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <table style="float: right"><caption>Fig 1: Fundamental CPU loop</caption><tr><td><img src="/img/cpu-basic-loop.svg" alt="CPU Loop: Read instruction, do instruction, repeat" width="240" /></td></tr></table>
+
+<p>At its most basic level, any
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+works by fetching instructions from memory,
+acting upon those instructions, and repeating the process over and over
+again as shown in Fig 1.  The <a href="/about/zipcpu.html">ZipCPU</a>
+is no different.  It also needs to fetch instructions from memory and then act
+upon them in a tight loop.</p>
+
+<p>However, while the <a href="/about/zipcpu.html">ZipCPU</a> accomplishes
+this same basic loop, the
+<a href="/zipcpu/2017/08/23/cpu-pipeline">pipelining</a>
+within the <a href="/about/zipcpu.html">CPU</a> might render these steps
+a touch more difficult to recognize.  Indeed, the
+<a href="/about/zipcpu.html">ZipCPU</a> splits up the “do-instruction”
+into multiple pipeline steps,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">while (!halted)
+	Fetch instruction
+	Decode instruction
+	Read operand registers
+	Do instruction
+	Write results to registers</code></pre></figure>
+
+<p>as illustrated in Fig 2.</p>
+
+<table style="float: right"><caption>Fig 2: The ZipCPU Pipeline Structure</caption><tr><td><img src="/img/zipcpu.png" alt="ZipCPU Pipeline Structurre" width="380" /></td></tr></table>
+
+<p>We’ve <a href="/zipcpu/2017/08/11/simple-alu.html">already discussed</a>
+how the <a href="/about/zipcpu.html">ZipCPU</a>
+handles the <em>do instruction</em> stage within its <a href="/zipcpu/2017/08/11/simple-alu.html">arithmetic logic
+unit</a>.
+We’ve also discussed how the
+<a href="/about/zipcpu.html">ZipCPU</a>
+handles the <a href="/zipcpu/2017/08/23/cpu-pipeline">signaling between its pipeline
+stages</a>.
+What we haven’t discussed is how the
+<a href="/about/zipcpu.html">ZipCPU</a>
+reads instructions from memory.  This is accomplished by the
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> unit.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> is that portion of a
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> that reads
+instructions from memory and presents those instructions to the rest of the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> for
+execution.  While today’s <a href="https://en.wikipedia.org/wiki/Prefetching">Wikipedia</a>
+author’s argue that there’s a difference between an instruction fetch, which
+gets the next instruction from memory, and a
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>, which fetches an
+instruction before it is needed, I’m going to equate the two terms under the
+single name <a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> for
+simplicity.  The result of this abuse of terminology will be that I can describe
+all instruction fetch modules with the same term, but also that this subtle
+difference in meaning will be lost.</p>
+
+<p>Using this common term, the
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> is a critical
+component of any <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+because the <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+can only run as fast as it has instructions.  A good
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>
+unit, therefore, is optimized to keep the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>’s
+pipeline filled with instructions.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> is so important to
+how the <a href="/about/zipcpu.html">ZipCPU</a> runs that the
+<a href="/about/zipcpu.html">ZipCPU</a> has had four
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>
+units over time.  The first of these,
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch.v</a>,
+simply fetches a single instruction and waits for the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+to ask for the next instruction.  This is the code we shall discuss below.
+The <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pipefetch.v">next prefetch
+version</a>
+tried to keep the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+pipeline full with memory requests while
+<a href="https://en.wikipedia.org/wiki/Cache_(computing)">caching</a>
+a window of memory.  This
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pipefetch.v">prefetch</a>
+has since been abandoned in favor of a more traditional
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">combined prefetch and instruction cache
+version</a>.
+(The <a href="https://en.wikipedia.org/wiki/Dhrystone">Dhrystone</a>
+benchmark was part of the motivation for this change.) The <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v">fourth
+version</a>,
+one that fetches two instructions at a time, was written
+recently for a <a href="https://github.com/ZipCPU/s6soc">low logic application</a>.
+It improves upon the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">simple
+prefetch</a>
+by fetching two instructions back to back.</p>
+
+<p>Today, though, we’re going to discuss the first of these
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>
+units–the one that fetches only a single instruction at a time.
+The <a href="/about/zipcpu.html">ZipCPU</a> can be caused to use this
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>
+routine by defining the <code class="highlighter-rouge">OPT_SINGLE_FETCH</code> option within the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/cpudefs.v">cpudefs.h</a>
+file.
+Going from this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">simple
+prefetch</a>
+to a <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">better
+prefetch</a>
+requires adding a
+<a href="https://en.wikipedia.org/wiki/Cache_(computing)">cache</a>
+and some other things–but it’s still built upon the basis of how to build a
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">single-instruction prefetch
+unit</a>
+in the first place.  For these reasons, the simple
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">single-instruction
+prefetch</a>
+is well worth studying and understanding.</p>
+
+<p>Further, since the
+<a href="/about/zipcpu.html">ZipCPU</a>’s
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> module is a
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone master</a>,
+this will be another opportunity to discuss how to build a
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone master</a>
+interface.  While the <a href="/zipcpu/2017/05/29/simple-wishbone.html">Wishbone slave
+interface</a>
+is fairly simple, the
+<a href="/blog/2017/06/08/simple-wb-master.html">master interface</a>
+can be a touch more complicated.  When we’re done, we’ll even
+<a href="/blog/2017/10/19/formal-intro.html">formally prove</a>
+that this interface works, thus showing you how to build a more generic
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone master</a>.
+(We presented another version of
+<a href="/blog/2017/06/08/simple-wb-master.html">how to build a Wishbone
+master</a>
+earlier, as part of our
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a>
+discussion.)</p>
+
+<h2 id="the-cpu-interface">The CPU Interface</h2>
+
+<p>Any <a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> module
+must support two interfaces: both an interface to memory, as well as
+an interface to the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>.
+Both of these interfaces are shown in Fig 3.</p>
+
+<table style="float: right"><caption>Fig 3: The two interfaces to a prefetch</caption><tr><td><img src="/img/prefetch-interface.svg" alt="A prefetch must support both an interface to a CPU and an interface to memory" width="380" /></td></tr></table>
+
+<p>We discussed the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone interface</a>
+at length in an earlier article.  Today, we’ll introduce the interface with the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>.
+If you remember our prior discussion on <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline
+strategies</a>,
+then you will probably recognize several examples of handshaking
+between pipeline stages as we go along.</p>
+
+<p>Internally, a
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+keeps track of the address of the next instruction in a register known as the
+<a href="https://en.wikipedia.org/wiki/Program_counter">program counter</a>.  This
+counter normally changes in a one-up fashion from one instruction to the next.
+The common exception to this rule is when a
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+takes place.  Such a
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+may be the result of a
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+instruction, a jump to an <a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt service routine
+(ISR)</a>,
+or even a <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+reset request.  In all of these examples, the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+needs to command a memory read from a brand-new address of the
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> unit.</p>
+
+<p>Well, not quite.  If you look through the
+<a href="/about/zipcpu.html">ZipCPU</a>’s
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">source code</a>,
+you’ll find the address of the “current” instruction wandering
+through the various pipeline stages as one of several registers:
+<code class="highlighter-rouge">pf_pc</code>, <code class="highlighter-rouge">pf_instruction_pc</code>,
+<code class="highlighter-rouge">dcd_pc</code>, <code class="highlighter-rouge">op_pc</code>, and <code class="highlighter-rouge">alu_pc</code>.  The actual register that stores the
+<a href="https://en.wikipedia.org/wiki/Program_counter">PC</a> upon instruction
+completion is either the <code class="highlighter-rouge">ipc</code> (supervisor 
+<a href="https://en.wikipedia.org/wiki/Program_counter">PC</a> register) or the
+<code class="highlighter-rouge">upc</code> (user <a href="https://en.wikipedia.org/wiki/Program_counter">PC</a> register).
+Inside the prefetch, the <code class="highlighter-rouge">pf_pc</code> is renamed as the 
+<a href="https://en.wikipedia.org/wiki/Program_counter">PC</a> address request, <code class="highlighter-rouge">i_pc</code>,
+and the address of the returned instruction, <code class="highlighter-rouge">o_pc</code>, is relabeled within
+the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+as <code class="highlighter-rouge">pf_instruction_pc</code>.</p>
+
+<table style="float: left"><caption>Fig 4: The Prefetch State Machine</caption><tr><td><img src="/img/prefetch-single-flowchart.svg" alt="The simple one instruction prefetch state diagram" width="320" /></td></tr></table>
+
+<p>From the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>’s
+side of this interaction, nothing begins until the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+raises the <code class="highlighter-rouge">i_new_pc</code> signal.  When this signal is valid, the address of
+the instruction that the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+wants is captured in the <code class="highlighter-rouge">i_pc</code> input.  The
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+must respond to this input by fetching the instruction from the memory
+address given by this <code class="highlighter-rouge">i_pc</code> input.</p>
+
+<p>Once the new instruction has been read, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+needs to do several things.  First, it places that new instruction in the
+<code class="highlighter-rouge">o_insn</code> output.  Second, it places the instruction’s address into the <code class="highlighter-rouge">o_pc</code>
+register.  Finally, it sets the <code class="highlighter-rouge">o_valid</code> flag to let the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+know that there’s a valid instruction ready for it.  This flag is part of
+a <a href="/zipcpu/2017/08/23/cpu-pipeline">simple handshake</a>
+with the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>.
+As a result, it needs to be held high until the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+also raises the <code class="highlighter-rouge">i_stall_n</code> line (a ready signal) to indicate that it is
+ready to read an instruction.</p>
+
+<p>Once <code class="highlighter-rouge">(o_valid)&amp;&amp;(i_stall_n)</code> are both true, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+needs to drop the <code class="highlighter-rouge">o_valid</code> signal and fetch the next instruction from the
+address given by <code class="highlighter-rouge">o_pc+1</code> (counting in 32-bit words).</p>
+
+<p>This continues until another
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+takes place.  When that happens, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+will communicate this to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+by raising the <code class="highlighter-rouge">i_new_pc</code> signal.  In response, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+will drop the <code class="highlighter-rouge">o_valid</code> line
+(even before <code class="highlighter-rouge">i_stall_n</code> is true), and fetch the next instruction and so the
+cycle continues.</p>
+
+<p>This is the basics of how this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">simple
+prefetch</a>
+works.  As with any
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+project, however, we’ll need to pay close attention to the details.</p>
+
+<p>For example, what happens when the
+<a href="/doc/wbspec_b4.pdf">Wishbone bus</a>
+returns an <a href="https://en.wikipedia.org/wiki/Bus_error">error</a>?
+Suppose, for example, that the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+tried to <a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+to a non-existent memory address.  In this case, the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+would return an <a href="https://en.wikipedia.org/wiki/Bus_error">error</a>, and so the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+needs to return everything as before, only in this case it also sets an
+<code class="highlighter-rouge">o_illegal</code> flag so that the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+can recognize and properly respond to the invalid instruction.</p>
+
+<p>Another corner case might seem more relevant for a
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>/<a href="https://en.wikipedia.org/wiki/Cache_(computing)">cache</a>
+interaction than <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this simple
+prefetch</a>,
+but it’s actually still relevant.  In this example, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+instructs (or is instructed) to clear its
+<a href="https://en.wikipedia.org/wiki/Cache_(computing)">cache</a>.
+It may be, for example, that the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+is halted and under the control of the debugger.  The debugger may have
+rewritten the memory the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+is about to execute–but the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+needs to know that the instruction that it has already read is no longer valid.
+This is the purpose of the <code class="highlighter-rouge">i_clear_cache</code> line for even this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">simple prefetch
+module</a>.
+When raised, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+is telling the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+that any instruction that has been read and is waiting for the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+to issue is invalid, and thus needs to be read again.</p>
+
+<p>Finally, what happens when the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+is given a new address while it is in the middle of requesting another
+address?  In that example, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+needs to abandon (abort) its current transaction and initiate a new read to
+get the newly requested address.</p>
+
+<p>These subtle details help to describe some of the more interesting cases when
+dealing with this (otherwise) <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">simple
+prefetch</a>.
+However, the operation is still simple enough that we might try to build
+it in a straightforward fashion–the topic of our next section.</p>
+
+<h2 id="initial-attempt">Initial Attempt</h2>
+
+<p>Now that we know how this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+module is supposed to interact with both the
+<a href="/zipcpu/2017/11/07/wb-formal.html">bus</a>
+and the rest of the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+let’s outline some of the detailed basics of how this might take place.</p>
+
+<p>The process starts out with the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+idle.  Similarly, on any reset request we’ll want to bring the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+back to this idle state again.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">initial	o_wb_cyc &lt;= 1'b0;
+initial	o_wb_stb &lt;= 1'b0;
+initial	o_valid &lt;= 1'b0;
+always @(posedge i_clk)
+if (i_reset)
+	o_wb_cyc &lt;= 1'b0;
+	o_wb_stb &lt;= 1'b0;
+	o_valid &lt;= 1'b0;</code></pre></figure>
+
+<p>Since these two lines qualify all of the other
+<a href="/zipcpu/2017/11/07/wb-formal.html">bus output lines</a>
+(prefixed herein with <code class="highlighter-rouge">o_wb_*</code>), all it takes to
+<a href="/zipcpu/2017/11/07/wb-formal.html">end a bus cycle</a>
+is to lower these two wires.</p>
+
+<p>What about any
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+transaction in process when this reset is received?  That was part of our
+discussion when we worked through a
+<a href="/zipcpu/2017/11/07/wb-formal.html">formal description</a>
+of the
+<a href="/doc/wbspec_b4.pdf">Wishbone bus</a>.
+Our conclusion, from that discussion, was that it is important
+to be able to abort a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+transaction at any stage in that transaction.  Were we in the middle of a
+transaction, the logic above would simply abort that transaction as we’ve
+discussed.</p>
+
+<p>The <code class="highlighter-rouge">o_valid</code> line initialized above isn’t part of the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">interaction</a>.
+As we discussed in the last section, this is the signal to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+that a valid instruction is ready to be read from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>.
+This signal also needs to be reset, along with the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">interaction</a>, so we
+reset the <code class="highlighter-rouge">o_valid</code> at the same time above.</p>
+
+<p>The next step is to recognize when a new transaction needs to begin.  There
+are three basic conditions indicating that we want to start a new
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">interaction</a>.
+The first is if the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+wants us to <a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+to a new address.  In this case, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a> will
+have raised the <code class="highlighter-rouge">i_new_pc</code> signal and placed the new address in the <code class="highlighter-rouge">i_pc</code>
+input.  A new transaction also needs to begin any time the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+accepts the instruction the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+presented to it.  This condition is indicated by both an instruction being
+valid, <code class="highlighter-rouge">o_valid</code>, at the same time the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+is not stalled, <code class="highlighter-rouge">i_stall_n</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">end else if (!o_wb_cyc)
+begin
+	if ((i_new_pc)||((o_valid)&amp;&amp;(i_stall_n)))
+	begin
+		o_wb_cyc &lt;= 1'b1;
+		o_wb_stb &lt;= 1'b1;</code></pre></figure>
+
+<p>The address appropriate for this new
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">request</a>.
+depends upon the reason for the request.  If the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+gives us a new instruction address, indicated by <code class="highlighter-rouge">i_new_pc</code>, then that
+address is the memory address we need to fetch.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		if (i_new_pc)
+			o_wb_addr &lt;= i_pc;</code></pre></figure>
+
+<p>On the other hand, if the last instruction was just accepted, then we want to
+grab the next instruction–found one address later.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		else if ((o_valid)&amp;&amp;(i_stall_n))
+			o_wb_addr &lt;= o_wb_addr+1'b1;</code></pre></figure>
+
+<p>In each of these cases, the output instruction needs to be marked as
+no longer valid.  If this were a
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>,
+every other stage in the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+<a href="/zipcpu/2017/08/23/cpu-pipeline">pipeline</a>.
+would be marking their data as invalid as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		o_valid &lt;= 1'b0;
+	end</code></pre></figure>
+
+<p>The final section of this overview pseudocode discussion involves how the
+controller should respond while a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">interaction</a>
+is taking place.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">end else begin // if (o_wb_cyc)</code></pre></figure>
+
+<p>The first item to pay attention to during a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">transaction</a>
+is to insure that only one transaction request is issued.  (Other
+<a href="/about/zipcpu.html">ZipCPU</a>
+prefetches issue multiple requests in quick succession, <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this
+prefetch</a>
+only issues the one request at a time.)  From the
+<a href="/zipcpu/2017/11/07/wb-formal.html">bus definition</a>,
+we know that a transaction request has been accepted any time the master’s
+<code class="highlighter-rouge">STB</code> signal is high and the slave’s <code class="highlighter-rouge">STALL</code> signal is low, or
+<code class="highlighter-rouge">(o_wb_stb)&amp;&amp;(!i_wb_stall)</code>.  We can short-circuit this full test in this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">simple implementation</a>
+by just setting <code class="highlighter-rouge">o_wb_stb</code> low anytime <code class="highlighter-rouge">i_wb_stall</code> is
+low during a bus transaction.  Should <code class="highlighter-rouge">i_wb_stall</code> be low when <code class="highlighter-rouge">o_wb_stb</code>
+is already zero, then this statement will have no effect–as desired.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	if (!i_wb_stall)
+		o_wb_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>The second item to deal with is when to end our request.  In this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">single item</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone master</a>
+the transaction ends on the first
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+return.  Hence <code class="highlighter-rouge">o_wb_cyc</code> is returned to zero following any <code class="highlighter-rouge">i_wb_ack</code> signal
+from the memory slave peripheral.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	if (i_wb_ack)
+	begin
+		o_wb_cyc &lt;= 1'b0;</code></pre></figure>
+
+<p>On this same clock, we can set the value of the instruction, <code class="highlighter-rouge">o_insn</code>, to be
+sent to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+as well as the valid flag, <code class="highlighter-rouge">o_valid</code>, to indicate this instruction is valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		o_insn &lt;= i_wb_data;
+		o_valid &lt;= 1'b1;
+	end
+end</code></pre></figure>
+
+<p>This is the basic outline of how this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch
+module</a>
+works.  When we get into the details below, you will likely find them very
+similar to this discussion above.  However, because breaking this one
+giant “always” block into multiple processes can <a href="/blog/2017/06/12/minimizing-luts.html">reduce our logic
+requirements</a>,
+you may not necessarily recognize the code above in the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">code</a>
+presented below.</p>
+
+<p>You’ll also see another difference below, associated with having to deal with
+some of the subtle details of the corner cases–things you may not expect
+unless you’ve had your
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+fail because you haven’t dealt with them.  These will be the topic of
+the next section.</p>
+
+<h2 id="the-actual-prefetch-code">The Actual Prefetch Code</h2>
+
+<p>At this point, we’ve outlined how this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch
+module</a>
+needs to interact with both the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+and the <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>.
+We’ve also outlined the basics of the module we’d like to
+implement above.  The task left before us now is to finally implement the
+details of this module, and then to prove that it works below.  In other words,
+it’s now time to get specific about those corner cases.</p>
+
+<p>Since any
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+is a read-only structure, we’ll set the
+bus wires associated with writing to the bus to zeros, although only
+the <code class="highlighter-rouge">o_wb_we</code> signal will be relevant since <code class="highlighter-rouge">o_wb_data</code> is ignored unless
+we are within a write transaction and <code class="highlighter-rouge">(o_wb_stb)&amp;&amp;(o_wb_we)</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	o_wb_we = 1'b0;
+	assign	o_wb_data = 32'h0000;</code></pre></figure>
+
+<p>Having dealt with the constants, we can now
+turn our focus to the actual implementation of the logic
+above.  We’ll start with what’s left of the giant always block controlling
+the bus wires <code class="highlighter-rouge">o_wb_cyc</code> and <code class="highlighter-rouge">o_wb_stb</code>.  As before, we’ll start by
+initializing ourselves into an idle state.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	o_wb_cyc = 1'b0;
+	initial	o_wb_stb = 1'b0;</code></pre></figure>
+
+<p>Unlike before, we’ll also return to this idle state upon any bus
+acknowledgement or
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+These two signals need to be qualified by the <code class="highlighter-rouge">o_wb_cyc</code> line, since in our
+<a href="/zipcpu/2017/11/07/wb-formal.html">last wishbone discussion</a>,
+<a href="/zipcpu/2017/11/07/wb-formal.html">we discussed</a>
+how either the <code class="highlighter-rouge">i_wb_ack</code> or the <code class="highlighter-rouge">i_wb_err</code> signal might be true on the clock
+cycle after <code class="highlighter-rouge">o_wb_cyc</code> is dropped as part of an abort.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((i_reset)||((o_wb_cyc)&amp;&amp;((i_wb_ack)||(i_wb_err))))
+		begin
+			// End any bus cycle on a reset, or a return ACK
+			// or error.
+			o_wb_cyc &lt;= 1'b0;
+			o_wb_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>The next task is to start a new bus request.  There are several reasons for
+starting a new bus request:</p>
+
+<ol>
+  <li>
+    <p>If the last instruction was accepted, <em>and</em> it wasn’t the result of a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.</p>
+
+    <p>There should only be two ways out of a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+condition.</p>
+
+    <p>The first way out of a 
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+condition is by the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branching</a>
+to a new instruction.  Two examples will help illustrate this.  The
+first example would be if the pipeline has gotten ahead of the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+and read past the end of the memory device, but while the
+software program itself has not.  Perhaps the last item of memory
+is a <a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+statement and the software hasn’t gotten that far, even though the
+pipeline is beyond it.  The second example is that of a
+<a href="/about/zipcpu.html">CPU</a>
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+in response to an
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+condition.  This would be the case if the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+actually tried to execute the instruction at the address that caused the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+In this case, we’d get a new request for an instruction, on an
+<code class="highlighter-rouge">i_new_pc</code>, only the instruction address requested, <code class="highlighter-rouge">i_pc</code>, would be the
+address of the instruction error handler.</p>
+
+    <p>The second way out of a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+condition is via the <code class="highlighter-rouge">i_reset</code> signal above.</p>
+  </li>
+  <li>
+    <p>We’ll want to start a new transaction if the last transaction was aborted.
+In this case, we’ll use an <code class="highlighter-rouge">invalid</code> flag to indicate that the last
+bus transaction ended in an invalid manner—such as if the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+issued us an <code class="highlighter-rouge">i_new_pc</code> signal during a memory transaction.  In this
+case, the <code class="highlighter-rouge">invalid</code> flag is our memory that we need to start a new
+transaction to get that updated address.</p>
+  </li>
+  <li>
+    <p>We’ll also start a new transaction following any
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+to a new address, indicated by the <code class="highlighter-rouge">i_new_pc</code> signal.  This differs from
+the <code class="highlighter-rouge">invalid</code> version above in that this request may take place while
+the bus is already idle.</p>
+  </li>
+</ol>
+
+<p>In all three of these cases, a new
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">transaction</a>
+is initiated by raising both <code class="highlighter-rouge">o_wb_cyc</code> and <code class="highlighter-rouge">o_wb_stb</code> lines high.
+We’ll also need to adjust <code class="highlighter-rouge">o_wb_addr</code> at this time as well, but we’ll
+come back to that later as part of its own <code class="highlighter-rouge">always</code> block.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		end else if ((!o_wb_cyc)&amp;&amp;(
+				// 1.
+				((i_stalled_n)&amp;&amp;(!o_illegal))
+				// 2.
+				||(invalid)
+				// 3.
+				||(i_new_pc)))
+		begin
+			// Initiate a bus transaction
+			o_wb_cyc &lt;= 1'b1;
+			o_wb_stb &lt;= 1'b1;</code></pre></figure>
+
+<p>The next question is how to handle an ongoing
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">transaction</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		end else if (o_wb_cyc)
+		begin</code></pre></figure>
+
+<p>We already dealt with any
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">transaction</a>
+aborts due to
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>’s above in the
+reset logic, so that leaves only two items to deal with.  The first
+is dropping the strobe line once our request has been accepted,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			if (!i_wb_stall)
+				o_wb_stb &lt;= 1'b0;</code></pre></figure>
+
+<p>and the second is aborting the transaction any time a
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+request is received during the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">transaction</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			if (i_new_pc)
+			begin
+				o_wb_cyc &lt;= 1'b0;
+				o_wb_stb &lt;= 1'b0;
+			end
+		end</code></pre></figure>
+
+<p>In this latter case, <code class="highlighter-rouge">invalid</code> will be true on the next cycle to let us
+know that we need to restart our
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">transaction</a> with a
+new address.  Here’s the logic associated with letting us know that an
+aborted
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">transaction</a>
+needs to be restarted.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	invalid = 1'b0;
+	always @(posedge i_clk)
+		if ((i_reset)||(!o_wb_cyc))
+			invalid &lt;= 1'b0;
+		else if (i_new_pc)
+			invalid &lt;= 1'b1;</code></pre></figure>
+
+<p>The next value of interest is the address of the instruction we are
+interested in.  This address is set any time the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+issues a new address via <code class="highlighter-rouge">i_new_pc</code>.  In all other respects it is incremented
+any time a valid instruction is accepted by the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>–with
+the one exception to this choice
+being the case of an illegal instruction resulting from a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+In that case, the instruction address doesn’t change–and we don’t issue new
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">requests</a>
+either.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	o_wb_addr= 0;
+	always @(posedge i_clk)
+		if (i_new_pc)
+			o_wb_addr  &lt;= i_pc;
+		else if ((o_valid)&amp;&amp;(i_stalled_n)&amp;&amp;(!o_illegal))
+			o_wb_addr  &lt;= o_wb_addr + 1'b1;</code></pre></figure>
+
+<p>Since this is just a simple <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch
+module</a>,
+one that only returns a single instruction, we can re-use the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone address</a>
+lines, <code class="highlighter-rouge">o_wb_addr</code>, as instruction address lines when sending them to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	o_pc = o_wb_addr;</code></pre></figure>
+
+<p>As for the instruction passed to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+that’s one of the simpler things we need to do–especially since <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this
+prefetch</a>
+version only requests one instruction at a time.  We’ll set this value on any
+valid <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+return, found in the <code class="highlighter-rouge">i_wb_data</code> word, and indicated by both the fact that
+we are in a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+cycle (<code class="highlighter-rouge">o_wb_cyc</code> is high), and by the acknowledgement flag, <code class="highlighter-rouge">i_wb_ack</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((o_wb_cyc)&amp;&amp;(i_wb_ack))
+			o_insn &lt;= i_wb_data;</code></pre></figure>
+
+<p>The last step is to handle the two flags, <code class="highlighter-rouge">o_valid</code> and <code class="highlighter-rouge">o_illegal</code>, sent to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+to let it know if the instruction presented in the <code class="highlighter-rouge">o_insn</code> register is a valid
+instruction or not.</p>
+
+<p>Initially, the instruction wires will <em>always</em> be invalid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial o_valid   = 1'b0;
+	initial o_illegal = 1'b0;</code></pre></figure>
+
+<p>Likewise, following any reset,
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>,
+or clear cache request, we’ll need to mark the instruction as invalid as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((i_reset)||(i_new_pc)||(i_clear_cache))
+		begin
+			// ....
+			o_valid   &lt;= 1'b0;
+			o_illegal &lt;= 1'b0;</code></pre></figure>
+
+<p>We’ll also want to mark the instruction, <code class="highlighter-rouge">o_insn</code>, as valid immediately
+following any bus acknowledgement, <code class="highlighter-rouge">i_wb_ack</code>.  Since this acknowledgement flag
+is only valid during a bus cycle (and may accidentally show up after a bus
+cycle, as the result of an abort), we’ll have to check <code class="highlighter-rouge">o_wb_cyc</code> as well
+to know if we need to set this.</p>
+
+<p>Further, as we mentioned above, the <code class="highlighter-rouge">!o_illegal</code> signal is being used as an
+indicator that the result of the bus request is a valid instruction versus
+just being a valid response.  Hence, if this was the result of a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>,
+we need to set <code class="highlighter-rouge">o_illegal</code> at the same time we set <code class="highlighter-rouge">o_valid</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		end else if ((o_wb_cyc)&amp;&amp;((i_wb_ack)||(i_wb_err)))
+		begin
+			// ...
+			o_valid   &lt;= 1'b1;
+			o_illegal &lt;= ( i_wb_err);</code></pre></figure>
+
+<p>Once the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+accepts our instruction, that is once <code class="highlighter-rouge">(o_valid)&amp;&amp;(i_stalled_n)</code> are both
+true, then we need to clear the <code class="highlighter-rouge">o_valid</code> flag, lest the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+accidentally read the same instructions twice.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		end else if (i_stalled_n)
+		begin
+			// ---
+			o_valid &lt;= 1'b0;</code></pre></figure>
+
+<p>While you might be tempted to clear the <code class="highlighter-rouge">o_illegal</code> flag as well, doing so
+would be a mistake.  In particular, you want to keep the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+from trying to fetch, refetch, and refetch again, any response that was returned
+in <a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+Hence, we’ll leave <code class="highlighter-rouge">o_illegal</code> flag true following any
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>,
+and use it as a flag (above) to keep us from re-initiating a new
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">request</a>
+prior to a new <a href="https://en.wikipedia.org/wiki/Program_counter">PC</a>
+being given to us to recover from this error condition.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			// o_illegal &lt;= (!i_stalled_n);
+		end</code></pre></figure>
+
+<p>One item worth noting about the code above, is that the giant <code class="highlighter-rouge">always</code> blocks
+that remain only control a small number of signals.  The largest groups of
+signals within this design are associated with the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone address</a>,
+<code class="highlighter-rouge">o_wb_addr</code>, and the
+output instruction, <code class="highlighter-rouge">o_insn</code>.  These two groups of signals depend upon only
+a minimum number of inputs, helping to <a href="/blog/2017/06/12/minimizing-luts.html">keep our logic to a
+minimum</a>.  The
+registers that require complex logic, such as <code class="highlighter-rouge">o_wb_cyc</code>, <code class="highlighter-rouge">o_wb_stb</code>,
+<code class="highlighter-rouge">o_illegal</code> or even <code class="highlighter-rouge">o_valid</code>, are all single registers–minimizing the
+impact of any difficult logic on our overall core.</p>
+
+<h2 id="formal-verification">Formal Verification</h2>
+
+<p>Now that we know how this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch
+component</a>
+interacts with the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">ZipCPU</a>,
+and now that we’ve presented the how’s and the why’s of the logic within it,
+it’s now time to take a look at formally proving whether or not it does what
+we are expecting.  We’ll separate this section into four subsections below:
+<em>assumptions</em> about logic coming from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+<em>assumptions</em> about logic coming from the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>,
+<em>assertions</em> about logic controlling the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>,
+and then <em>assertions</em> about or logic used to communicate with the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+As before, the <a href="/blog/2017/10/19/formal-intro.html">basic rule of formal
+verification</a> remains:
+<em>assume properties of inputs, assert properties
+of outputs.</em></p>
+
+<h4 id="assumptions-about-logic-coming-from-the-cpu">Assumptions about logic coming from the CPU</h4>
+
+<p>There are four basic control lines coming from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+that the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+needs to interact with: the reset line, <code class="highlighter-rouge">i_reset</code>, the
+<a href="https://en.wikipedia.org/wiki/Branch_(computer_science)">branch</a>
+indicator line, <code class="highlighter-rouge">i_new_pc</code>, the request for us to clear our cache,
+<code class="highlighter-rouge">i_clear_cache</code>, and the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>’s
+ready (not stalled) line, <code class="highlighter-rouge">i_stall_n</code>.  The fifth input from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+<code class="highlighter-rouge">i_pc</code>, is only relevant when <code class="highlighter-rouge">i_new_pc</code> is valid.</p>
+
+<p>We’ll start out with a standard assumption: Everything begins in a reset
+state.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	`ASSUME(i_reset);</code></pre></figure>
+
+<p>You may remember the <code class="highlighter-rouge">ASSUME</code> macro from <a href="/blog/2017/10/19/formal-intro.html">my first experiences with
+formal methods</a>.  This
+macro is set to <code class="highlighter-rouge">assume</code> inputs from another part of the design only when
+we are tested in isolation, and to <code class="highlighter-rouge">assert</code> those same properties any time
+we are tested as a component of a larger interaction.  The macro itself
+is defined within the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+source code.</p>
+
+<p>Moving on, we also know that, following any reset request from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+the first thing the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+will do will send us an <code class="highlighter-rouge">i_new_pc</code> command–requesting a read from the
+reset address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(i_reset)))
+			`ASSUME(i_new_pc);</code></pre></figure>
+
+<p>The same is true of the <code class="highlighter-rouge">i_clear_cache</code> signal.  The
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+will <em>always</em> follow this signal by an <code class="highlighter-rouge">i_new_pc</code> request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(i_clear_cache)))
+			`ASSUME(i_new_pc);</code></pre></figure>
+
+<p>Now let’s look at the <code class="highlighter-rouge">i_stalled_n</code> signal.  This signal comes from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+and tells us when the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+is not stalled.  This is a handshake signal, much like the <code class="highlighter-rouge">!busy</code> signal
+we discussed when we discussed <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline
+strategies</a>.
+Hence, the only time this signal matters to us is when <code class="highlighter-rouge">o_valid</code> is true.  We
+can still constrain it however.</p>
+
+<p>The first constraint on this signal is that following any reset, the rest of the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+will be idle.  Stages beyond this one <em>cannot</em> be busy following a reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(i_reset)))
+			`ASSUME(i_stalled_n);</code></pre></figure>
+
+<p>The next constraint on this signal is that the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+cannot suddenly become stalled without being given an instruction.  Stalls
+only take place when there’s an instruction in the following stage that is
+taking more than one clock to execute–they can’t happen without an
+instruction.  Hence, if the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+wasn’t stalled on the last clock, <em>and</em> we didn’t pass the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+an instruction on the last clock, then it cannot be stalled on this clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(!o_valid))&amp;&amp;($past(i_stalled_n)))
+			`ASSUME(i_stalled_n);</code></pre></figure>
+
+<p>Our last criteria isn’t so much a characteristic of the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+but rather one required by the proof.  In order for induction to be successful,
+all of the various states need to be flushed within a given number of clocks.
+To make certain this happens, we’ll insist that the CPU can only be stalled
+for less than four clocks.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	localparam	F_CPU_DELAY = 4;</code></pre></figure>
+
+<p>In practice, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+can be stalled for much longer.  Divide instructions, for
+example, will stall the entire pipeline for 32+ clocks.  This is just about
+speeding things up enough so that the solver can prove a solution.</p>
+
+<p>To make this limit, we’ll first count the number of clocks we need to wait for
+the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+to be receptive to our instruction.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		// If no instruction is ready, then keep our counter at zero
+		if ((i_reset)||(!o_valid)||(i_stalled_n))
+			f_cpu_delay &lt;= 0;
+		else
+			// Otherwise, count the clocks the CPU takes to respond
+			f_cpu_delay &lt;= f_cpu_delay + 1'b1;</code></pre></figure>
+
+<p>Finally, we’ll assume that this number remains less than the
+parameterized (but fixed) delay above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		assume(f_cpu_delay &lt; F_CPU_DELAY);</code></pre></figure>
+
+<p>Further, we’ll caveat this last test so that it will only take place if the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+is being tested in isolation, and not require it any time the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+is being tested as part of the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>.</p>
+
+<p>Those are the assumptions we need to make regarding how the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+controls this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch
+module</a>.
+In many ways, these assumptions form the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>’s
+side of a contract: the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+will work as long as the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+and the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>
+which we’ll discuss next,
+keeps its end of the contract.</p>
+
+<h4 id="assumptions-about-logic-coming-from-the-wishbone-bus">Assumptions about logic coming from the Wishbone bus</h4>
+
+<p>Making assumptions about the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>,
+however, is now really easy.  Because <a href="/zipcpu/2017/11/07/wb-formal.html">we put
+together</a> a
+<a href="https://github.com/ZipCPU/zipcpu/blob/dev/rtl/aux/formal_master.v">module</a>
+describing the
+<a href="/zipcpu/2017/11/07/wb-formal.html">properties</a> of the
+<a href="/doc/wbspec_b4.pdf">Wishbone bus</a>,
+we only need to include
+<a href="https://github.com/ZipCPU/zipcpu/blob/dev/rtl/aux/formal_master.v">that module</a>
+to get a copy of all of the various
+assumptions (and assertions) associated with interacting with
+<a href="/zipcpu/2017/11/07/wb-formal.html">this bus</a>.</p>
+
+<p>Once included, and given that our proof succeeds, we will then <em>know</em> that we
+are interacting validly with any peripheral on the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	formal_master #(.AW(AW), .DW(DW),.F_LGDEPTH(F_LGDEPTH),
+			.F_MAX_REQUESTS(1), .F_OPT_SOURCE(1),
+			.F_OPT_RMW_BUS_OPTION(0),
+			.F_OPT_DISCONTINUOUS(0))
+		f_wbm(i_clk, i_reset,
+			o_wb_cyc, o_wb_stb, o_wb_we, o_wb_addr, o_wb_data, 4'h0,
+			i_wb_ack, i_wb_stall, i_wb_data, i_wb_err,
+			f_nreqs, f_nacks, f_outstanding);</code></pre></figure>
+
+<p>There are a couple of options we set above, however.  These include the size
+of the address bus and data bus, as well as the log (based two) of the length of
+any interaction (<code class="highlighter-rouge">F_LGDEPTH=2</code>).  We also indicated that this would be a source
+controller (<code class="highlighter-rouge">CYC&amp;STB</code> go high together), and that we will only ever make one
+request of the bus (<code class="highlighter-rouge">F_MAX_REQUESTS(1)</code>.  Since the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+isn’t involved in writes, we can leave
+the read-modify-write option off (<code class="highlighter-rouge">F_OPT_RMW_BUS_OPTION</code>).  We’re also
+not going to be restarting requests while <code class="highlighter-rouge">CYC</code> is high, so we can leave
+the <code class="highlighter-rouge">F_OPT_DISCONTINUOUS</code> option low.</p>
+
+<p>This part is just that easy: include assertions and assumptions from
+<a href="https://github.com/ZipCPU/zipcpu/blob/dev/rtl/aux/formal_master.v">elsewhere</a>
+and we’re done.  Well … almost.  We still need to make certain that the
+number of requests and acknowledgements counted by this
+<a href="https://github.com/ZipCPU/zipcpu/blob/dev/rtl/aux/formal_master.v">formal description of a Wishbone
+master</a>
+match the logic within our <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch
+module</a>.
+That’s coming up in the next section.</p>
+
+<h4 id="assertions-about-logic-controlling-the-wishbone-bus">Assertions about logic controlling the Wishbone bus</h4>
+
+<p>We’ve now finished with the <em>assumptions</em> about our inputs.  It’s now time
+to turn to look at any <em>assertions</em> we wish to make about our outputs.
+We’ll start with the assertions about the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>.</p>
+
+<p>Our first assertion is that we are <em>reading only</em> from the bus.  This may seem
+silly, but … a
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>
+should never do more than read from a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>.
+It’s worth knowing that that’s all we are going to do.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if (o_wb_stb)
+			assert(!o_wb_we);</code></pre></figure>
+
+<p>We’re also going to assert that, two clocks after an <code class="highlighter-rouge">i_clear_cache</code> request,
+we’ve abandoned any ongoing
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+transaction.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(f_past_valid))
+				&amp;&amp;($past(i_clear_cache,2))
+				&amp;&amp;($past(o_wb_cyc,2)))
+			// ...
+			assert((!$past(o_wb_cyc))||(!o_wb_cyc));</code></pre></figure>
+
+<p>Why two clocks?  Well, the first clock should be the <code class="highlighter-rouge">i_clear_cache</code> request.
+The second clock should be the <code class="highlighter-rouge">i_new_pc</code> signal.  Then, on the third clock,
+the <code class="highlighter-rouge">o_wb_cyc</code> should be indicating that we are within a transaction.</p>
+
+<p>Once we have a valid result (instruction) to present to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+then the address of this result shouldn’t change, neither should the instruction
+itself–as long as we are holding <code class="highlighter-rouge">o_valid</code> high.  Since this address is our
+reference for the next instruction address, we can’t allow this to change
+until the next <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(o_valid))&amp;&amp;(o_valid))
+			assert($stable(o_wb_addr));</code></pre></figure>
+
+<p>We’re also going to assert that we start a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> cycle
+following any abort.  Since <code class="highlighter-rouge">invalid</code> will be true following any abort based
+upon a new <a href="https://en.wikipedia.org/wiki/Program_counter">PC</a>,
+this assertion captures the logic in question.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(!i_reset))&amp;&amp;($past(invalid)))
+			assert(o_wb_cyc);</code></pre></figure>
+
+<p>Those are the things we need to assert regarding our
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+interaction–things specific to this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>.</p>
+
+<h4 id="assertions-about-logic-responding-to-the-cpu">Assertions about logic responding to the CPU</h4>
+
+<p>The last set of assertions are those associated with our responses to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>.
+These are primarily about the integrity of our return signals.</p>
+
+<p>Since this is a <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">single instruction prefetch
+module</a>,
+after the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+accepts an instruction we’ll have to go get a new instruction.
+This means that the <code class="highlighter-rouge">o_valid</code> line must immediately drop–at least until the
+next instruction is received.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(o_valid))&amp;&amp;($past(i_stalled_n)))
+			assert(!o_valid);</code></pre></figure>
+
+<p>We can go further and insist that any time we are within a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="/zipcpu/2017/11/07/wb-formal.html">cycle</a>,
+the <code class="highlighter-rouge">o_valid</code> line must also be low.  Consider the consequences if this weren’t
+the case: if the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+were allowed to present a valid instruction to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+and a new instruction was received from the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>,
+where should it be stored?</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		if (o_wb_cyc)
+			assert(!o_valid);</code></pre></figure>
+
+<p>Further, any time we get an instruction from the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>,
+we need to assert that we are telling the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+that we have a valid instruction on the next clock cycle–the first cycle
+that <code class="highlighter-rouge">o_insn</code> is valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;(!$past(i_reset))
+			&amp;&amp;($past(o_wb_cyc))
+			&amp;&amp;($past(!i_clear_cache))
+			&amp;&amp;($past(i_wb_ack))&amp;&amp;(!$past(i_wb_err)))
+		begin
+			if (!invalid)
+				assert(o_valid);
+		end</code></pre></figure>
+
+<p>Of course, following an <code class="highlighter-rouge">i_new_pc</code> or <code class="highlighter-rouge">i_clear_cache</code> request, we’ll need
+to make sure that the instruction presented <em>isn’t</em> valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(i_clear_cache)))
+			assert(!o_valid);</code></pre></figure>
+
+<p>Not only that but two clocks following an <code class="highlighter-rouge">i_clear_cache</code> request we want
+to make certain we are still invalid.  This makes sure we don’t abort
+a <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> cycle
+and somehow turn on the <code class="highlighter-rouge">o_valid</code> signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(f_past_valid))
+				&amp;&amp;($past(i_clear_cache,2))
+				&amp;&amp;($past(o_wb_cyc,2)))
+			// ...
+			assert(!o_valid);</code></pre></figure>
+
+<p>You may remember the discussion regarding two clocks past the <code class="highlighter-rouge">i_clear_cache</code>
+signal above, having to do with the <code class="highlighter-rouge">o_wb_cyc</code> output.  This is really just
+an assertion of (roughly) the same thing.</p>
+
+<p>Now let’s start looking at the content of what we are returning to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>.
+As long as we are presenting a valid instruction to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>,
+and the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+is stalled and not ready for the instruction, then we need to continue
+presenting our valid instruction.
+Exceptions to this rule include the clock following any <code class="highlighter-rouge">i_reset</code>, <code class="highlighter-rouge">i_new_pc</code>,
+or <code class="highlighter-rouge">i_clear_cache</code> request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if ((f_past_valid)&amp;&amp;(!$past(i_reset))
+			&amp;&amp;(!$past(i_new_pc))&amp;&amp;(!$past(i_clear_cache))
+			&amp;&amp;($past(o_valid))&amp;&amp;(!$past(i_stalled_n)))
+		assert($stable(o_valid));</code></pre></figure>
+
+<p>Further, any time we present a valid instruction for two clocks in a row,
+none of the information associated with that instruction should be able
+to change.  This goes for not only the instruction itself, <code class="highlighter-rouge">o_insn</code>, but
+also the address of the instruction, <code class="highlighter-rouge">o_pc</code>, and the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+indication signal <code class="highlighter-rouge">o_illegal</code>.  Another way to say this would be to say that
+these lines shouldn’t change until the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+acknowledges them.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if ((f_past_valid)&amp;&amp;($past(o_valid))&amp;&amp;(o_valid))
+	begin
+		assert($stable(o_pc));
+		assert($stable(o_insn));
+		assert($stable(o_illegal));
+	end</code></pre></figure>
+
+<p>The <code class="highlighter-rouge">o_illegal</code> line needs to remain valid even after the instruction has
+been accepted–at least until the next <code class="highlighter-rouge">i_new_pc</code> command, since we are using
+it as an indication <em>not</em> to refetch an instruction that is no longer
+<code class="highlighter-rouge">o_valid</code>.  Indeed, as long as <code class="highlighter-rouge">o_wb_cyc</code> remains low (with exceptions),
+<code class="highlighter-rouge">o_illegal</code> needs to remain unchanging.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if ((f_past_valid)&amp;&amp;(!$past(i_reset))
+			&amp;&amp;(!$past(i_new_pc))&amp;&amp;(!$past(i_clear_cache))
+			&amp;&amp;($past(!o_wb_cyc)))
+		assert($stable(o_illegal));</code></pre></figure>
+
+<p>That leaves us with two more assertions, both about the returned address,
+<code class="highlighter-rouge">o_pc</code>.</p>
+
+<p>The first of these address assertions is that, unless the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+tells us otherwise, we need to walk through the instruction stream one
+address at a time.  There are a couple parts to making this assertion.
+We’ll need to keep track of anytime we have a valid past
+<a href="https://en.wikipedia.org/wiki/Program_counter">PC</a>
+address to compare against.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	f_last_pc_valid = 1'b0;
+	always @(posedge i_clk)
+		if ((i_reset)||(i_clear_cache)||(i_new_pc)||(invalid))
+			f_last_pc_valid &lt;= 1'b0;
+		else if (o_valid)
+			f_last_pc_valid &lt;= (!o_illegal);</code></pre></figure>
+
+<p>On any <code class="highlighter-rouge">o_valid</code> signal, we have a valid
+<a href="https://en.wikipedia.org/wiki/Program_counter">PC</a> to load into our
+comparison register.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if (o_valid)
+			f_last_pc  &lt;= o_pc;</code></pre></figure>
+
+<p>There’s a trick to making this work, though, and that is that we can’t allow
+the <code class="highlighter-rouge">f_last_pc</code> register to be just anything–even when it isn’t being
+referenced.  This is a requirement of the formal induction step which will start
+in any random (valid) state.  Without the assertion below, the induction
+step might start with an unreasonable <code class="highlighter-rouge">f_last_pc</code> value, and then conclude that
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">our code</a>
+was in error.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		else if (f_last_pc_valid)
+			assert(o_pc == f_last_pc + 1'b1);</code></pre></figure>
+
+<p>Finally, we’ll make this first assertion associated with the output
+address, that following any valid instruction and without an intervening
+<code class="highlighter-rouge">i_new_pc</code>, the next address must be one more than the last address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;(o_valid)
+				&amp;&amp;(!$past(o_valid))&amp;&amp;(f_last_pc_valid))
+			assert(o_pc == (f_last_pc + 1'b1));</code></pre></figure>
+
+<p>That’s the first of the two address based assertions.</p>
+
+<p>The second of these two assertions is a more complete assertion, this time
+dealing with the address of the next request.  In this case, we keep track of
+the last address requested by the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+in <code class="highlighter-rouge">f_req_addr</code> and increment it on any
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+acknowledgement.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	f_req_addr = 0;
+	always @(posedge i_clk)
+		if (i_new_pc)
+			f_req_addr &lt;= i_pc;
+		else if ((!invalid)&amp;&amp;(o_wb_cyc)&amp;&amp;(i_wb_ack)&amp;&amp;(!i_wb_err))
+			f_req_addr &lt;= f_req_addr + 1'b1;</code></pre></figure>
+
+<p>Now, any time a value is being requested from the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>,
+it should be the value found within <code class="highlighter-rouge">f_req_addr</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if (o_wb_cyc)
+			assert((invalid)||(f_req_addr == o_wb_addr));</code></pre></figure>
+
+<p>This is the last assertion we need to test <code class="highlighter-rouge">o_wb_addr</code>, but as with the last
+address assertion, this assertion isn’t sufficient.  In particular, if we don’t
+constrain it further, the induction step might assume that the <code class="highlighter-rouge">f_req_addr</code>
+has a random value (since we haven’t told it otherwise), and then draw
+an invalid conclusion as a result.  Hence we’ll need to assert that if the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+isn’t active, then the <code class="highlighter-rouge">f_req_addr</code> must be the same as the bus address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		else if ((!o_valid)&amp;&amp;(!i_new_pc)&amp;&amp;(!i_reset))
+			assert(f_req_addr == o_wb_addr);</code></pre></figure>
+
+<p>As a last assertion, we’ll insist that the <code class="highlighter-rouge">invalid</code> signal only ever be
+true for a single clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if ((f_past_valid)&amp;&amp;($past(invalid)))
+			assert(!invalid);
+`endif
+endmodule</code></pre></figure>
+
+<p>This ends the list of assertions used to prove that the
+<a href="https://github.com/ZipCPU/zipcpu/blob/dev/rtl/core/prefetch.v">single instruction prefetch</a>
+works as designed.</p>
+
+<h2 id="minimizing-logic">Minimizing Logic</h2>
+
+<p>If you are not familiar with the
+<a href="/about/zipcpu.html">ZipCPU</a>,
+you should know that one of the reasons why I built the
+<a href="/about/zipcpu.html">ZipCPU</a>
+was to allow me to experiment with
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+design on <em>really</em> <em>cheap</em>
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+hardware (Ex [<a href="https://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module">1</a>]
+[<a href="http://www.icoboard.org">2</a>]
+[<a href="https://hackaday.io/project/12930-blackice-low-cost-open-hardware-fpga-dev-board">3</a>]
+[<a href="http://www.xess.com/shop/product/xula2-lx25/">4</a>]
+[<a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users">5</a>]
+[<a href="https://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists/">6</a>]).
+Achieving this goal required me to pay a lot of attention to
+<a href="/blog/2017/06/12/minimizing-luts.html">logic minimization</a>.
+It also means that any time I walk through my own code,
+I am forever asking myself, “is this wire needed?”  “Can I remove the dependence
+of this <a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>
+on this logical condition?”  Doing this, though, requires
+two specific capabilities from my tool set.</p>
+
+<p>First, I need to be able to know, of a certainty, any time I adjust
+a piece of logic, that the module will continue to work as designed.
+This is the purpose of the formal model checks above, and/or any
+test benches I might use.</p>
+
+<p>Second, I also need to be able to know how many
+<a href="https://en.wikipedia.org/wiki/Logic_block">LUTs</a>,
+<a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>,
+and so forth my logic uses.  Traditionally, I have been using
+<a href="https://www.xilinx.com">Xilinx</a>’s
+<a href="https://www.xilinx.com/products/design-tools/ise-design-suite.html">ISE</a>
+or <a href="https://www.xilinx.com/products/design-tools/vivado.html">Vivado</a>
+to build my entire design and then to report to me the logic used by the
+design.  This can take a long time time (10+ minutes).  On the other hand, as
+part of putting this post together, I discovered that I can use
+<a href="http://www.clifford.at/yosys">yosys</a> with either the <code class="highlighter-rouge">synth_xilinx</code> (for
+7-series <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>s),
+<code class="highlighter-rouge">synth_ice40</code>, or (hopefully soon) the <code class="highlighter-rouge">synth_intel</code> (for
+<a href="https://www.altera.com">Altera</a> chips) command to then be able to
+estimate the logic required.  Below, for example, is the
+<a href="http://www.clifford.at/yosys">yosys</a>
+output from processing the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch.v</a>
+file above with <code class="highlighter-rouge">synth_xilinx</code> enabled.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">   Number of wires:                 63
+   Number of wire bits:            301
+   Number of public wires:          20
+   Number of public wire bits:     200
+   Number of memories:               0
+   Number of memory bits:            0
+   Number of processes:              0
+   Number of cells:                167
+     FDRE                           67
+     LUT1                            1
+     LUT2                            1
+     LUT3                           32
+     LUT4                            4
+     LUT5                            1
+     LUT6                            2
+     MUXCY                          29
+     XORCY                          30</code></pre></figure>
+
+<p>Indeed, I was pleased to discover that the number of
+<a href="https://en.wikipedia.org/wiki/Logic_block">LUT</a>s
+required by <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this
+prefetch</a>
+went <em>down</em> as a result of building a formal proof of <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this
+prefetch</a>.</p>
+
+<h2 id="this-prefetch-only-fetches-one-instruction">This prefetch only fetches one instruction</h2>
+
+<p>The presentation above demonstrated how <em>one</em> of the
+<a href="/about/zipcpu.html">ZipCPU</a>
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>
+modules was put together.  As I mentioned above, the
+<a href="/about/zipcpu.html">ZipCPU</a>’s
+has three other
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a>
+modules (although only two are actively maintained).  This is also the first,
+and in many ways the simplest, of the
+<a href="https://en.wikipedia.org/wiki/Prefetching">prefetch</a> module’s the
+<a href="/about/zipcpu.html">ZipCPU</a> has had.</p>
+
+<p>Why did I switch?</p>
+
+<p>I switched from <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this prefetch
+module</a> to
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pipefetch.v">another</a>
+when I watched how fast the pipelined
+<a href="/about/zipcpu.html">ZipCPU</a>
+performed when using <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this prefetch
+module</a>.
+Indeed, the performance was so pitiful it was almost unbearable to watch the
+instructions flow through the pipeline–with never more than one instruction
+in the pipeline at any given time.  Eventually, I measured the
+<a href="/about/zipcpu.html">ZipCPU</a>’s performance against the
+<a href="https://en.wikipedia.org/wiki/Dhrystone">Dhrystone</a> benchmark.  Using a
+prior version of <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this prefetch
+module</a>,
+the <a href="/about/zipcpu.html">ZipCPU</a> managed to achieve
+0.128 DMIPS/MHz–a pitiful score.  The score, however, should be compared with
+the 0.95 DMIPS/MHz score the
+<a href="/about/zipcpu.html">ZipCPU</a>
+achieved when fully pipelined.
+[<a href="https://github.com/ZipCPU/zipcpu/blob/master/doc/orconf.pdf">Ref</a>]</p>
+
+<p>Since that comparison, however, the
+<a href="/about/zipcpu.html">ZipCPU</a> has been extensively
+modified–to include adjusting this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>.
+As a result of one of those changes, this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">prefetch</a>.
+will now start fetching a new instruction a new instruction as soon as the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+has accepted the last one, rather than waiting for the 
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v">CPU</a>
+to flush the last instruction through the pipeline before starting the next
+fetch.  As a result, while it’s still painful to watch <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v">this
+prefetch</a>
+operate, it’s not nearly as bad as it was originally.</p>
+
+<p>If you like <a href="http://zipcpu.com">this blog</a>, please consider supporting it on
+<a href="https://www.patreon.com/ZipCPU">Patreon</a>.  Thank you!</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>And now I have told you before it come to pass, that, when it is come to pass, ye might believe.  (John 14:29)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
