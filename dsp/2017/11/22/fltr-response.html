@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Measuring the frequency response of a filter under test</title>
+  <meta name="description" content="We’ve slowly been building severaldigital filteringVerilog implementations onthis blog.  For example, we’vepresented a genericFinite Impulse Response (FIR)fi...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/11/22/fltr-response.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Measuring the frequency response of a filter under test</h1>
+    <p class="post-meta"><time datetime="2017-11-22T00:00:00-05:00" itemprop="datePublished">Nov 22, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>We’ve slowly been building several
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filtering</a>
+Verilog implementations on
+<a href="http://zipcpu.com/">this blog</a>.  For example, we’ve
+<a href="/dsp/2017/09/15/fastfir.html">presented a generic</a>
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">Finite Impulse Response (FIR)</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://github.com/ZipcPU/dspfilters/blob/master/rtl/genericfir.v">implementation</a>,
+and even a
+<a href="/dsp/2017/09/29/cheaper-fast-fir.html">cheaper version</a>
+of the same.  I’d like to move forward and present some other
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+implementations as well, but I haven’t finished presenting the test bench for
+the <a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>
+I have presented.  Therefore, we’ve also been slowly building
+up to a test bench by building a
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>
+that we can use to prove that not only these two
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+designs work as designed, but also that other
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+designs we might build later work as designed.</p>
+
+<p>In our <a href="/dsp/2017/11/04/genfil-tb.html">last post discussing</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filtering</a>,
+we presented a <a href="https://github.com/ZipcPU/dspfilters/blob/master/bench/cpp/filtertb.h">generic test
+harness</a>
+that can be used when building test benches for various
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital logic filters</a>.
+<a href="/dsp/2017/11/04/genfil-tb.html">This test harness</a>
+verified a number of things regarding a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+to include measuring the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+as well as making sure that the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+internal implementation didn’t overflow.</p>
+
+<p>For the verification engineer, this isn’t enough.</p>
+
+<p>Why not?</p>
+
+<table style="float: right"><caption>Fig 1. Lowpass FIR requirements</caption><tr><td><img src="/img/fir-lpf-design.png" alt="Design requirements of an LPF filter" width="480" /></td></tr></table>
+
+<p>Well simply because the <em>requirements</em> for a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+such as might be shown in Fig 1,
+are specified in terms of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>–<em>not</em>
+its <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.
+If you want to answer the question of whether or not a particular
+implementation meets your criteria, then you need to <em>measure</em> the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+you are creating.
+Otherwise how will you be certain that your
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+works as advertised?  That it accomplishes the function it was designed to
+perform?</p>
+
+<p>Today, therefore, let’s spend some time discussing what the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a> of a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is, why it is important, and then examine how one might go about measuring it.</p>
+
+<h2 id="the-frequency-response-function">The Frequency Response Function</h2>
+
+<p>There’s really some wonderful math underpinning
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>
+in general.  Perhaps you remember some of this from our earlier
+<a href="/dsp/2017/09/15/fastfir.html">“What is a Filter” discussion</a>.
+Today, we’ll just outline that math, and then show how it naturally leads to
+this concept of a
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>.</p>
+
+<p>The roots of an <a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+lie within the concept of a <a href="https://en.wikipedia.org/wiki/Linear_system">linear
+operation</a>
+on a data stream.  If that <a href="https://en.wikipedia.org/wiki/Linear_system">linear
+operation</a>,
+whatever it is, also happens to be <a href="https://en.wikipedia.org/wiki/Shfit-invariant_system">shift
+invariant</a>
+then the operation can be described by a
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+between the input, <code class="highlighter-rouge">x[n]</code> and the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+function, <code class="highlighter-rouge">h[n]</code>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolution-raw.png" alt="Formula for an FIR Convolution" width="254" /></td></tr></table>
+
+<p>When dealing with the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>
+that digital logic can create, reality lays two additional constraints onto
+these <a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>.
+First, <code class="highlighter-rouge">h[k]</code> for <code class="highlighter-rouge">k&lt;0</code> must be zero.  This is another way of saying that the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a> is
+<em><a href="https://en.wikipedia.org/wiki/Causal_filter">causal</a></em>–it doesn’t
+know anything about inputs that haven’t yet been received.  The second
+criteria is that <code class="highlighter-rouge">h[k]</code> must be an integer (i.e.
+<a href="https://en.wikipedia.org/wiki/Quantization_(signal_processing)">quantized</a>).</p>
+
+<p>We’re also going to assume a third criteria for today’s discussion, which is
+that <code class="highlighter-rouge">h[k]</code> must be zero for <code class="highlighter-rouge">k&gt;= N</code> samples.  This is another way of saying
+that <code class="highlighter-rouge">h[k]</code> must only be non-zero for a <em>finite</em> number of samples, from
+<code class="highlighter-rouge">k=0</code> to <code class="highlighter-rouge">k=N-1</code>.  For this reason, this type of
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is called a <a href="https://en.wikipedia.org/wiki/Finite_impulse_response">Finite Impulse Response
+(FIR)</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.</p>
+
+<p>All of this is just a quick background refresher regarding the properties
+of the types of
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>
+we are looking at.  These properties lead into the development of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<em><a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a></em>
+function.</p>
+
+<p>The idea of the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of a <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is fairly simple: what response does the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> return when a
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>
+is fed to the <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+as its input.</p>
+
+<p>By <a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>,
+I mean more than the
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">Euler’s formula</a> Wikipedia
+discusses under that term.  Instead, I am referring to a function such as</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-complex-expn.png" alt="f[n] = e^{j(2pi fn + theta)}, formula for a complex exponential of unit magnitude" width="189" /></td></tr></table>
+
+<p>This function has a unit magnitude and it steps forward by a constant phase
+shift between samples.  It expands, via
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">Euler’s formula</a>,
+into <a href="https://en.wikipedia.org/wiki/Sine_wave">sine</a>
+and cosine components–we’ll use this property later on.</p>
+
+<p>So let’s find out what happens to an input of this type when our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+is applied to it.</p>
+
+<p>We’ll start with the equation for a
+<a href="https://en.wikipedia.org/wiki/Linear_system">linear</a>,
+<a href="https://en.wikipedia.org/wiki/Shfit-invariant_system">shift-invariant</a>
+system: a <a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolution-raw.png" alt="Formula for an FIR Convolution" width="254" /></td></tr></table>
+
+<p>We’ll then replace <code class="highlighter-rouge">x[n]</code> with a
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a> function,
+<code class="highlighter-rouge">exp(-j 2pi fn)</code>, for some frequency <code class="highlighter-rouge">-1/2 &lt; f &lt; 1/2</code>,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolve-cpxexpn-a.png" alt="Convolution with a complex exponential" width="293" /></td></tr></table>
+
+<p>and then we’ll simplify and rearrange terms,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolve-cpxexpn-b.png" alt="Convolution with a complex exponential" width="307" /></td></tr></table>
+
+<p>Did you notice how, after we rearranged the terms, the summation no longer
+depends upon time, <code class="highlighter-rouge">n</code>, anymore?
+Instead, the internal part of the summation depends only upon <code class="highlighter-rouge">k</code>–the index
+variable for the summation.  In other words, the value within the summation
+depends upon the frequency, <code class="highlighter-rouge">f</code>, and the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+coefficients (it’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>, <code class="highlighter-rouge">h[k]</code>)
+alone, and once summed the value is a constant for all time, <code class="highlighter-rouge">n</code>.  We’ll use
+<code class="highlighter-rouge">H(e^{j2pi f})</code> to represent this constant,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-defn-frequency-response.png" alt="H(e^j2pif)=sum h[k] e^-j2pi f" width="307" /></td></tr></table>
+
+<p>This <code class="highlighter-rouge">H(e^{j2pi f})</code> function is called the
+<em><a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a></em>
+function of our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+<code class="highlighter-rouge">h[k]</code>.</p>
+
+<p>This <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+function allows us to represent the output of our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+whenever the input is a
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>,
+by that same input
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>
+times the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+function, or</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolve-cpxexpn-c.png" alt="Convolution with a complex exponential results in a complex exponential times the frequency response" width="249" /></td></tr></table>
+
+<p>But, why is this so important?</p>
+
+<p>It’s important simply because we now have a way of describing how our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+interacts with its inputs in a fashion that is <em>independent</em> of the input.
+Further, the operation is a straight multiply–much simpler than the
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+we started with.  Hence, any input that can be described as a sum of
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponentials</a>
+(that’s all of them), will have an output which is also described by a sum of
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponentials</a>–only
+those exponentials will now have a weighting given by <code class="highlighter-rouge">H(e^{j2pi f})</code>.</p>
+
+<p>Indeed, this representation is so important that
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filters</a>
+are most often specified by the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+they are required to achieve.  Determining the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+<a href="/dsp/2017/09/15/fastfir.html">our filter</a>
+actually implements, and hence whether or not it has achieved its
+design requirements, is the purpose of the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+measurement function of our <a href="/dsp/2017/11/04/genfil-tb.html">generic filter test
+harness</a>–the
+topic for today’s discussion.</p>
+
+<h2 id="how-shall-we-calculate-it">How shall we calculate it?</h2>
+
+<p>The common means of calculating the <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency
+response</a>
+of a <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> is to take a
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+of its <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.
+This follows directly from the discussion above developing what a
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+is in the first place.  The <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">Fast Fourier Transform
+(FFT)</a>
+is a computationally efficient means of evaluating a
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+from an <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.
+Chances are you will need to do this as part of your
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+design process.</p>
+
+<p>When you do so, you’ll want to make certain that your
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> size is about 8-16x
+greater than the number of taps
+(<a href="https://en.wikipedia.org/wiki/Impulse_response">coefficients</a>) in your
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+More than 16x usually doesn’t buy you anything, and anything less than 4x
+hides details.  No <a href="https://en.wikipedia.org/wiki/Window_function">window
+function</a>
+is required, and indeed no
+<a href="https://en.wikipedia.org/wiki/Window_function">window function</a>
+should be used in this process.  The
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://en.wikipedia.org/wiki/Impulse_response">coefficients</a>
+themselves should have any necessary
+<a href="https://en.wikipedia.org/wiki/Window_function">window</a>
+built into them.</p>
+
+<p>This common method works great until you want to know whether or not your
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+as implemented achieves the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+you are expecting.  To actually <em>measure</em> the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a> a 
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> produces requires
+actually placing a
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>
+input into the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+and then plotting the output that you receive as a result.  The details of
+how to do this using
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a>
+will be discussed in our next section.</p>
+
+<h2 id="filter-harness-code-for-measuring-the-frequency-response-of-a-filter">Filter Harness Code for measuring the Frequency Response of a Filter</h2>
+
+<p>At this point, we’ve now explained both what a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+function is, as well as how it is commonly calculated (not measured).  Let’s
+now look into how we might actually <em>measure</em> this
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+given a particular <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+implementation that may, or may not, be working.</p>
+
+<p>Since the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+implementations we are working with are all
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+implementations, then we’ll have to do a touch of pre-work in order to estimate
+their <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+to a <a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>
+input.</p>
+
+<p>The first part of this pre-work will be to deal with the phase of our
+measurement.  You may recall from above that if</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-x-is-cpxexpn.png" alt="x[n] = exp^j2pi fn" width="127" /></td></tr></table>
+
+<p>then</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolve-cpxexpn-c.png" alt="Recap eqns above" width="249" /></td></tr></table>
+
+<p>For our testing below, we’ll define <code class="highlighter-rouge">x[0]</code> to be the first sample in any
+individual test.  Yes, I know, this redefines time zero from one test input
+to the next, but it does make a good reference for developing the inputs.
+What this means, though, is that <code class="highlighter-rouge">y[n]</code> isn’t defined entirely by our new
+values until <code class="highlighter-rouge">y[N-1]</code>
+since anything earlier would reference an <code class="highlighter-rouge">x[n]</code> with <code class="highlighter-rouge">n&lt;0</code> that might have
+been part of our last test vector.  Worse,
+the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://en.wikipedia.org/wiki/Frequency_response">response</a>
+at <code class="highlighter-rouge">y[N-1]</code> has a phase term within it in addition to the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+term we want.</p>
+
+<p>This initial phase term needs to be removed if we want to measure <code class="highlighter-rouge">H(e^j2pi f)</code>.</p>
+
+<p>So let’s suppose we instead provided an input of</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-x-is-cpxexpn-w-phase.png" alt="x=e^j2pifn + phi" width="184" /></td></tr></table>
+
+<p>Our output at <code class="highlighter-rouge">y[N-1]</code> would then be</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolve-cpxexpn-f.png" alt="y[n]=e^j2pifn e^jphi H()" width="375" /></td></tr></table>
+
+<p>If we define <code class="highlighter-rouge">phi</code> to be</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-phi-cancels-cpxexpn.png" alt="phi=-j2pif(N-1)" width="211" /></td></tr></table>
+
+<p>then</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-y-is-freq-response.png" alt="y[N-1]=H()" width="246" /></td></tr></table>
+
+<p>as desired.</p>
+
+<p>The next problem to deal with is the fact that our filter is only
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+valued: both the inputs, the coefficients, and the multiplies only
+work on
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+numbers.  How then shall we get the results from a complex operation?
+In this case, we need to break <code class="highlighter-rouge">H(e^{j2pi f})</code> into it’s
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+and
+<a href="https://en.wikipedia.org/wiki/Imaginary_number">imaginary</a>
+components using
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">Euler’s formula</a>:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-y-is-freq-response-split.png" alt="y[N-1]=RH()+IH()" width="482" /></td></tr></table>
+
+<p>These two terms contain only <a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+numbers and <a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+operators, even though the measured result will be complex.  The first term
+has a cosine wave as an input, the second a <a href="https://en.wikipedia.org/wiki/Sine_wave">sine
+wave</a>.
+The second term needs to be multiplied by <code class="highlighter-rouge">j</code>, the
+<a href="https://en.wikipedia.org/wiki/Imaginary_number">square root of negative one</a>,
+upon completion.  However, by splitting this filter into two parts, one for
+the <a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+part of the input and one for the
+<a href="https://en.wikipedia.org/wiki/Imaginary_number">imaginary</a>
+part of the input, we can now generate this complex value with two
+test vectors–both of which are
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a> and so both of which
+<a href="/dsp/2017/09/15/fastfir.html">our implementation</a>
+can process.</p>
+
+<p>Hence, for every frequency we are interested in (except zero), we’ll apply
+two test vectors to our input and examine the resulting output.</p>
+
+<p>Now that we have a vision for how to proceed, it’s now time to build our
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+estimation function.  This will be part of the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> based <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test
+harness</a>
+<a href="/dsp/2017/11/04/genfil-tb.html">we discussed earlier</a>.
+As such, it is a C++ function (not a Verilog module),
+but yet we will use it to evaluate our <a href="https://github.com/ZipCPU/dspfilters/tree/master/rtl">various Verilog filter
+implementations</a>.</p>
+
+<p>Further, we’ll build this response estimator using the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>
+<code class="highlighter-rouge">apply()</code> function–a function that returns the response of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+to a given test input.  As
+<a href="/dsp/2017/11/04/genfil-tb.html">we discussed last time</a>,
+this function differs from the similar <code class="highlighter-rouge">test()</code> function in some critical ways.
+First, the <code class="highlighter-rouge">test()</code> function resets the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+to a known initial state, whereas <code class="highlighter-rouge">apply()</code> just uses the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+in the state it was last left in.  Second, the <code class="highlighter-rouge">test()</code> function quietly adds
+input samples to compensate for any delay internal to the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+whereas the <code class="highlighter-rouge">apply()</code> function does not.  As a result, we’ll need to add these
+extra samples ourselves below.  Still, using the <code class="highlighter-rouge">apply()</code> function will give
+us some confidence that the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+will properly and naturally flush its state from one input to the
+next–something the rest of the
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>
+has yet to verify.</p>
+
+<p>The parameters to this function are much as you might expect.  There’s the
+number of frequencies, <code class="highlighter-rouge">nfreq</code>, that you’d like to use to cover the frequency
+band from <code class="highlighter-rouge">0</code> to the <a href="https://en.wikipedia.org/wiki/Nyquist_frequency">Nyquist
+frequency</a>,
+<code class="highlighter-rouge">1/2</code>.  As I mentiond above, this number should be between 8x and 16x the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+length.  There’s also a
+<a href="http://en.cppreference.com/w/cpp/numeric/complex">complex</a>
+array pointer, <code class="highlighter-rouge">rvec</code>, to hold the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+once it’s been estimated.
+Those are both straightforward.  Likewise the optional filename, <code class="highlighter-rouge">fname</code>, to
+save any results into is also straightforward.  Perhaps the only remarkable
+item is the magnitude of the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>,
+captured in <code class="highlighter-rouge">mag</code>.  A <code class="highlighter-rouge">mag</code> of <code class="highlighter-rouge">1.0</code> will cause us to create a
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+having the maximum integer magnitude the number of input bits, <code class="highlighter-rouge">IW</code>, will
+allow.  Anything less than one will scale the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine</a>
+and cosine waves proportionally.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">template</span><span class="o">&lt;</span><span class="k">class</span> <span class="nc">VFLTR</span><span class="o">&gt;</span> <span class="kt">void</span>	<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">VFLTR</span><span class="o">&gt;::</span><span class="n">response</span><span class="p">(</span><span class="kt">int</span> <span class="n">nfreq</span><span class="p">,</span>
+		<span class="n">COMPLEX</span> <span class="o">*</span><span class="n">rvec</span><span class="p">,</span> <span class="kt">double</span> <span class="n">mag</span><span class="p">,</span> <span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="n">fname</span><span class="p">)</span> <span class="p">{</span></code></pre></figure>
+
+<p>We’ll need to declare some variables to make this happen.  The first,
+<code class="highlighter-rouge">nlen</code> is the number of coefficients in our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+The next, <code class="highlighter-rouge">dlen</code>,
+is the same but captures the number of data samples we’ll need to send to
+<code class="highlighter-rouge">apply()</code> and so it requires the number of delay cycles between
+any input sample and the first associated output from the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+We’ll use the <code class="highlighter-rouge">data</code> pointer to point to an
+array into which we can store both our outgoing data (test vectors to be sent
+to the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>),
+and incoming data (the response from the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+to the test vector).  Finally, <code class="highlighter-rouge">df</code> will hold the value of our frequency step
+size.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="n">nlen</span> <span class="o">=</span> <span class="n">NTAPS</span><span class="p">(),</span> <span class="n">dlen</span> <span class="o">=</span> <span class="n">NTAPS</span><span class="p">()</span><span class="o">+</span><span class="n">NDELAY</span><span class="p">();</span>
+	<span class="kt">long</span>	<span class="o">*</span><span class="n">data</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">long</span><span class="p">[</span><span class="n">dlen</span><span class="p">];</span>
+	<span class="kt">double</span>	<span class="n">df</span> <span class="o">=</span> <span class="mf">1.</span><span class="o">/</span><span class="n">nfreq</span> <span class="o">/</span> <span class="mf">2.</span><span class="p">;</span></code></pre></figure>
+
+<p>As we discussed above, <code class="highlighter-rouge">mag</code> is the requested magnitude of the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+test vector, running from 0.0 to 1.0.  We’ll use that number here to scale the
+actual magnitude we’ll use for our
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>
+input vectors.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">mag</span> <span class="o">=</span> <span class="n">mag</span> <span class="o">*</span> <span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">IW</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span></code></pre></figure>
+
+<p>At this point, we can start walking through frequencies and making measurements.
+As I mentioned above, this isn’t the most efficient means of <em>calculating</em> a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>,
+but this will be a means of <em>measuring</em> it.</p>
+
+<p><code class="highlighter-rouge">dtheta</code> is the phase difference from one
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>
+sample to the next.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">nfreq</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">double</span>	<span class="n">dtheta</span> <span class="o">=</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="n">M_PI</span> <span class="o">*</span> <span class="n">i</span> <span class="o">*</span> <span class="n">df</span><span class="p">,</span>
+			<span class="n">theta</span><span class="o">=</span><span class="mf">0.</span><span class="p">;</span></code></pre></figure>
+
+<p>We’ll begin our
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>
+sample sequence at the phase we calculated above.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">theta</span> <span class="o">=</span> <span class="o">-</span><span class="p">(</span><span class="n">NTAPS</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">dtheta</span><span class="p">;</span></code></pre></figure>
+
+<p>Then we’ll walk through the input vector and set it based upon a cosine
+function.  This test vector should give us one
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+component of the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">j</span><span class="o">&lt;</span><span class="n">dlen</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+			<span class="kt">double</span>	<span class="n">dv</span> <span class="o">=</span> <span class="n">mag</span> <span class="o">*</span> <span class="n">cos</span><span class="p">(</span><span class="n">theta</span><span class="p">);</span>
+
+			<span class="n">theta</span> <span class="o">+=</span> <span class="n">dtheta</span><span class="p">;</span>
+			<span class="n">data</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="n">dv</span><span class="p">;</span>
+		<span class="p">}</span></code></pre></figure>
+
+<p>Once we <code class="highlighter-rouge">apply()</code> the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> to this
+test vector, we’ll know the
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+component of the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+at this particular frequency.  Note how we remove the magnitude scale
+factor below as well.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">apply</span><span class="p">(</span><span class="n">dlen</span><span class="p">,</span> <span class="n">data</span><span class="p">);</span>
+		<span class="n">real</span><span class="p">(</span><span class="n">rvec</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>  <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">dlen</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">mag</span><span class="p">;</span></code></pre></figure>
+
+<p>We can then repeat this same process for the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a> input
+in order to get
+the <a href="https://en.wikipedia.org/wiki/Imaginary_number">imaginary</a>
+component of our measured
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>.
+We’ll do this for all but the zero frequency, which
+is already known to be zero for any
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> with
+<a href="https://en.wikipedia.org/wiki/Real_number">real</a>
+coefficients.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">i</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">debug</span><span class="p">)</span> <span class="p">{</span> <span class="cm">/* ... */</span> <span class="p">}</span>
+
+			<span class="n">theta</span> <span class="o">=</span> <span class="o">-</span><span class="p">(</span><span class="n">NTAPS</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">dtheta</span><span class="p">;</span>
+			<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">j</span><span class="o">&lt;</span><span class="n">dlen</span><span class="p">;</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+				<span class="kt">double</span>	<span class="n">dv</span> <span class="o">=</span> <span class="n">mag</span> <span class="o">*</span> <span class="n">sin</span><span class="p">(</span><span class="n">theta</span><span class="p">);</span>
+
+				<span class="n">theta</span> <span class="o">+=</span> <span class="n">dtheta</span><span class="p">;</span>
+				<span class="n">data</span><span class="p">[</span><span class="n">j</span><span class="p">]</span> <span class="o">=</span> <span class="n">dv</span><span class="p">;</span>
+			<span class="p">}</span>
+
+			<span class="n">apply</span><span class="p">(</span><span class="n">dlen</span><span class="p">,</span> <span class="n">data</span><span class="p">);</span>
+			<span class="n">imag</span><span class="p">(</span><span class="n">rvec</span><span class="p">[</span><span class="n">i</span><span class="p">])</span>  <span class="o">=</span> <span class="n">data</span><span class="p">[</span><span class="n">dlen</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">/</span> <span class="n">mag</span><span class="p">;</span>
+		<span class="p">}</span> <span class="k">else</span>
+			<span class="n">imag</span><span class="p">(</span><span class="n">rvec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Once we finish our loop across frequencies, all that’s left is to close up,
+free any data we’ve allocated, and we’re done.  This includes writing the
+measured
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+out to a file–but that section is <a href="/dsp/2017/07/24/dsp-debugging.html">simple enough that we can skip any
+discussion</a>
+of that part.  See the <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">code for the overall test harness</a>,
+or the <a href="/dsp/2017/07/24/dsp-debugging.html">discussion of how to debug a DSP
+algorithm</a>
+should you have any questions about this step.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">debug</span><span class="p">)</span> <span class="p">{</span> <span class="cm">/* ... */</span> <span class="p">}</span>
+	<span class="p">}</span>
+
+	<span class="k">delete</span><span class="p">[]</span> <span class="n">data</span><span class="p">;</span>
+	<span class="c1">// ...
+</span><span class="p">}</span></code></pre></figure>
+
+<h2 id="how-well-does-this-approach-work">How well does this approach work?</h2>
+
+<p>Fig 2 below compares three
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+functions against each other.</p>
+
+<table align="center" style="float: none"><caption>Fig 2. An example estimated frequency response</caption><tr><td><img src="/img/freq-resp.png" alt="A Chart of the Measured vs Calculated frequency response" width="801" /></td></tr></table>
+
+<p>All three are measures of the same
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> coefficients,
+only measured in different fashions.  The first, the estimated response, is the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+derived from the <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency
+response</a> <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">estimation
+code</a>
+we just presented above.  The second is the result of an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+applied to the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/twelvebfltr.m">coefficients</a>.  The third line above shows the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+as designed, but before we truncated any of the coefficients
+to twelve bits.</p>
+
+<p>Perhaps a more revealing chart, however, would be Fig 3 below, which compares the same functions in
+<a href="https://en.wikipedia.org/wiki/Decibel">Decibels</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. Examining a filter's frequency response in Decibel's</caption><tr><td><img src="/img/freq-resp-dB.png" alt="A Chart of the Measured vs Calculated frequency response, in decibel's" width="793" /></td></tr></table>
+
+<p>In this example, you can see the effect that truncating the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+coefficients had on our initial design.</p>
+
+<p>In both examples, however, the calculated and the estimated charts lie on
+top of each other–giving us reason to believe that our <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">method
+above</a>
+is trustworthy.</p>
+
+<p>However, we’ll need to come back to this another day to discuss how to
+actually implement and test this on a particular
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+In particular, we’ll apply this <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">generic test harness</a>
+to our <a href="/dsp/2017/09/15/fastfir.md">generic filter</a>.
+Indeed, that’s been our whole purpose all along: generating the testing
+infrastructure we’ll need to know that an implemented
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+will work as designed.</p>
+
+<p>Until that point, let me quickly ask, did you notice how our test vectors
+above used <em>quantized</em> sine and cosine’s?  Given that the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+itself is
+<a href="/dsp/2017/09/27/quantization.html">quantized</a>, it really
+only makes sense that we would provide it with
+<a href="/dsp/2017/09/27/quantization.html">quantized</a>
+inputs.  Be aware that, as a result, the measured
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+may differ from the predicted or calculated
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>–even
+though it didn’t clearly differ in Figures 2 or 3 above.</p>
+
+<p>Once we’ve proven that our
+<a href="/dsp/2017/09/15/fastfir.md">generic filter</a>
+does indeed work as designed, we can then move on and develop some of the
+more complicated filters.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Lest haply, after he hath laid the foundation, and is not able to finish it, all that behold it begin to mock him (Luke 14:29)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
