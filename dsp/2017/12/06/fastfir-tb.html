@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Testing the fast, generic FIR filter</title>
+  <meta name="description" content="It’s been some time now since we introduced the implementation of a pairof generic filters.The first was a fairly generic FIR filterimplementation, and these...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/12/06/fastfir-tb.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Testing the fast, generic FIR filter</h1>
+    <p class="post-meta"><time datetime="2017-12-06T00:00:00-05:00" itemprop="datePublished">Dec 6, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>It’s been some time now since we introduced the implementation of a pair
+of generic <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s.
+The first was a fairly <a href="/dsp/2017/09/15/fastfir.html">generic FIR filter
+implementation</a>, and the
+second was a <a href="/dsp/2017/09/29/cheaper-fast-fir.html">“cheaper” implementation of the same
+logic</a>.  Both filters
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+were presented as though they worked, but without any test bench to prove it.
+Further, these prior posts hinted at other
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+which might be better, but I haven’t come back to present them (yet).
+(As an example, I’ve got a nice <a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric
+filter</a>
+implementation waiting to be present in due time.)</p>
+
+<p>Since that time, we’ve presented a
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>
+that can be used to prove whether a
+<a href="/dsp/2017/09/15/fastfir.html">generic FIR filter</a> even
+works.  We’ve also <a href="/dsp/2017/11/22/fltr-response.html">presented a component of that
+harness</a>
+which measures the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of any given
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+Both of these were designed to demonstrate how easy it could be to determine
+if an
+<a href="https://en.wikipedia.org/wiki/Hardware_description_language">HDL</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+“works” when using <a href="https://www.veripool.org/wiki/verilator">Verilator</a> as our
+simulator.</p>
+
+<p>Today, let’s take a quick look at our
+<a href="/dsp/2017/09/15/fastfir.html">generic filter</a>
+and see if this
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>
+can make it testing any easier.  We’ll apply four basic tests:</p>
+
+<ol>
+  <li>
+    <p>Given all coefficients of zero save one, is the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+appropriate?</p>
+  </li>
+  <li>
+    <p>Given all maximally valued coefficients and maximally valued inputs, will
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter under
+test</a>
+overflow?</p>
+  </li>
+  <li>
+    <p>Given a set of identical and maximal coefficients, does the
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+cutoff where we expect?</p>
+  </li>
+  <li>
+    <p>Given a more <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/twelvebfltr.h">practical set of
+coefficients</a>,
+does the <a href="/dsp/2017/11/22/fltr-response.html">filter’s frequency
+response</a> function
+look like it should?</p>
+  </li>
+</ol>
+
+<p>These will be the question’s we’ll try to answer in the next section.</p>
+
+<h2 id="testing-the-generic-filter">Testing the Generic filter</h2>
+
+<p>We’ll start by working through the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/genericfir_tb.cpp">test bench</a>
+for <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">this
+filter</a>.
+We’ve already <a href="/dsp/2017/11/04/genfil-tb.html">presented most of the difficult
+logic</a>
+(<a href="/dsp/2017/11/22/fltr-response.html">here too</a>),
+so all that remains now is to create a
+series of tests and apply them to
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>
+through our
+<a href="/dsp/2017/11/04/genfil-tb.html">generic test harness</a>.</p>
+
+<p>The first step, though, is to define the constant parameters that
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>
+was <a href="https://www.veripool.org/wiki/verilator">verilated</a>
+with.  We’ve touched on the fact, over time, that I haven’t found a good way
+to get module parameters into our test bench.  Instead, we’ll declare them
+up top and require the user to remember to keep them in synch with <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the verilog
+filter</a>’s
+synthesized parameters.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">const</span>	<span class="kt">unsigned</span>	<span class="n">NTAPS</span> <span class="o">=</span> <span class="mi">128</span><span class="p">;</span>
+<span class="k">const</span>	<span class="kt">unsigned</span>	<span class="n">IW</span> <span class="o">=</span> <span class="mi">12</span><span class="p">;</span>
+<span class="k">const</span>	<span class="kt">unsigned</span>	<span class="n">TW</span> <span class="o">=</span> <span class="n">IW</span><span class="p">;</span>
+<span class="k">const</span>	<span class="kt">unsigned</span>	<span class="n">OW</span> <span class="o">=</span> <span class="n">IW</span><span class="o">+</span><span class="n">TW</span><span class="o">+</span><span class="mi">7</span><span class="p">;</span>
+<span class="k">const</span>	<span class="kt">unsigned</span>	<span class="n">DELAY</span><span class="o">=</span> <span class="n">NTAPS</span><span class="p">;</span> <span class="o">//</span> <span class="n">bits</span></code></pre></figure>
+
+<p>These parameters are: the number of taps in implemented within <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the
+filter</a>,
+<code class="highlighter-rouge">NTAPS</code>, the number of bits in an inputs sample, <code class="highlighter-rouge">IW</code>, the number of bits in
+each <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> coefficient,
+<code class="highlighter-rouge">TW</code>, and the number of output bits.  The last parameter, <code class="highlighter-rouge">DELAY</code>, is the number
+of clocks that need to take place from the time an input is presented to
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>
+until the first response due to <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the
+filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>.</p>
+
+<p>The next step is to set up the
+<a href="https://www.veripool.org/wiki/verilator">Verilator</a> based <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/genericfir_tb.cpp">test
+bench</a>,
+and create a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+subclassed from the
+<a href="/dsp/2017/11/04/genfil-tb.html">generic filter test harness</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">GENERICFIR_TB</span>	<span class="o">*</span><span class="n">tb</span><span class="p">;</span>
+
+<span class="kt">int</span>	<span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">Verilated</span><span class="o">::</span><span class="n">commandArgs</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">);</span>
+	<span class="n">tb</span> <span class="o">=</span> <span class="k">new</span> <span class="n">GENERICFIR_TB</span><span class="p">();</span></code></pre></figure>
+
+<p>We’ll want to test below whether or not <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the
+filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a> is
+as we think it should be.  To do this, we’ll pick values that are the absolute
+maximum values.  We’ll also attempt to turn <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">this
+filter</a>
+into a
+<a href="/dsp/2017/10/16/boxcar.html">moving averaging filter</a>
+later to see if we can overflow it.  Both of these require maximum constant
+values.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">const</span> <span class="kt">int</span>	<span class="n">TAPVALUE</span> <span class="o">=</span> <span class="o">-</span><span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">TW</span><span class="o">-</span><span class="mi">1</span><span class="p">));</span>
+	<span class="k">const</span> <span class="kt">long</span>	<span class="n">IMPULSE</span>  <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">IW</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>As a last step before beginning, we’ll allocate some memory for test vectors,
+and for <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients we might wish to apply as part of a test.
+We’ll also (optionally) open a
+<a href="/blog/2017/07/31/vcd.html">VCD file</a>
+to record the internals of anything that happens.  As a final step before
+beginning, we’ll issue a reset to the unit under test.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">long</span>	<span class="n">tapvec</span><span class="p">[</span><span class="n">NTAPS</span><span class="p">];</span>
+	<span class="kt">long</span>	<span class="n">ivec</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NTAPS</span><span class="p">];</span>
+
+	<span class="c1">// tb-&gt;trace("trace.vcd");
+</span>	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">reset</span><span class="p">();</span></code></pre></figure>
+
+<p>Now for our first test set: let’s walk through all coefficients, setting a
+single coefficient to <code class="highlighter-rouge">TAPVALUE</code> at a time, and let’s see if we get the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+we are expecting.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">NTAPS</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">//
+</span>		<span class="c1">// Create a new coefficient vector
+</span>		<span class="c1">//
+</span>		<span class="c1">// Initialize it with all zeros
+</span>		<span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">NTAPS</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">tapvec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="c1">// Then set one value to non-zero
+</span>		<span class="n">tapvec</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">TAPVALUE</span><span class="p">;</span>
+
+		<span class="c1">// Test whether or not this coefficient vector
+</span>		<span class="c1">// loads properly into the filter
+</span>		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">testload</span><span class="p">(</span><span class="n">NTAPS</span><span class="p">,</span> <span class="n">tapvec</span><span class="p">);</span>
+
+		<span class="c1">// Then test whether or not the filter overflows
+</span>		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test_overflow</span><span class="p">();</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>You may remember from
+<a href="/dsp/2017/11/04/genfil-tb.html">when we built our</a>
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>,
+that the <code class="highlighter-rouge">testload</code> function not only loads coefficients into <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the
+filter</a>,
+but it also applies sufficient test vectors to
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>
+to know whether or not the coefficients were validly loaded as desired.  In a
+similar fashion, the <code class="highlighter-rouge">test_overflow()</code> method runs maximum (negative) values
+into <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the
+filter</a>
+to see if it can be caused to overflow.  Both routines will end in an <code class="highlighter-rouge">assert()</code>
+if something fails.</p>
+
+<p>For our second test, let’s set all of the coefficients to a maximum value.
+This will create a
+<a href="/dsp/2017/10/16/boxcar.html">block average filter</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">NTAPS</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">tapvec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">TAPVALUE</span><span class="p">;</span></code></pre></figure>
+
+<p>We can then set <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">our
+filter</a>’s
+coefficients to be these values, and <a href="/dsp/2017/11/04/genfil-tb.html">double check that what we loaded
+was what we wanted</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">testload</span><span class="p">(</span><span class="n">NTAPS</span><span class="p">,</span> <span class="n">tapvec</span><span class="p">);</span></code></pre></figure>
+
+<p>One of the neat parts of using a
+<a href="/dsp/2017/10/16/boxcar.html">block filter</a>
+is that the filter’s response is easy to predict.  Let’s apply a
+<a href="https://en.wikipedia.org/wiki/Rectangular_function">rectangle function</a>
+to the input of
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">this filter</a>
+and verify that we get the response we are expecting.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="c1">// Set every element of an array to the same value
+</span>	<span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="mi">2</span><span class="o">*</span><span class="n">NTAPS</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">ivec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">IMPULSE</span><span class="p">;</span>
+
+	<span class="c1">// Now apply this vector to the filter
+</span>	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">2</span><span class="o">*</span><span class="n">NTAPS</span><span class="p">,</span> <span class="n">ivec</span><span class="p">);</span>
+
+	<span class="c1">// And check that it has the right response
+</span>	<span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">NTAPS</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">assert</span><span class="p">(</span><span class="n">ivec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">*</span><span class="n">IMPULSE</span><span class="o">*</span><span class="n">TAPVALUE</span><span class="p">);</span></code></pre></figure>
+
+<p>These
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients are also the <em>most</em> likely coefficients to overflow–since they are
+all maximum valued integers for their bit-widths.  Let’s see if we can cause
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">this filter</a>
+to overflow by using these same maximal coefficients as inputs.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">assert</span><span class="p">(</span><span class="n">tb</span><span class="o">-&gt;</span><span class="n">test_overflow</span><span class="p">());</span></code></pre></figure>
+
+<p><a href="/dsp/2017/11/04/genfil-tb.html">As you may recall, the overflow
+test</a>
+places inputs into
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>
+with maximum integer values.  It returns true if
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>
+passes, or false otherwise.  (Actually, it fails on an assert error if the
+filter doesn’t pass here.)</p>
+
+<p>A <a href="/dsp/2017/10/16/boxcar.html">block average filter</a>
+should act like a
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filter</a>.
+Let’s evaluate its
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>,
+and see whether it matches what we might expect.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="p">{</span>
+		<span class="kt">double</span> <span class="n">fp</span><span class="p">,</span>      <span class="c1">// Passband frequency cutoff
+</span>			<span class="n">fs</span><span class="p">,</span>     <span class="c1">// Stopband frequency cutoff,
+</span>			<span class="n">depth</span><span class="p">,</span>  <span class="c1">// Depth of the stopband
+</span>			<span class="n">ripple</span><span class="p">;</span> <span class="c1">// Maximum deviation within the passband
+</span>
+		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">measure_lowpass</span><span class="p">(</span><span class="n">fp</span><span class="p">,</span> <span class="n">fs</span><span class="p">,</span> <span class="n">depth</span><span class="p">,</span> <span class="n">ripple</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"FP     = %f</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">fp</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"FS     = %f</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">fs</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"DEPTH  = %6.2f dB</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">depth</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"RIPPLE = %.2g</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">ripple</span><span class="p">);</span>
+
+		<span class="c1">// The depth of the filter should be between -14 and -13.
+</span>		<span class="c1">// assert() that here.
+</span>		<span class="n">assert</span><span class="p">(</span><span class="n">depth</span> <span class="o">&lt;</span> <span class="o">-</span><span class="mi">13</span><span class="p">);</span>
+		<span class="n">assert</span><span class="p">(</span><span class="n">depth</span> <span class="o">&gt;</span> <span class="o">-</span><span class="mi">14</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>A quick check of the results, shows us that we are in the range we are
+expecting.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">FP     = 0.002441
+FS     = 0.006592
+DEPTH  = -13.26 dB
+RIPPLE = 0.34</code></pre></figure>
+
+<p>In particular, a <code class="highlighter-rouge">13 dB</code>
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+is about as much as we might expect from any
+<a href="/dsp/2017/10/16/boxcar.html">moving average filter</a>.</p>
+
+<p>For a final test, let’s load
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">our filter</a>
+with a set of <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/twelvebfltr.h">pre-calculated
+coefficients</a>
+so as to implement a
+<a href="https://en.wikipedia.org/wiki/Half-band_filter">half-band</a>
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filter</a>.  The first
+step is to load
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/twelvebfltr.h">these coefficients</a>
+into an array.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">NCOEFFS</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">tapvec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">icoeffs</span><span class="p">[</span><span class="n">i</span><span class="p">];</span>
+
+	<span class="c1">// In case the filter is longer than the number of taps we have,
+</span>	<span class="c1">// we'll load zero any taps beyond the filters length.
+</span>	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="n">NCOEFFS</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">NTAPS</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">tapvec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p><a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/twelvebfltr.h">This array</a>
+can then be loaded into
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>.
+Once done, we can then <a href="/dsp/2017/11/04/genfil-tb.html">test and verify
+that</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/twelvebfltr.h">the coefficients</a>
+were loaded properly.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">testload</span><span class="p">(</span><span class="n">NTAPS</span><span class="p">,</span> <span class="n">tapvec</span><span class="p">);</span></code></pre></figure>
+
+<p>Now that
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the filter</a>
+has a <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/twelvebfltr.h">more practical set of
+coefficients</a>
+loaded into it, how well did we do?
+Let’s <a href="/dsp/2017/11/22/fltr-response.html">measure</a> <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">the
+filter</a>’s
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>, and
+report some statistics from it.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="c1">// And let's check that it works by measuring its frequency response
+</span>	<span class="p">{</span>
+		<span class="kt">double</span> <span class="n">fp</span><span class="p">,</span>      <span class="c1">// Passband frequency cutoff
+</span>			<span class="n">fs</span><span class="p">,</span>     <span class="c1">// Stopband frequency cutoff,
+</span>			<span class="n">depth</span><span class="p">,</span>  <span class="c1">// Depth of the stopband
+</span>			<span class="n">ripple</span><span class="p">;</span> <span class="c1">// Maximum deviation within the passband
+</span>
+		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">measure_lowpass</span><span class="p">(</span><span class="n">fp</span><span class="p">,</span> <span class="n">fs</span><span class="p">,</span> <span class="n">depth</span><span class="p">,</span> <span class="n">ripple</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"FP     = %f</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">fp</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"FS     = %f</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">fs</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"DEPTH  = %6.2f dB</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">depth</span><span class="p">);</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"RIPPLE = %.2g</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">ripple</span><span class="p">);</span>
+
+		<span class="c1">// The depth of this stopband should be between -55 and -54 dB
+</span>		<span class="n">assert</span><span class="p">(</span><span class="n">depth</span> <span class="o">&lt;</span> <span class="o">-</span><span class="mi">54</span><span class="p">);</span>
+		<span class="n">assert</span><span class="p">(</span><span class="n">depth</span> <span class="o">&gt;</span> <span class="o">-</span><span class="mi">55</span><span class="p">);</span>
+	<span class="p">}</span>
+	<span class="n">printf</span><span class="p">(</span><span class="s">"SUCCESS</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+
+	<span class="n">exit</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>This will lead to the output,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">FP     = 0.232910
+FS     = 0.267090
+DEPTH  = -54.14 dB
+RIPPLE = 0.0064</code></pre></figure>
+
+<p>among other outputs.</p>
+
+<p>This looks much better than our prior set of coefficients, and indeed it is.
+We now have about a <code class="highlighter-rouge">54 dB</code>
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+depth.  Further, our
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>
+and
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a> frequencies
+are both centered around 1/4, just as you would expect for any
+<a href="https://en.wikipedia.org/wiki/Half-band_filter">half-band</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a>.
+Even better, the distance from the middle of the band to the
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>
+cutoff frequency,<code class="highlighter-rouge">0.25-0.232910</code>,
+is exactly the same as the distance from the middle of the band to the
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+start, or <code class="highlighter-rouge">0.267090-0.25</code>.</p>
+
+<p>You can see the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+measured by
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">this routine</a>
+in the charts within our <a href="/dsp/2017/11/22/fltr-response.html">last post on measuring the
+frequency response</a>
+of a <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+or below in Fig 1 showing the <a href="/dsp/2017/11/22/fltr-response.html">frequency
+response</a> in linear
+units,</p>
+
+<table align="center" style="float: none"><caption>Fig 1. Frequency response function</caption><tr><td><img src="/img/freq-resp.png" alt="A Chart of the Measured vs Calculated frequency response" width="801" /></td></tr></table>
+
+<p>while Fig 2 below shows the
+<a href="/dsp/2017/11/22/fltr-response.html">response</a> of
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/genericfir.v">this filter</a>
+in <a href="https://en.wikipedia.org/wiki/Decibel">Decibels</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 2. Examining a filter's frequency response in Decibel's</caption><tr><td><img src="/img/freq-resp-dB.png" alt="A Chart of the Measured vs Calculated frequency response, in decibel's" width="793" /></td></tr></table>
+
+<p>In both examples, the calculated <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency
+response</a> and our
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>
+<a href="/dsp/2017/11/22/fltr-response.html">estimated frequency response</a>
+lie on top of each other–giving us reason to believe that our
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+performs as desired.</p>
+
+<h2 id="time-for-more-filters">Time for more filters!</h2>
+
+<p>Now that we’ve finished discussing how to test/verify a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a>,
+it’s time to build some more!  Let’s see … I’ve wanted to demonstrate a
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filter</a>
+that’s been waiting on this post, the
+<a href="https://en.wikipedia.org/wiki/Hilbert_transform">Hilbert transform</a>
+should be trivial following the
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filter</a>, I’ve got a few
+slower <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+(fewer multiplies) that I can demo … indeed, this might only be the beginning.</p>
+
+<p>On the other hand, there are other CPU based topics that I’ve been ignoring,
+so it might still take us some time to get to all of these new
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a>
+implementations.</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>When your fathers tempted me, proved me, and saw my work.  (Ps 95:9)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
