@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a Numerically Controlled Oscillator</title>
+  <meta name="description" content="Many signalprocessingapplications require a sine waveat some point.  If thephaseorfrequencyof thissine waveis controlled within the design, then it is often ...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/12/09/nco.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a Numerically Controlled Oscillator</h1>
+    <p class="post-meta"><time datetime="2017-12-09T00:00:00-05:00" itemprop="datePublished">Dec 9, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Many <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">signal
+processing</a>
+applications require a <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+at some point.  If the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+or
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+of this
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+is controlled within the design, then it is often called a <a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">Numerically
+Controlled Oscillator
+(NCO)</a>. 
+Let’s spend some time today looking into how you might build
+one of these within an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.  We’ll
+also present a C++ implementation at the end as well, which may be used
+in embedded <a href="https://en.wikipedia.org/wiki/Embedded_system">embedded</a>
+applications.</p>
+
+<p>Since we’ve already studied how to generate a
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+on an <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>,
+most of our work is already done: We’ve discussed a <a href="/dsp/2017/07/11/simplest-sinewave-generator.html">table lookup
+method</a>,
+a <a href="/dsp/2017/08/26/quarterwave.html">quarter wave table
+lookup</a>,
+method, and even how to generate both
+a <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a> and a cosine wave using a
+<a href="/dsp/2017/08/30/cordic.html">CORDIC</a>.
+The subtle difference to describe to day is really how to turn such a
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+generator into a 
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>.</p>
+
+<p>Before we dive into the details, though, let’s spend a moment thinking about
+how you might use such an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>.
+My own reason for presenting this today is twofold.  First, I know of a student
+struggling to understand how to build something like this as part of a
+<a href="https://en.wikipedia.org/wiki/Data_transmission">digital communications</a>
+<a href="https://en.wikipedia.org/wiki/Demodulation">demodulator</a>.
+There is a small trick involved–one that appears to be well known among those
+who do this sort of thing for a living, but not so well known among students and
+I’d like to share it here.  Indeed, I think we might even build a better
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a> below
+than <a href="https://stackoverflow.com/questions/13466623/how-to-look-up-sine-of-different-frequencies-from-a-fixed-size-lookup-table">this stackoverflow article</a>
+recommends.  My second reason for writing today is that I’d like to write about
+how to build a <a href="https://en.wikipedia.org/wiki/Phase-locked_loop">Phase Locked Loop
+(PLL)</a>
+within an <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+on <a href="http://zipcpu.com/">this blog</a>,
+and every <a href="https://en.wikipedia.org/wiki/Phase-locked_loop">PLL</a>
+I’ve ever built has always included the basic
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+logic as part of <a href="https://github.com/ZipCPU/dpll/blob/master/rtl/sdpll.v">its
+implementation</a>.</p>
+
+<p>But this hardly scratches the surface of what you might do with an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>.
+Consider as an example that …</p>
+
+<ul>
+  <li>
+    <p>Any linear signal processing system is completely characterized by its
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>.
+As a result, I’ve used an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+in time past, together with a scope of some type, to evaluate whether the
+digital input to a
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">signal processing</a>
+algorithm was being handled properly.</p>
+  </li>
+  <li>
+    <p>We used an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+earlier as part of
+<a href="/dsp/2017/09/16/pwm-demo.html">our demonstration</a>
+that the <a href="/dsp/2017/09/04/pwm-reinvention.html">improved PWM
+generator</a>
+worked better than a traditional
+<a href="https://en.wikipedia.org/wiki/Pulse-width_modulation">PWM</a> for audio
+signal generation.  While we didn’t discuss the details of the tone generator
+at the time, we’ll explain many of those details today.</p>
+  </li>
+  <li>
+    <p>You can also use an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+to move a signal around in
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>–either bringing it
+down from some
+<a href="https://en.wikipedia.org/wiki/Intermediate_frequency">intermediate frequency (IF)</a>
+to a <a href="https://en.wikipedia.org/wiki/Baseband">baseband</a>
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+where you can process it in
+a <a href="https://en.wikipedia.org/wiki/Radio_receiver">receiver</a>,
+or the same in the other direction as part of a
+<a href="https://en.wikipedia.org/wiki/Transmitter">transmission</a> algorithm.</p>
+  </li>
+  <li>
+    <p>You can also use an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+as part of either a digital communications
+<a href="https://en.wikipedia.org/wiki/Modulation">modulator</a>
+or <a href="https://en.wikipedia.org/wiki/Demodulation">demodulator</a>.</p>
+  </li>
+  <li>
+    <p>You can use an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a> to
+create an <a href="https://en.wikipedia.org/wiki/Amplitude_modulation">Amplitude
+Modulated (AM)</a>
+signal, or even a <a href="https://en.wikipedia.org/wiki/Frequency_modulation">Frequency
+Modulated (FM)</a> signal.</p>
+  </li>
+  <li>
+    <p>Another common use is to generate musical notes via
+an <a href="https://en.wikipedia.org/wiki/Synthesizer">additive synthesizer</a>.  Indeed,
+the <a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a> accumulator
+portion of the
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+we’ll develop below can even be used in
+<a href="https://en.wikipedia.org/wiki/Synthesizer">subtractive synthesis</a>–it’s quite
+generic.</p>
+  </li>
+  <li>
+    <p>Finally, because you as the designer have <em>complete</em> control over the
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a> output of the
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>,
+you can even do some more exotic things–such as building a <a href="https://en.wikipedia.org/wiki/Frequency-hopping_spread_spectrum">frequency
+hopping</a>
+<a href="https://en.wikipedia.org/wiki/Spread_spectrum">spread spectrum</a>
+signal–should this be what you wish to do.</p>
+  </li>
+</ul>
+
+<p>Indeed, <a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>s
+are such fundamental components of <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">Digital Signal Processing
+(DSP)</a>
+algorithms that it is difficult to enumerate <em>all</em> the things they can
+be used for here.</p>
+
+<h2 id="what-is-an-nco">What is an NCO?</h2>
+
+<table style="float: right"><caption>Fig 1. NCO</caption><tr><td><img src="/img/nco-block.svg" alt="NCO transforms a frequency input into a sinewave" width="360" /></td></tr></table>
+
+<p>For our purpose today, a <a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">Numerically Controlled
+Oscillator</a>
+is simply an oscillator created from digital logic that you have complete
+control over digitally.
+Nominally, such an oscillator will receive as an input the
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+you wish to produce and it will produce a digitally sampled
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+at that <a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>.
+Should you choose to use an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+within a <a href="https://en.wikipedia.org/wiki/Phase-locked_loop">PLL</a>,
+then you will also be adjusting the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+of this <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+generator.  For now, however, consider an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+to be a simple digital logic circuit that takes a
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+input and produces a sampled
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+as an output.</p>
+
+<table align="center" style="float: none"><caption>Fig 2. Block Diagram</caption><tr><td><img src="/img/nco-components.svg" alt="The components of a basic NCO" width="540" /></td></tr></table>
+
+<p>Internally, the
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+keeps track of the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a> of the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+it produces, and it increments this
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+at each sample point.</p>
+
+<p>Let’s walk through a little bit of trigonometry, to see how this works.</p>
+
+<p>We’ll start with the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+that we want to produce, such as the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+shown in Fig 3,</p>
+
+<table align="center" style="float: none"><caption>Fig 3. A pure sinewave</caption><tr><td><img src="/img/nco-pure-tone.png" alt="Picture of x(t) = sine(2pi ft)" width="540" /></td></tr></table>
+
+<p>and is given by the equation,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-xt.png" alt="x(t) = sin(2pi ft)" width="189" /></td></tr></table>
+
+<p>Since digital implementations can only work on
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled signals</a>,
+we’ll need to sample this <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+every <code class="highlighter-rouge">Ts</code> seconds.  To keep our notation straight,
+we’ll now index this <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+output by <a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+number, <code class="highlighter-rouge">n</code>, rather than by time, <code class="highlighter-rouge">t</code>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-xnts.png" alt="x[n] = sin(2pi (nTs) f)" width="241" /></td></tr></table>
+
+<p>I personally find it easier to work with the <em>sample rate</em> of the
+<a href="https://en.wikipedia.org/wiki/Digital-to-analog_converter">digitizer</a>, <code class="highlighter-rouge">fs</code>
+rather than the <em>time between samples</em>, <code class="highlighter-rouge">Ts</code>.  <a href="https://en.wikipedia.org/wiki/Frequency">These are reciprocals of each
+other</a>, so <code class="highlighter-rouge">fs = 1/Ts</code>.  We can then
+express this same equation as,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-xnffs.png" alt="x[n] = sin(2pi n f/fs)" width="218" /></td></tr></table>
+
+<p>and plot the sampled function in Fig 4.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. A sampled sinewave</caption><tr><td><img src="/img/nco-sampled-tone.png" alt="Picture of x[n] = sine(2pi f/fs n)" width="540" /></td></tr></table>
+
+<p>In this figure, the samples are shown in circles.  They are each separated by
+a phase of <code class="highlighter-rouge">2pi f/fs</code>.</p>
+
+<p>Our entire focus in this algorithm, though, is going to be on the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+of this expression–the argument of the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>.  In the expression
+above, this
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+is given by <code class="highlighter-rouge">n</code> times the <a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+ratio, <code class="highlighter-rouge">f/fs</code>, times <code class="highlighter-rouge">2pi</code>.  We’ll call this changing
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+value <code class="highlighter-rouge">phi[n]</code>.</p>
+
+<p>To build an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>,
+we are going to need to transform this
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a> value, <code class="highlighter-rouge">phi[n]</code>,
+into an input our <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+generator can handle.</p>
+
+<p>We’ll start by rewriting our
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a> using this
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a> value, <code class="highlighter-rouge">phi[n]</code>,
+so that it captures the internals of this
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>–with
+the exception of the <code class="highlighter-rouge">2pi</code> portion.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-xphi.png" alt="x[n] = sin(2pi phi[n])" width="210" /></td></tr></table>
+
+<p>Specifically, this
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+value is defined by,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-phi.png" alt="phi[n] = n(f/fs)" width="136" /></td></tr></table>
+
+<table style="float: right"><caption>Fig 5. Unit circle rotations</caption><tr><td><img src="/img/dphase-unit-circle.svg" alt="A picture of the unit circle" width="180" /></td></tr></table>
+
+<p>It represents the number of times our
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+has gone around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>–the number of
+rotations if you will.  For example, a <code class="highlighter-rouge">phi[n]</code> of 1.0, applied internally
+to our <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>,
+would lead to a
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a> argument to our
+sine function of <code class="highlighter-rouge">2pi</code>–suggesting we had gone around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>
+once.  A <code class="highlighter-rouge">phi[n]</code> of 2.0 would yield the same value, but represent
+instead that the <a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+had traveled around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>
+twice.  Fractions then will indicate partial angles from the x-axis around
+the <a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>,
+hence a <code class="highlighter-rouge">phi[n]</code> of <code class="highlighter-rouge">0.5</code> would represent going halfway round
+this <a href="https://en.wikipedia.org/wiki/Unit_circle">circle</a>,
+while <code class="highlighter-rouge">0.25</code> would represent a quarter of the way around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">circle</a>.</p>
+
+<p>Let’s keep working with this value for a bit.  We can define this
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+recursively based upon the prior
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-phibyphi.png" alt="phi[n]=phi[n-1]+f/fs" width="226" /></td></tr></table>
+
+<p>This simple modification accomplishes two purposes.  First, it allows us to
+avoid a multiply by <code class="highlighter-rouge">n</code>, turning the calculation of the next
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+from the past
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+into an operation requiring an addition alone.  Second, because this newer
+version is no longer tied to the distance from <code class="highlighter-rouge">n=0</code>, this subtle change
+allows us to maintain any accumulated
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+offsets in our
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+as well–not just
+<a href="https://en.wikipedia.org/wiki/Frequency">frequencies</a>
+with zero phase at zero time.</p>
+
+<p>This sounds fairly straight-forward so far.  What’s the trick?</p>
+
+<h2 id="the-trick-to-building-an-nco">The “Trick” to building an NCO</h2>
+
+<p>The “trick” in building an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+lies in the units of <code class="highlighter-rouge">phi[n]</code>.  The units of <code class="highlighter-rouge">phi[n]</code>, presented above, are
+a number of cycles (or rotations) around the <a href="https://en.wikipedia.org/wiki/Unit_circle">unit
+circle</a>.  As a result, a
+<code class="highlighter-rouge">phi[n]</code> of 1.0 represents once around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>,
+and a <code class="highlighter-rouge">phi[n]</code> of 2.0 represents twice around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>, etc.</p>
+
+<p>However, within most
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">signal processing</a>
+logic (<a href="/dsp/2017/07/19/linear-upsampling.html">not
+quite all</a>),
+you don’t care how many <em>integer</em> times a
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a> goes around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>,
+you only care about the angular fraction.
+Let’s therefore examine this number in terms of both it’s integer and
+fractional portions.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-phi-fraction.png" alt="phi[n]=INT.FRACTION(...)" width="258" /></td></tr></table>
+
+<p>Specifically, let’s separate it into an integer portion, and the first
+<code class="highlighter-rouge">W</code> bits past the decimal point as shown below.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/phase-bits.svg" alt="phi[n] separates into integer components and W fractional components" width="780" /></td></tr></table>
+
+<p>Pictorially, dropping the integer portion might look like Fig 6 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 6. Phase function</caption><tr><td><img src="/img/nco-sampled-phase.png" alt="A picture of the sampled phase function" width="540" /></td></tr></table>
+
+<p>Notice how the phase jumps back to zero in Fig 6 at the same point as where the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+starts to repeat.  Sure, you didn’t need to bring this value back down
+to zero, but doing so creates a limited range in <code class="highlighter-rouge">y</code> that we can then
+split among a fixed number of bits, <code class="highlighter-rouge">W</code>.</p>
+
+<p>Since we didn’t care about the integer number of times we’ve gone around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>,
+we can subtract from <code class="highlighter-rouge">phi[n]</code> its integer portion to recover the
+fraction alone–just like we did in Fig 6 above.  We can then multiply the
+result by <code class="highlighter-rouge">2^W</code>, so as to get a
+<a href="https://en.wikipedia.org/wiki/Fixed_point_(mathematics)">fixed-point</a>
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+representation that will fit within a word of <code class="highlighter-rouge">W</code> bits long.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-usable-phi-defn.png" alt="PHI[n]=2^W (phi[n] - floor(phi[n]))" width="299" /></td></tr></table>
+
+<p>Just to finish this off, we’ll only keep the integer portion of this
+value, representing the top <code class="highlighter-rouge">W</code> bits of our fractional
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>,
+and we’ll ignore any further bits beyond the decimal point.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-sinewave-usable-fraction.png" alt="PHI[n]~=FRACTION" width="212" /></td></tr></table>
+
+<p>Hence <code class="highlighter-rouge">PHI[n]</code> is now a number between <code class="highlighter-rouge">0</code> and <code class="highlighter-rouge">2^W-1</code> representing a fractional
+rotation around the <a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>,
+a value between <code class="highlighter-rouge">0</code> and <code class="highlighter-rouge">1</code>.</p>
+
+<p>That’s the first part of our “trick.”</p>
+
+<p>For the second part of this “trick”, let’s use the top <code class="highlighter-rouge">P</code> bits of our
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>,
+<code class="highlighter-rouge">PHI[n]</code>, as the input to our
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+generator, whether a
+<a href="/dsp/2017/07/11/simplest-sinewave-generator.html">table lookup</a>
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a> generator, or even the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+input phase value of a 
+<a href="/dsp/2017/08/30/cordic.html">CORDIC</a> algorithm.</p>
+
+<p>But what about the rest of the <code class="highlighter-rouge">W</code> bits of our
+<a href="https://en.wikipedia.org/wiki/Fixed_point_(mathematics)">fixed-point</a>
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+representation?</p>
+
+<p>These can be used for one of two purposes.  First, they can be used as a
+fractional table index, accumulating over time to adjust our table index.
+An example of this is shown below in Fig 7.</p>
+
+<table align="center" style="float: none"><caption>Fig 7. Fractional phase accumulation</caption><tr><td><img src="/img/phase-tbl-index.svg" alt="phi[n] separates into integer components and W fractional components" width="780" /></td></tr></table>
+
+<p>If you look carefully at this figure, you can see how the phase pointer
+moves a little bit more than one table position at a time.  Eventually this
+extra accumulated fraction causes the table index to
+skip a table position entirely (position 6).</p>
+
+<p>This will allow you to represent and create 
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>s at
+<a href="https://en.wikipedia.org/wiki/Frequency">frequencies</a>
+not formed by integer steps through your table.  Such
+<a href="https://en.wikipedia.org/wiki/Frequency">frequencies</a>
+may involve jumping across table entries, as shown above in Fig 7, or even
+repeating entries if necessary.  Yes, jumping entries will likely cause a
+distortion in your output, but it will also help you maintain better
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+resolution than the first <code class="highlighter-rouge">P</code> bits alone would allow.</p>
+
+<p>A second use for the bottom <code class="highlighter-rouge">W-P</code> bits would be as part of an
+interpolation
+scheme to reduce the <a href="https://en.wikipedia.org/wiki/Phase_noise">phase noise</a>
+associated with any table representation.
+This is such an important possibility that we may have
+to come back to it and write about it more in a later article.</p>
+
+<p>But, what about overflow?</p>
+
+<p>This is an important question, so let’s walk through an example and see what
+happens.  Consider what would happen if we were keeping track of
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+in an 8-bit word, and one of our additions overflowed.  For example,
+suppose you wanted to take four steps to go around a circle, starting at
+<code class="highlighter-rouge">PHI[n]=8'h20</code> (45 degrees).  You’d then add to it <code class="highlighter-rouge">8'h40</code> (90 degrees) on
+each clock.  The resulting sequence would then be, <code class="highlighter-rouge">8'h20</code> (45 degrees),
+<code class="highlighter-rouge">8'h60</code> (135 degrees), <code class="highlighter-rouge">8'ha0</code> (225 degrees), <code class="highlighter-rouge">8'he0</code> (315 degrees),
+<code class="highlighter-rouge">8'h20</code> (45 degrees).</p>
+
+<p>Did you catch what just happened?  The
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator just overflowed between 315 degrees and 45 degrees, and yet the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+representation just “did the right thing”!  What that means is that you can
+ignore any overflow in your
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>–it’s
+just going to wrap around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>
+anyway, and the <a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+generator is only interested in the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+fraction anyway.</p>
+
+<h2 id="example-source-code">Example Source Code</h2>
+
+<p>So, how would this look in practice?  Let’s look at an example of what this
+would look like in both C++ and Verilog.</p>
+
+<p>We’ll start with a C++ example.  We’ll make a C++
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+class incorporating these principles.  There are three basic parts
+to this class.  The first is the class declaration and table generation.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">class</span> <span class="nc">NCO</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+	<span class="kt">unsigned</span>	<span class="n">m_lglen</span><span class="p">,</span> <span class="n">m_len</span><span class="p">,</span> <span class="n">m_mask</span><span class="p">,</span> <span class="n">m_phase</span><span class="p">,</span> <span class="n">m_dphase</span><span class="p">;</span>
+	<span class="kt">float</span>		<span class="o">*</span><span class="n">m_table</span><span class="p">;</span>
+
+	<span class="n">NCO</span><span class="p">(</span><span class="k">const</span> <span class="kt">int</span> <span class="n">lgtblsize</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// We'll use a table 2^(lgtblize) in length.  This is
+</span>		<span class="c1">// non-negotiable, as the rest of this algorithm depends upon
+</span>		<span class="c1">// this property.
+</span>		<span class="n">m_lglen</span> <span class="o">=</span> <span class="n">lgtblsize</span><span class="p">;</span>
+		<span class="n">m_len</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">lgtblsize</span><span class="p">);</span>
+
+		<span class="c1">// m_mask is 1 for any bit used in the index, zero otherwise
+</span>		<span class="n">m_mask</span> <span class="o">=</span> <span class="n">m_len</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>We’ll build the table itself with the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+values at the left-edge of any interval.  This isn’t optimal, since it will
+force the error to zero on the left edge and likely make it a maximum on the
+right side of the interval, but it will yield us a decent capability quickly.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">m_table</span> <span class="o">=</span> <span class="k">new</span> <span class="kt">float</span><span class="p">[</span><span class="n">m_len</span><span class="p">];</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">m_len</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">m_table</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="n">sin</span><span class="p">(</span><span class="mf">2.</span><span class="o">*</span><span class="n">M_PI</span><span class="o">*</span><span class="n">k</span> <span class="o">/</span> <span class="p">(</span><span class="kt">double</span><span class="p">)</span><span class="n">m_len</span><span class="p">);</span></code></pre></figure>
+
+<p>We may come back to this in a later post to minimize the maximum error
+in this lookup.</p>
+
+<p>The last part of this initialization is to provide initial values for our
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator  (<code class="highlighter-rouge">PHI[n]</code>) and the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+step necessary to create a known
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a> output.
+In this case, we’ll initialize this step so that it will produce a zero
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>–not
+very exciting, but fixing that will be our next step.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="c1">// m_phase is the variable holding our PHI[n] function from
+</span>		<span class="c1">// above.
+</span>		<span class="c1">// We'll initialize our initial phase and frequency to zero
+</span>		<span class="n">m_phase</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_dphase</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="c1">// On any object deletion, make sure we delete the table as well
+</span>	<span class="o">~</span><span class="n">NCO</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">delete</span><span class="p">[]</span> <span class="n">m_table</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>The second part of this implementation is the function that sets the
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>.
+This is captured within the
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a> object
+by the <a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+step, <code class="highlighter-rouge">m_dphase</code>.  As discussed above, this is the difference between <code class="highlighter-rouge">PHI[n]</code>
+and <code class="highlighter-rouge">PHI[n-1]</code>.  Further, if you create a <code class="highlighter-rouge">SAMPLE_RATE</code> value in
+<a href="https://en.wikipedia.org/wiki/Hertz">Hertz</a>,
+then <code class="highlighter-rouge">f</code> can be given to this routine in
+<a href="https://en.wikipedia.org/wiki/Hertz">Hertz</a>.  Otherwise, you can keep
+<code class="highlighter-rouge">SAMPLE_RATE</code> set to <code class="highlighter-rouge">1.0</code> and then the <code class="highlighter-rouge">f</code> value accepted by this routine will 
+be set in terms of a normalized
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a> ranging from <code class="highlighter-rouge">0.0</code> to the
+<a href="https://en.wikipedia.org/wiki/Nyquist_frequency">Nyquist frequency</a>, <code class="highlighter-rouge">0.5</code>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="c1">// Adjust the sample rate for your implementation as necessary
+</span>	<span class="k">const</span>	<span class="kt">float</span>	<span class="n">SAMPLE_RATE</span><span class="o">=</span> <span class="mf">1.0</span><span class="p">;</span>
+	<span class="k">const</span>	<span class="kt">float</span>	<span class="n">ONE_ROTATION</span><span class="o">=</span> <span class="mf">2.0</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1u</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">unsigned</span><span class="p">)</span><span class="o">*</span><span class="mi">8</span><span class="o">-</span><span class="mi">1</span><span class="p">));</span>
+
+	<span class="kt">float</span>	<span class="nf">frequency</span><span class="p">(</span><span class="kt">float</span> <span class="n">f</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// Convert the frequency to a fractional difference in phase
+</span>		<span class="n">m_dphase</span> <span class="o">=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)(</span><span class="n">f</span> <span class="o">*</span> <span class="n">ONE_ROTATION</span> <span class="o">/</span> <span class="n">SAMPLE_RATE</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>As a matter of personal practice, I never make the <code class="highlighter-rouge">SAMPLE_RATE</code> a part of
+my <a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+implementations.  That way one
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+implementation can work across multiple projects.</p>
+
+<p>You may find that the most confusing part of the logic above is the
+<code class="highlighter-rouge">ONE_ROTATION</code> value.  This is the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+value representing once around the
+<a href="https://en.wikipedia.org/wiki/Unit_circle">unit circle</a>.  It is given by
+<code class="highlighter-rouge">2^W</code>.  We have to go through a bit of a hoop to set this value, though, since
+the <code class="highlighter-rouge">ONE_ROTATION</code> value doesn’t fit within the <code class="highlighter-rouge">unsigned</code> integer we are using
+to hold <code class="highlighter-rouge">PHI[n]</code> (<code class="highlighter-rouge">m_phase</code>).  Alternatively, we might’ve set <code class="highlighter-rouge">ONE_ROTATION</code> to
+<code class="highlighter-rouge">pow(2,sizeof(unsigned)*8)</code>, but the approach above makes it easier for the
+compiler to recognize that this value is a constant, rather than needing to
+call the <code class="highlighter-rouge">pos()</code> math library function.</p>
+
+<p>The final part of this class steps the index into the table forward by one
+step, and then returns the value of the table at the index given by the top
+<code class="highlighter-rouge">P</code> bits in the <code class="highlighter-rouge">m_phase</code> word.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">float</span> <span class="nf">operator</span> <span class="p">()(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">unsigned</span> <span class="n">index</span><span class="p">;</span>
+
+		<span class="c1">// Increment the phase by an amount dictated by our frequency
+</span>		<span class="c1">// m_phase was our PHI[n] value above
+</span>		<span class="n">m_phase</span> <span class="o">+=</span> <span class="n">m_dphase</span><span class="p">;</span> <span class="c1">// PHI[n] = PHI[n-1] + (2^32 * f/fs)
+</span>
+		<span class="c1">// Grab the top m_lglen bits of this phase word
+</span>		<span class="n">index</span> <span class="o">=</span> <span class="n">m_phase</span> <span class="o">&gt;&gt;</span> <span class="p">(</span><span class="k">sizeof</span><span class="p">(</span><span class="kt">unsigned</span><span class="p">)</span><span class="o">*</span><span class="mi">8</span><span class="p">)</span><span class="o">-</span><span class="n">m_lglen</span><span class="p">);</span>
+
+		<span class="c1">// Insist that this index be found within 0... (m_len-1)
+</span>		<span class="n">index</span> <span class="o">&amp;=</span> <span class="n">m_mask</span><span class="p">;</span>
+
+		<span class="c1">// Finally return the table lookup value
+</span>		<span class="k">return</span> <span class="n">m_table</span><span class="p">[</span><span class="n">index</span><span class="p">];</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>You may notice that I’ve chosen to use single precision <code class="highlighter-rouge">float</code>s, rather
+than <code class="highlighter-rouge">double</code> precision floating point numbers.  I did this for 
+two reasons.</p>
+
+<p>First, I wanted to encourage you to ask the question of just how much precision
+do you actually need?</p>
+
+<p>Second, I wanted to point out that the single precision <code class="highlighter-rouge">float</code> representation
+only has a 24-bit mantissa.  Most
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>s
+today allow integers of 32-bits.  As a result, the integer
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator <em>has more precision than a <code class="highlighter-rouge">float</code>
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator</em>.  You can see this pictorially in Fig 8.</p>
+
+<table align="center" style="float: none"><caption>Fig 8. Floating vs Fixed point phase</caption><tr><td><img src="/img/nco-fixed-v-float.svg" alt="Comparing Fixed vs Floating point phase representations" width="780" /></td></tr></table>
+
+<p>If you are not familiar with single precision IEEE floats, the first bit,
+<code class="highlighter-rouge">S</code>, is a sign bit, and the next seven, <code class="highlighter-rouge">E</code>, are exponent bits.  The final
+24-bits, <code class="highlighter-rouge">M</code>, are mantissa bits.  Put together, these items represent a
+number sort of like, <code class="highlighter-rouge">(-1)^S * 2^E * M</code>.  (Yes, I’m skipping some details
+here.)</p>
+
+<p>Unlike IEEE floats, our fixed point
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+representation is simply <code class="highlighter-rouge">32</code> mantissa bits,
+having a value ranging from <code class="highlighter-rouge">0</code> to <code class="highlighter-rouge">1</code>.</p>
+
+<p>Which one do you think will have more precision?</p>
+
+<p>In a similar fashion, if you were to use an <code class="highlighter-rouge">unsigned long</code> for your
+accumulator instead of an <code class="highlighter-rouge">unsigned</code> value, then the
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator would have more precision than a <code class="highlighter-rouge">double</code> precision float would
+allow.</p>
+
+<p>In both cases the reason why this
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator out-performs a floating point
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator is simple because our representation has a fixed
+decimal location, rather than a <em>floating</em> decimal point.  That allows
+more bits per word to be allocated to the mantissa, since the floating
+point representation needed to allocate extra bits for both a sign
+bit and the exponent.</p>
+
+<p>Were you to build an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>
+implementation within Verilog, the code is almost identical.
+The biggest differences are first the fact that we require the
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+given to be already be converted into the appropriate units, and second that
+the bit select is simpler than before.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">module	nco(i_clk, i_ld, i_dphase, o_val);
+	parameter	LGTBL = 9, // Log, base two, of the table size
+			W = 32, // Word-size
+			OW = 8; // Output width
+	localparam	P = LGTBL;
+	//
+	input	wire		i_clk;
+	//
+	input	wire		i_ld;
+	input	wire		i_dphase;
+	//
+	input	wire		i_ce
+	output	wire [OW-1:0]	o_val;</code></pre></figure>
+
+<p>Any time a new
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+is requested, the <code class="highlighter-rouge">i_ld</code> signal will be set high
+and the new frequency placed into <code class="highlighter-rouge">i_dphase</code>.  This
+<a href="https://en.wikipedia.org/wiki/Frequency">frequency</a>
+value is in the units of <code class="highlighter-rouge">m_dphase</code> in the C++ code above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	reg	[W-1:0]	r_step;
+
+	initial	r_step = 0;
+	always @(posedge i_clk)
+	if (i_ld)
+		r_step &lt;= i_dphase; // = 2^W * f/fs</code></pre></figure>
+
+<p>Likewise, on any clock where <a href="/blog/2017/08/14/strategies-for-pipelining.html"><code class="highlighter-rouge">i_ce</code> is
+high</a>,
+we’ll step the <a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+forward by this same frequency-dependent amount.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	reg	[W-1:0]	r_phase;
+
+	initial	r_phase = 0;
+	always @(posedge i_clk)
+	if (i_ce)
+		// PHI[n] = PHI[n-1] + 2^W * f / fs
+		r_phase &lt;= r_phase + r_step;</code></pre></figure>
+
+<p>Finally, the top <code class="highlighter-rouge">P</code> bits of <code class="highlighter-rouge">r_phase</code> are used in our <a href="/dsp/2017/07/11/simplest-sinewave-generator.html">table
+lookup</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	sintable // #(.PW(P), .OW(OW))
+		stbl(i_clk, 1'b0, i_ce, 1'b0, r_phase[(W-1):(W-P)],
+		o_val, ignored);
+endmodule</code></pre></figure>
+
+<p>You may notice that both the C++ and Verilog implementations are quite similar.
+They are both low logic implementations showing the basics of what is required
+to create an
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>.</p>
+
+<h2 id="future-posts">Future Posts</h2>
+
+<p>We’ve just presented the logic behind building a basic
+<a href="https://en.wikipedia.org/wiki/Numerically_controlled_oscillator">NCO</a>.
+While the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+generated by this approach isn’t perfect, it may well be <em>good enough</em>
+for your project.  Should you need a higher quality
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>,
+you may wish to know that there <em>are</em> other/better
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+generators out there beyond the <a href="/dsp/2017/07/11/simplest-sinewave-generator.html">simple table
+lookup</a>
+method we’ve discussed before.</p>
+
+<p>As one example of doing better, you may wish to note that we’ve done nothing
+to minimize the maximum error for any given table index.</p>
+
+<p>In a similar manner, we’ve done nothing with the rest of the <code class="highlighter-rouge">W-P</code> fractional
+bits in our <code class="highlighter-rouge">W</code> bit
+<a href="https://en.wikipedia.org/wiki/Instantaneous_phase">phase</a>
+accumulator.  These bits can be used to
+<a href="https://github.com/ZipCPU/interpolation/blob/master/tutorial.pdf">interpolate</a>
+between table entries, either
+<a href="/dsp/2017/07/29/series-linear-interpolation.html">linearly</a>,
+quadratically, or more as desired for better performance.</p>
+
+<p>These, however, will need to be left for discussions on some other day.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>And said, Hitherto shalt thou come, but no further: and here shall thy proud waves be stayed?  Job 38:11</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

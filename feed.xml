@@ -6,14 +6,718 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 06 Dec 2017 10:44:46 -0500</pubDate>
-    <lastBuildDate>Wed, 06 Dec 2017 10:44:46 -0500</lastBuildDate>
+    <pubDate>Sat, 09 Dec 2017 12:43:16 -0500</pubDate>
+    <lastBuildDate>Sat, 09 Dec 2017 12:43:16 -0500</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>http://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Building a Numerically Controlled Oscillator</title>
+        <description>&lt;p&gt;Many &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;signal
+processing&lt;/a&gt;
+applications require a &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+at some point.  If the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+or
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+of this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+is controlled within the design, then it is often called a &lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;Numerically
+Controlled Oscillator
+(NCO)&lt;/a&gt;. 
+Let’s spend some time today looking into how you might build
+one of these within an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.  We’ll
+also present a C++ implementation at the end as well, which may be used
+in embedded &lt;a href=&quot;https://en.wikipedia.org/wiki/Embedded_system&quot;&gt;embedded&lt;/a&gt;
+applications.&lt;/p&gt;
+
+&lt;p&gt;Since we’ve already studied how to generate a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+on an &lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
+most of our work is already done: We’ve discussed a &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;table lookup
+method&lt;/a&gt;,
+a &lt;a href=&quot;/dsp/2017/08/26/quarterwave.html&quot;&gt;quarter wave table
+lookup&lt;/a&gt;,
+method, and even how to generate both
+a &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt; and a cosine wave using a
+&lt;a href=&quot;/dsp/2017/08/30/cordic.html&quot;&gt;CORDIC&lt;/a&gt;.
+The subtle difference to describe to day is really how to turn such a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+generator into a 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Before we dive into the details, though, let’s spend a moment thinking about
+how you might use such an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;.
+My own reason for presenting this today is twofold.  First, I know of a student
+struggling to understand how to build something like this as part of a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Data_transmission&quot;&gt;digital communications&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Demodulation&quot;&gt;demodulator&lt;/a&gt;.
+There is a small trick involved–one that appears to be well known among those
+who do this sort of thing for a living, but not so well known among students and
+I’d like to share it here.  Indeed, I think we might even build a better
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt; below
+than &lt;a href=&quot;https://stackoverflow.com/questions/13466623/how-to-look-up-sine-of-different-frequencies-from-a-fixed-size-lookup-table&quot;&gt;this stackoverflow article&lt;/a&gt;
+recommends.  My second reason for writing today is that I’d like to write about
+how to build a &lt;a href=&quot;https://en.wikipedia.org/wiki/Phase-locked_loop&quot;&gt;Phase Locked Loop
+(PLL)&lt;/a&gt;
+within an &lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+on &lt;a href=&quot;http://zipcpu.com/&quot;&gt;this blog&lt;/a&gt;,
+and every &lt;a href=&quot;https://en.wikipedia.org/wiki/Phase-locked_loop&quot;&gt;PLL&lt;/a&gt;
+I’ve ever built has always included the basic
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+logic as part of &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/sdpll.v&quot;&gt;its
+implementation&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;But this hardly scratches the surface of what you might do with an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;.
+Consider as an example that …&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Any linear signal processing system is completely characterized by its
+&lt;a href=&quot;/dsp/2017/11/22/fltr-response.html&quot;&gt;frequency response&lt;/a&gt;.
+As a result, I’ve used an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+in time past, together with a scope of some type, to evaluate whether the
+digital input to a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;signal processing&lt;/a&gt;
+algorithm was being handled properly.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;We used an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+earlier as part of
+&lt;a href=&quot;/dsp/2017/09/16/pwm-demo.html&quot;&gt;our demonstration&lt;/a&gt;
+that the &lt;a href=&quot;/dsp/2017/09/04/pwm-reinvention.html&quot;&gt;improved PWM
+generator&lt;/a&gt;
+worked better than a traditional
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Pulse-width_modulation&quot;&gt;PWM&lt;/a&gt; for audio
+signal generation.  While we didn’t discuss the details of the tone generator
+at the time, we’ll explain many of those details today.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You can also use an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+to move a signal around in
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;–either bringing it
+down from some
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Intermediate_frequency&quot;&gt;intermediate frequency (IF)&lt;/a&gt;
+to a &lt;a href=&quot;https://en.wikipedia.org/wiki/Baseband&quot;&gt;baseband&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+where you can process it in
+a &lt;a href=&quot;https://en.wikipedia.org/wiki/Radio_receiver&quot;&gt;receiver&lt;/a&gt;,
+or the same in the other direction as part of a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmitter&quot;&gt;transmission&lt;/a&gt; algorithm.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You can also use an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+as part of either a digital communications
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Modulation&quot;&gt;modulator&lt;/a&gt;
+or &lt;a href=&quot;https://en.wikipedia.org/wiki/Demodulation&quot;&gt;demodulator&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You can use an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt; to
+create an &lt;a href=&quot;https://en.wikipedia.org/wiki/Amplitude_modulation&quot;&gt;Amplitude
+Modulated (AM)&lt;/a&gt;
+signal, or even a &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_modulation&quot;&gt;Frequency
+Modulated (FM)&lt;/a&gt; signal.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Another common use is to generate musical notes via
+an &lt;a href=&quot;https://en.wikipedia.org/wiki/Synthesizer&quot;&gt;additive synthesizer&lt;/a&gt;.  Indeed,
+the &lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt; accumulator
+portion of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+we’ll develop below can even be used in
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Synthesizer&quot;&gt;subtractive synthesis&lt;/a&gt;–it’s quite
+generic.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Finally, because you as the designer have &lt;em&gt;complete&lt;/em&gt; control over the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt; output of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;,
+you can even do some more exotic things–such as building a &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency-hopping_spread_spectrum&quot;&gt;frequency
+hopping&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Spread_spectrum&quot;&gt;spread spectrum&lt;/a&gt;
+signal–should this be what you wish to do.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Indeed, &lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;s
+are such fundamental components of &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;Digital Signal Processing
+(DSP)&lt;/a&gt;
+algorithms that it is difficult to enumerate &lt;em&gt;all&lt;/em&gt; the things they can
+be used for here.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-is-an-nco&quot;&gt;What is an NCO?&lt;/h2&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. NCO&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/nco-block.svg&quot; alt=&quot;NCO transforms a frequency input into a sinewave&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;For our purpose today, a &lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;Numerically Controlled
+Oscillator&lt;/a&gt;
+is simply an oscillator created from digital logic that you have complete
+control over digitally.
+Nominally, such an oscillator will receive as an input the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+you wish to produce and it will produce a digitally sampled
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+at that &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;.
+Should you choose to use an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+within a &lt;a href=&quot;https://en.wikipedia.org/wiki/Phase-locked_loop&quot;&gt;PLL&lt;/a&gt;,
+then you will also be adjusting the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+of this &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+generator.  For now, however, consider an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+to be a simple digital logic circuit that takes a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+input and produces a sampled
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+as an output.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2. Block Diagram&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/nco-components.svg&quot; alt=&quot;The components of a basic NCO&quot; width=&quot;540&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Internally, the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+keeps track of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt; of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+it produces, and it increments this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+at each sample point.&lt;/p&gt;
+
+&lt;p&gt;Let’s walk through a little bit of trigonometry, to see how this works.&lt;/p&gt;
+
+&lt;p&gt;We’ll start with the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+that we want to produce, such as the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+shown in Fig 3,&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3. A pure sinewave&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/nco-pure-tone.png&quot; alt=&quot;Picture of x(t) = sine(2pi ft)&quot; width=&quot;540&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;and is given by the equation,&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-xt.png&quot; alt=&quot;x(t) = sin(2pi ft)&quot; width=&quot;189&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Since digital implementations can only work on
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sampling_(signal_processing)&quot;&gt;sampled signals&lt;/a&gt;,
+we’ll need to sample this &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+every &lt;code class=&quot;highlighter-rouge&quot;&gt;Ts&lt;/code&gt; seconds.  To keep our notation straight,
+we’ll now index this &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+output by &lt;a href=&quot;https://en.wikipedia.org/wiki/Sampling_(signal_processing)&quot;&gt;sample&lt;/a&gt;
+number, &lt;code class=&quot;highlighter-rouge&quot;&gt;n&lt;/code&gt;, rather than by time, &lt;code class=&quot;highlighter-rouge&quot;&gt;t&lt;/code&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-xnts.png&quot; alt=&quot;x[n] = sin(2pi (nTs) f)&quot; width=&quot;241&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;I personally find it easier to work with the &lt;em&gt;sample rate&lt;/em&gt; of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital-to-analog_converter&quot;&gt;digitizer&lt;/a&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;fs&lt;/code&gt;
+rather than the &lt;em&gt;time between samples&lt;/em&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;Ts&lt;/code&gt;.  &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;These are reciprocals of each
+other&lt;/a&gt;, so &lt;code class=&quot;highlighter-rouge&quot;&gt;fs = 1/Ts&lt;/code&gt;.  We can then
+express this same equation as,&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-xnffs.png&quot; alt=&quot;x[n] = sin(2pi n f/fs)&quot; width=&quot;218&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;and plot the sampled function in Fig 4.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. A sampled sinewave&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/nco-sampled-tone.png&quot; alt=&quot;Picture of x[n] = sine(2pi f/fs n)&quot; width=&quot;540&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In this figure, the samples are shown in circles.  They are each separated by
+a phase of &lt;code class=&quot;highlighter-rouge&quot;&gt;2pi f/fs&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Our entire focus in this algorithm, though, is going to be on the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+of this expression–the argument of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;.  In the expression
+above, this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+is given by &lt;code class=&quot;highlighter-rouge&quot;&gt;n&lt;/code&gt; times the &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+ratio, &lt;code class=&quot;highlighter-rouge&quot;&gt;f/fs&lt;/code&gt;, times &lt;code class=&quot;highlighter-rouge&quot;&gt;2pi&lt;/code&gt;.  We’ll call this changing
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+value &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;To build an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;,
+we are going to need to transform this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt; value, &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt;,
+into an input our &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+generator can handle.&lt;/p&gt;
+
+&lt;p&gt;We’ll start by rewriting our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt; using this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt; value, &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt;,
+so that it captures the internals of this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;–with
+the exception of the &lt;code class=&quot;highlighter-rouge&quot;&gt;2pi&lt;/code&gt; portion.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-xphi.png&quot; alt=&quot;x[n] = sin(2pi phi[n])&quot; width=&quot;210&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Specifically, this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+value is defined by,&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-phi.png&quot; alt=&quot;phi[n] = n(f/fs)&quot; width=&quot;136&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. Unit circle rotations&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dphase-unit-circle.svg&quot; alt=&quot;A picture of the unit circle&quot; width=&quot;180&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;It represents the number of times our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+has gone around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;–the number of
+rotations if you will.  For example, a &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt; of 1.0, applied internally
+to our &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;,
+would lead to a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt; argument to our
+sine function of &lt;code class=&quot;highlighter-rouge&quot;&gt;2pi&lt;/code&gt;–suggesting we had gone around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;
+once.  A &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt; of 2.0 would yield the same value, but represent
+instead that the &lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+had traveled around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;
+twice.  Fractions then will indicate partial angles from the x-axis around
+the &lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;,
+hence a &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt; of &lt;code class=&quot;highlighter-rouge&quot;&gt;0.5&lt;/code&gt; would represent going halfway round
+this &lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;circle&lt;/a&gt;,
+while &lt;code class=&quot;highlighter-rouge&quot;&gt;0.25&lt;/code&gt; would represent a quarter of the way around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;circle&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Let’s keep working with this value for a bit.  We can define this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+recursively based upon the prior
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-phibyphi.png&quot; alt=&quot;phi[n]=phi[n-1]+f/fs&quot; width=&quot;226&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This simple modification accomplishes two purposes.  First, it allows us to
+avoid a multiply by &lt;code class=&quot;highlighter-rouge&quot;&gt;n&lt;/code&gt;, turning the calculation of the next
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+from the past
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+into an operation requiring an addition alone.  Second, because this newer
+version is no longer tied to the distance from &lt;code class=&quot;highlighter-rouge&quot;&gt;n=0&lt;/code&gt;, this subtle change
+allows us to maintain any accumulated
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+offsets in our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+as well–not just
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequencies&lt;/a&gt;
+with zero phase at zero time.&lt;/p&gt;
+
+&lt;p&gt;This sounds fairly straight-forward so far.  What’s the trick?&lt;/p&gt;
+
+&lt;h2 id=&quot;the-trick-to-building-an-nco&quot;&gt;The “Trick” to building an NCO&lt;/h2&gt;
+
+&lt;p&gt;The “trick” in building an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+lies in the units of &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt;.  The units of &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt;, presented above, are
+a number of cycles (or rotations) around the &lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit
+circle&lt;/a&gt;.  As a result, a
+&lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt; of 1.0 represents once around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;,
+and a &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt; of 2.0 represents twice around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;, etc.&lt;/p&gt;
+
+&lt;p&gt;However, within most
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_signal_processing&quot;&gt;signal processing&lt;/a&gt;
+logic (&lt;a href=&quot;/dsp/2017/07/19/linear-upsampling.html&quot;&gt;not
+quite all&lt;/a&gt;),
+you don’t care how many &lt;em&gt;integer&lt;/em&gt; times a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt; goes around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;,
+you only care about the angular fraction.
+Let’s therefore examine this number in terms of both it’s integer and
+fractional portions.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-phi-fraction.png&quot; alt=&quot;phi[n]=INT.FRACTION(...)&quot; width=&quot;258&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Specifically, let’s separate it into an integer portion, and the first
+&lt;code class=&quot;highlighter-rouge&quot;&gt;W&lt;/code&gt; bits past the decimal point as shown below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/phase-bits.svg&quot; alt=&quot;phi[n] separates into integer components and W fractional components&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Pictorially, dropping the integer portion might look like Fig 6 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6. Phase function&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/nco-sampled-phase.png&quot; alt=&quot;A picture of the sampled phase function&quot; width=&quot;540&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Notice how the phase jumps back to zero in Fig 6 at the same point as where the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+starts to repeat.  Sure, you didn’t need to bring this value back down
+to zero, but doing so creates a limited range in &lt;code class=&quot;highlighter-rouge&quot;&gt;y&lt;/code&gt; that we can then
+split among a fixed number of bits, &lt;code class=&quot;highlighter-rouge&quot;&gt;W&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Since we didn’t care about the integer number of times we’ve gone around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;,
+we can subtract from &lt;code class=&quot;highlighter-rouge&quot;&gt;phi[n]&lt;/code&gt; its integer portion to recover the
+fraction alone–just like we did in Fig 6 above.  We can then multiply the
+result by &lt;code class=&quot;highlighter-rouge&quot;&gt;2^W&lt;/code&gt;, so as to get a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Fixed_point_(mathematics)&quot;&gt;fixed-point&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+representation that will fit within a word of &lt;code class=&quot;highlighter-rouge&quot;&gt;W&lt;/code&gt; bits long.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-usable-phi-defn.png&quot; alt=&quot;PHI[n]=2^W (phi[n] - floor(phi[n]))&quot; width=&quot;299&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Just to finish this off, we’ll only keep the integer portion of this
+value, representing the top &lt;code class=&quot;highlighter-rouge&quot;&gt;W&lt;/code&gt; bits of our fractional
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;,
+and we’ll ignore any further bits beyond the decimal point.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eqn-sinewave-usable-fraction.png&quot; alt=&quot;PHI[n]~=FRACTION&quot; width=&quot;212&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Hence &lt;code class=&quot;highlighter-rouge&quot;&gt;PHI[n]&lt;/code&gt; is now a number between &lt;code class=&quot;highlighter-rouge&quot;&gt;0&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;2^W-1&lt;/code&gt; representing a fractional
+rotation around the &lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;,
+a value between &lt;code class=&quot;highlighter-rouge&quot;&gt;0&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;That’s the first part of our “trick.”&lt;/p&gt;
+
+&lt;p&gt;For the second part of this “trick”, let’s use the top &lt;code class=&quot;highlighter-rouge&quot;&gt;P&lt;/code&gt; bits of our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;,
+&lt;code class=&quot;highlighter-rouge&quot;&gt;PHI[n]&lt;/code&gt;, as the input to our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+generator, whether a
+&lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;table lookup&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt; generator, or even the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+input phase value of a 
+&lt;a href=&quot;/dsp/2017/08/30/cordic.html&quot;&gt;CORDIC&lt;/a&gt; algorithm.&lt;/p&gt;
+
+&lt;p&gt;But what about the rest of the &lt;code class=&quot;highlighter-rouge&quot;&gt;W&lt;/code&gt; bits of our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Fixed_point_(mathematics)&quot;&gt;fixed-point&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+representation?&lt;/p&gt;
+
+&lt;p&gt;These can be used for one of two purposes.  First, they can be used as a
+fractional table index, accumulating over time to adjust our table index.
+An example of this is shown below in Fig 7.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 7. Fractional phase accumulation&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/phase-tbl-index.svg&quot; alt=&quot;phi[n] separates into integer components and W fractional components&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If you look carefully at this figure, you can see how the phase pointer
+moves a little bit more than one table position at a time.  Eventually this
+extra accumulated fraction causes the table index to
+skip a table position entirely (position 6).&lt;/p&gt;
+
+&lt;p&gt;This will allow you to represent and create 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;s at
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequencies&lt;/a&gt;
+not formed by integer steps through your table.  Such
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequencies&lt;/a&gt;
+may involve jumping across table entries, as shown above in Fig 7, or even
+repeating entries if necessary.  Yes, jumping entries will likely cause a
+distortion in your output, but it will also help you maintain better
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+resolution than the first &lt;code class=&quot;highlighter-rouge&quot;&gt;P&lt;/code&gt; bits alone would allow.&lt;/p&gt;
+
+&lt;p&gt;A second use for the bottom &lt;code class=&quot;highlighter-rouge&quot;&gt;W-P&lt;/code&gt; bits would be as part of an
+interpolation
+scheme to reduce the &lt;a href=&quot;https://en.wikipedia.org/wiki/Phase_noise&quot;&gt;phase noise&lt;/a&gt;
+associated with any table representation.
+This is such an important possibility that we may have
+to come back to it and write about it more in a later article.&lt;/p&gt;
+
+&lt;p&gt;But, what about overflow?&lt;/p&gt;
+
+&lt;p&gt;This is an important question, so let’s walk through an example and see what
+happens.  Consider what would happen if we were keeping track of
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+in an 8-bit word, and one of our additions overflowed.  For example,
+suppose you wanted to take four steps to go around a circle, starting at
+&lt;code class=&quot;highlighter-rouge&quot;&gt;PHI[n]=8&#39;h20&lt;/code&gt; (45 degrees).  You’d then add to it &lt;code class=&quot;highlighter-rouge&quot;&gt;8&#39;h40&lt;/code&gt; (90 degrees) on
+each clock.  The resulting sequence would then be, &lt;code class=&quot;highlighter-rouge&quot;&gt;8&#39;h20&lt;/code&gt; (45 degrees),
+&lt;code class=&quot;highlighter-rouge&quot;&gt;8&#39;h60&lt;/code&gt; (135 degrees), &lt;code class=&quot;highlighter-rouge&quot;&gt;8&#39;ha0&lt;/code&gt; (225 degrees), &lt;code class=&quot;highlighter-rouge&quot;&gt;8&#39;he0&lt;/code&gt; (315 degrees),
+&lt;code class=&quot;highlighter-rouge&quot;&gt;8&#39;h20&lt;/code&gt; (45 degrees).&lt;/p&gt;
+
+&lt;p&gt;Did you catch what just happened?  The
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator just overflowed between 315 degrees and 45 degrees, and yet the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+representation just “did the right thing”!  What that means is that you can
+ignore any overflow in your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;–it’s
+just going to wrap around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;
+anyway, and the &lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+generator is only interested in the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+fraction anyway.&lt;/p&gt;
+
+&lt;h2 id=&quot;example-source-code&quot;&gt;Example Source Code&lt;/h2&gt;
+
+&lt;p&gt;So, how would this look in practice?  Let’s look at an example of what this
+would look like in both C++ and Verilog.&lt;/p&gt;
+
+&lt;p&gt;We’ll start with a C++ example.  We’ll make a C++
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+class incorporating these principles.  There are three basic parts
+to this class.  The first is the class declaration and table generation.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;NCO&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;public&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;m_lglen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_mask&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_phase&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_dphase&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt;		&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_table&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;NCO&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lgtblsize&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// We&#39;ll use a table 2^(lgtblize) in length.  This is
+&lt;/span&gt;		&lt;span class=&quot;c1&quot;&gt;// non-negotiable, as the rest of this algorithm depends upon
+&lt;/span&gt;		&lt;span class=&quot;c1&quot;&gt;// this property.
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_lglen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lgtblsize&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_len&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lgtblsize&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// m_mask is 1 for any bit used in the index, zero otherwise
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_mask&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_len&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll build the table itself with the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+values at the left-edge of any interval.  This isn’t optimal, since it will
+force the error to zero on the left edge and likely make it a maximum on the
+right side of the interval, but it will yield us a decent capability quickly.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;n&quot;&gt;m_table&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;new&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_table&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sin&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_PI&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;/&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We may come back to this in a later post to minimize the maximum error
+in this lookup.&lt;/p&gt;
+
+&lt;p&gt;The last part of this initialization is to provide initial values for our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator  (&lt;code class=&quot;highlighter-rouge&quot;&gt;PHI[n]&lt;/code&gt;) and the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+step necessary to create a known
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt; output.
+In this case, we’ll initialize this step so that it will produce a zero
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;–not
+very exciting, but fixing that will be our next step.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;c1&quot;&gt;// m_phase is the variable holding our PHI[n] function from
+&lt;/span&gt;		&lt;span class=&quot;c1&quot;&gt;// above.
+&lt;/span&gt;		&lt;span class=&quot;c1&quot;&gt;// We&#39;ll initialize our initial phase and frequency to zero
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_phase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_dphase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// On any object deletion, make sure we delete the table as well
+&lt;/span&gt;	&lt;span class=&quot;o&quot;&gt;~&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NCO&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;delete&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_table&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The second part of this implementation is the function that sets the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;.
+This is captured within the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt; object
+by the &lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+step, &lt;code class=&quot;highlighter-rouge&quot;&gt;m_dphase&lt;/code&gt;.  As discussed above, this is the difference between &lt;code class=&quot;highlighter-rouge&quot;&gt;PHI[n]&lt;/code&gt;
+and &lt;code class=&quot;highlighter-rouge&quot;&gt;PHI[n-1]&lt;/code&gt;.  Further, if you create a &lt;code class=&quot;highlighter-rouge&quot;&gt;SAMPLE_RATE&lt;/code&gt; value in
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Hertz&quot;&gt;Hertz&lt;/a&gt;,
+then &lt;code class=&quot;highlighter-rouge&quot;&gt;f&lt;/code&gt; can be given to this routine in
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Hertz&quot;&gt;Hertz&lt;/a&gt;.  Otherwise, you can keep
+&lt;code class=&quot;highlighter-rouge&quot;&gt;SAMPLE_RATE&lt;/code&gt; set to &lt;code class=&quot;highlighter-rouge&quot;&gt;1.0&lt;/code&gt; and then the &lt;code class=&quot;highlighter-rouge&quot;&gt;f&lt;/code&gt; value accepted by this routine will 
+be set in terms of a normalized
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt; ranging from &lt;code class=&quot;highlighter-rouge&quot;&gt;0.0&lt;/code&gt; to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Nyquist_frequency&quot;&gt;Nyquist frequency&lt;/a&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;0.5&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;c1&quot;&gt;// Adjust the sample rate for your implementation as necessary
+&lt;/span&gt;	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;SAMPLE_RATE&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;ONE_ROTATION&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;2.0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1u&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;sizeof&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
+
+	&lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt;	&lt;span class=&quot;nf&quot;&gt;frequency&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;f&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Convert the frequency to a fractional difference in phase
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_dphase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;f&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ONE_ROTATION&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;/&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SAMPLE_RATE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As a matter of personal practice, I never make the &lt;code class=&quot;highlighter-rouge&quot;&gt;SAMPLE_RATE&lt;/code&gt; a part of
+my &lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+implementations.  That way one
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+implementation can work across multiple projects.&lt;/p&gt;
+
+&lt;p&gt;You may find that the most confusing part of the logic above is the
+&lt;code class=&quot;highlighter-rouge&quot;&gt;ONE_ROTATION&lt;/code&gt; value.  This is the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+value representing once around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Unit_circle&quot;&gt;unit circle&lt;/a&gt;.  It is given by
+&lt;code class=&quot;highlighter-rouge&quot;&gt;2^W&lt;/code&gt;.  We have to go through a bit of a hoop to set this value, though, since
+the &lt;code class=&quot;highlighter-rouge&quot;&gt;ONE_ROTATION&lt;/code&gt; value doesn’t fit within the &lt;code class=&quot;highlighter-rouge&quot;&gt;unsigned&lt;/code&gt; integer we are using
+to hold &lt;code class=&quot;highlighter-rouge&quot;&gt;PHI[n]&lt;/code&gt; (&lt;code class=&quot;highlighter-rouge&quot;&gt;m_phase&lt;/code&gt;).  Alternatively, we might’ve set &lt;code class=&quot;highlighter-rouge&quot;&gt;ONE_ROTATION&lt;/code&gt; to
+&lt;code class=&quot;highlighter-rouge&quot;&gt;pow(2,sizeof(unsigned)*8)&lt;/code&gt;, but the approach above makes it easier for the
+compiler to recognize that this value is a constant, rather than needing to
+call the &lt;code class=&quot;highlighter-rouge&quot;&gt;pos()&lt;/code&gt; math library function.&lt;/p&gt;
+
+&lt;p&gt;The final part of this class steps the index into the table forward by one
+step, and then returns the value of the table at the index given by the top
+&lt;code class=&quot;highlighter-rouge&quot;&gt;P&lt;/code&gt; bits in the &lt;code class=&quot;highlighter-rouge&quot;&gt;m_phase&lt;/code&gt; word.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;operator&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;()(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;index&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Increment the phase by an amount dictated by our frequency
+&lt;/span&gt;		&lt;span class=&quot;c1&quot;&gt;// m_phase was our PHI[n] value above
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_phase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_dphase&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;c1&quot;&gt;// PHI[n] = PHI[n-1] + (2^32 * f/fs)
+&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Grab the top m_lglen bits of this phase word
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;index&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_phase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;sizeof&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_lglen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Insist that this index be found within 0... (m_len-1)
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;index&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_mask&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Finally return the table lookup value
+&lt;/span&gt;		&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_table&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;index&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You may notice that I’ve chosen to use single precision &lt;code class=&quot;highlighter-rouge&quot;&gt;float&lt;/code&gt;s, rather
+than &lt;code class=&quot;highlighter-rouge&quot;&gt;double&lt;/code&gt; precision floating point numbers.  I did this for 
+two reasons.&lt;/p&gt;
+
+&lt;p&gt;First, I wanted to encourage you to ask the question of just how much precision
+do you actually need?&lt;/p&gt;
+
+&lt;p&gt;Second, I wanted to point out that the single precision &lt;code class=&quot;highlighter-rouge&quot;&gt;float&lt;/code&gt; representation
+only has a 24-bit mantissa.  Most
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;s
+today allow integers of 32-bits.  As a result, the integer
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator &lt;em&gt;has more precision than a &lt;code class=&quot;highlighter-rouge&quot;&gt;float&lt;/code&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator&lt;/em&gt;.  You can see this pictorially in Fig 8.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 8. Floating vs Fixed point phase&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/nco-fixed-v-float.svg&quot; alt=&quot;Comparing Fixed vs Floating point phase representations&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If you are not familiar with single precision IEEE floats, the first bit,
+&lt;code class=&quot;highlighter-rouge&quot;&gt;S&lt;/code&gt;, is a sign bit, and the next seven, &lt;code class=&quot;highlighter-rouge&quot;&gt;E&lt;/code&gt;, are exponent bits.  The final
+24-bits, &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt;, are mantissa bits.  Put together, these items represent a
+number sort of like, &lt;code class=&quot;highlighter-rouge&quot;&gt;(-1)^S * 2^E * M&lt;/code&gt;.  (Yes, I’m skipping some details
+here.)&lt;/p&gt;
+
+&lt;p&gt;Unlike IEEE floats, our fixed point
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+representation is simply &lt;code class=&quot;highlighter-rouge&quot;&gt;32&lt;/code&gt; mantissa bits,
+having a value ranging from &lt;code class=&quot;highlighter-rouge&quot;&gt;0&lt;/code&gt; to &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Which one do you think will have more precision?&lt;/p&gt;
+
+&lt;p&gt;In a similar fashion, if you were to use an &lt;code class=&quot;highlighter-rouge&quot;&gt;unsigned long&lt;/code&gt; for your
+accumulator instead of an &lt;code class=&quot;highlighter-rouge&quot;&gt;unsigned&lt;/code&gt; value, then the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator would have more precision than a &lt;code class=&quot;highlighter-rouge&quot;&gt;double&lt;/code&gt; precision float would
+allow.&lt;/p&gt;
+
+&lt;p&gt;In both cases the reason why this
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator out-performs a floating point
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator is simple because our representation has a fixed
+decimal location, rather than a &lt;em&gt;floating&lt;/em&gt; decimal point.  That allows
+more bits per word to be allocated to the mantissa, since the floating
+point representation needed to allocate extra bits for both a sign
+bit and the exponent.&lt;/p&gt;
+
+&lt;p&gt;Were you to build an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;
+implementation within Verilog, the code is almost identical.
+The biggest differences are first the fact that we require the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+given to be already be converted into the appropriate units, and second that
+the bit select is simpler than before.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;module	nco(i_clk, i_ld, i_dphase, o_val);
+	parameter	LGTBL = 9, // Log, base two, of the table size
+			W = 32, // Word-size
+			OW = 8; // Output width
+	localparam	P = LGTBL;
+	//
+	input	wire		i_clk;
+	//
+	input	wire		i_ld;
+	input	wire		i_dphase;
+	//
+	input	wire		i_ce
+	output	wire [OW-1:0]	o_val;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Any time a new
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+is requested, the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_ld&lt;/code&gt; signal will be set high
+and the new frequency placed into &lt;code class=&quot;highlighter-rouge&quot;&gt;i_dphase&lt;/code&gt;.  This
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency&quot;&gt;frequency&lt;/a&gt;
+value is in the units of &lt;code class=&quot;highlighter-rouge&quot;&gt;m_dphase&lt;/code&gt; in the C++ code above.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	reg	[W-1:0]	r_step;
+
+	initial	r_step = 0;
+	always @(posedge i_clk)
+	if (i_ld)
+		r_step &amp;lt;= i_dphase; // = 2^W * f/fs&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Likewise, on any clock where &lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;i_ce&lt;/code&gt; is
+high&lt;/a&gt;,
+we’ll step the &lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+forward by this same frequency-dependent amount.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	reg	[W-1:0]	r_phase;
+
+	initial	r_phase = 0;
+	always @(posedge i_clk)
+	if (i_ce)
+		// PHI[n] = PHI[n-1] + 2^W * f / fs
+		r_phase &amp;lt;= r_phase + r_step;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Finally, the top &lt;code class=&quot;highlighter-rouge&quot;&gt;P&lt;/code&gt; bits of &lt;code class=&quot;highlighter-rouge&quot;&gt;r_phase&lt;/code&gt; are used in our &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;table
+lookup&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	sintable // #(.PW(P), .OW(OW))
+		stbl(i_clk, 1&#39;b0, i_ce, 1&#39;b0, r_phase[(W-1):(W-P)],
+		o_val, ignored);
+endmodule&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;You may notice that both the C++ and Verilog implementations are quite similar.
+They are both low logic implementations showing the basics of what is required
+to create an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;future-posts&quot;&gt;Future Posts&lt;/h2&gt;
+
+&lt;p&gt;We’ve just presented the logic behind building a basic
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Numerically_controlled_oscillator&quot;&gt;NCO&lt;/a&gt;.
+While the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+generated by this approach isn’t perfect, it may well be &lt;em&gt;good enough&lt;/em&gt;
+for your project.  Should you need a higher quality
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;,
+you may wish to know that there &lt;em&gt;are&lt;/em&gt; other/better
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Sine_wave&quot;&gt;sine wave&lt;/a&gt;
+generators out there beyond the &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;simple table
+lookup&lt;/a&gt;
+method we’ve discussed before.&lt;/p&gt;
+
+&lt;p&gt;As one example of doing better, you may wish to note that we’ve done nothing
+to minimize the maximum error for any given table index.&lt;/p&gt;
+
+&lt;p&gt;In a similar manner, we’ve done nothing with the rest of the &lt;code class=&quot;highlighter-rouge&quot;&gt;W-P&lt;/code&gt; fractional
+bits in our &lt;code class=&quot;highlighter-rouge&quot;&gt;W&lt;/code&gt; bit
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Instantaneous_phase&quot;&gt;phase&lt;/a&gt;
+accumulator.  These bits can be used to
+&lt;a href=&quot;https://github.com/ZipCPU/interpolation/blob/master/tutorial.pdf&quot;&gt;interpolate&lt;/a&gt;
+between table entries, either
+&lt;a href=&quot;/dsp/2017/07/29/series-linear-interpolation.html&quot;&gt;linearly&lt;/a&gt;,
+quadratically, or more as desired for better performance.&lt;/p&gt;
+
+&lt;p&gt;These, however, will need to be left for discussions on some other day.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;And said, Hitherto shalt thou come, but no further: and here shall thy proud waves be stayed?  Job 38:11&lt;/em&gt;</description>
+        <pubDate>Sat, 09 Dec 2017 00:00:00 -0500</pubDate>
+        <link>http://zipcpu.com/dsp/2017/12/09/nco.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/dsp/2017/12/09/nco.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>Testing the fast, generic FIR filter</title>
@@ -151,7 +855,7 @@ later to see if we can overflow it.  Both of these require maximum constant
 values.&lt;/p&gt;
 
 &lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;TAPVALUE&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TW&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;IMPULSE&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;IMPULSE&lt;/span&gt;  &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;  &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;IW&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;p&gt;As a last step before beginning, we’ll allocate some memory for test vectors,
 and for &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;
@@ -5618,6 +6322,8 @@ delay effects from the test vectors response–something not done within the
 
 	&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;tstcounts&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
 	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tstcounts&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
 		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;p&gt;Here’s the next difference: after the first &lt;code class=&quot;highlighter-rouge&quot;&gt;nlen&lt;/code&gt; samples, the next several
@@ -5633,21 +6339,22 @@ samples are all set to zero.&lt;/p&gt;
 &lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
 
 		&lt;span class=&quot;c1&quot;&gt;// Sign extend the result
-&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sbits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;OW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_result&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Some filters will require multiple clocks to come to an answer.  Let’s make sure
+we give those filters the clocks they need.  We’ll start by making sure that the
+i_ce line is zero, and then we’ll tick off any extra clocks we are missing.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;p&gt;Further, we’ll only record the results after an initial &lt;code class=&quot;highlighter-rouge&quot;&gt;DELAY()&lt;/code&gt; number of
 samples have been passed into the
 &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_filter&quot;&gt;filter&lt;/a&gt;.&lt;/p&gt;
 
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-			&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;debug&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Discard : %2d&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Deal with any filters requiring multiple clocks
-&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_nclks&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;n&quot;&gt;tick&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;())&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;DELAY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sbits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;v&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;OW&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
 	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
 	&lt;span class=&quot;n&quot;&gt;TESTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_core&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
 &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
@@ -5743,9 +6450,13 @@ and then a comparison of whether or not the
 &lt;a href=&quot;https://en.wikipedia.org/wiki/Impulse_response&quot;&gt;impulse response&lt;/a&gt;
 truly matches the one we wanted.&lt;/p&gt;
 
+&lt;p&gt;We’ll use the boolean, &lt;code class=&quot;highlighter-rouge&quot;&gt;mismatch&lt;/code&gt; to capture the condition where things
+don’t match.  This will allow us to place the assertion that the impulse
+response matches the one we loaded at the end of the routine.&lt;/p&gt;
+
 &lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;template&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;FILTERTB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VFLTR&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;testload&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-&lt;span class=&quot;c1&quot;&gt;// printf(&quot;FILTERTB::testload(%d, ...)\n&quot;, nlen);
-&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;load&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;bool&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;mismatch&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;false&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;load&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
 	&lt;span class=&quot;n&quot;&gt;reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
 
 	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
@@ -5755,9 +6466,17 @@ truly matches the one we wanted.&lt;/p&gt;
 coefficient we expect, found in &lt;code class=&quot;highlighter-rouge&quot;&gt;data[k]&lt;/code&gt;.&lt;/p&gt;
 
 &lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;m&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;this&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Err: Data[k] = %ld != (*this)[k] = %d&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;assert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;printf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Err: Data[%d] = %ld != (*this)[%d] = %d&lt;/span&gt;&lt;span class=&quot;se&quot;&gt;\n&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;mismatch&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;true&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll make the assertion here that everything matched above.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;mismatch&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;fflush&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;stdout&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;assert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;mismatch&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
 	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
 
 &lt;p&gt;We’ll also insist that any coefficients beyond the ones we expect to set
@@ -5939,291 +6658,6 @@ however, will have to wait for another day and another post.&lt;/p&gt;
         
         
         <category>dsp</category>
-        
-      </item>
-    
-      <item>
-        <title>Good Software Engineering Principles Apply to Students Too</title>
-        <description>&lt;p&gt;Trust me, I get it.  I’ve been there.  You’ve got a project due and you are
-struggling to get it to work.  It just needs to work.  It doesn’t need to
-look good.  The instructor isn’t going to grade how well (or poorly) you
-created your assignment.  That’s not the requirement.  The requirement is only
-that it works, and the deadline is approaching.&lt;/p&gt;
-
-&lt;p&gt;So … why do you need to practice good software engineering?&lt;/p&gt;
-
-&lt;p&gt;Let’s look at a couple examples, shall we?&lt;/p&gt;
-
-&lt;h2 id=&quot;magic-numbers&quot;&gt;Magic Numbers&lt;/h2&gt;
-
-&lt;p&gt;&lt;strong&gt;Principle:&lt;/strong&gt; &lt;em&gt;Don’t use magic numbers&lt;/em&gt;&lt;/p&gt;
-
-&lt;p&gt;A &lt;a href=&quot;https://en.wikipedia.org/wiki/Magic_number_(programming)&quot;&gt;magic number&lt;/a&gt;
-is a number that is neither one nor zero, and yet it gets placed
-into your code with no explanation.&lt;/p&gt;
-
-&lt;p&gt;Years ago, I had the opportunity to sit next to an engineer who was trying to
-maintain a piece of software that predicted certain properties of the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Ionosphere&quot;&gt;ionosphere&lt;/a&gt;.  The code he was
-working on had been written decades earlier, and it contained
-tables of numbers within it.  These tables, however, came with no explanation
-as to how they were derived.  The engineer working on this task showed these
-numbers to me and asked, rhetorically, how shall I know if these numbers are
-still valid?&lt;/p&gt;
-
-&lt;p&gt;While it’s easy to argue that good software shouldn’t include numbers with no
-explanation, such as this program did, what about throw away software?  Software
-that only needs to work once?&lt;/p&gt;
-
-&lt;p&gt;To answer that question, consider the example of a student who was trying to
-implement a &lt;a href=&quot;/dsp/2017/08/30-cordic.html&quot;&gt;CORDIC algorithm&lt;/a&gt;
-for class.  As you may recall from &lt;a href=&quot;/dsp/2017/08/30-cordic.html&quot;&gt;our discussion on how to build a CORDIC
-algorithm&lt;/a&gt;, such an algorithm
-depends upon a table of arctangents.  This student had dutifully calculated
-and placed this table within his code.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;255412811&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;125657214&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;62581571&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;31260178&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;15626271&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;7812658&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3906269&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1953127&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;976562&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;488281&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;244140&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;122070&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;61035&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;30517&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;15258&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;7629&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;He then asked why his code wasn’t working.&lt;/p&gt;
-
-&lt;p&gt;Looking over his code, it was impossible to know if he had gotten the table
-right.  I didn’t know what formula he had used, or even if he
-had gotten the formula right or not.  Further, aside from the problem
-associated with knowing that the table was correct, there’s also the problem
-of fixing the table once you discover an error since you would then need
-to correct &lt;em&gt;every&lt;/em&gt; line in the table.  Oh, and did I mention that copying
-tables by hand is prone to error in the first place?&lt;/p&gt;
-
-&lt;p&gt;Consider the alternative, shown below:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;32&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-		&lt;span class=&quot;kt&quot;&gt;int32_t&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;ival&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-		&lt;span class=&quot;kt&quot;&gt;double&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;tanv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;drad&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;atnh&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-	
-		&lt;span class=&quot;c1&quot;&gt;// We want the arctan of 2^(-k-1)
-&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;tanv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;tanv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tanv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// The angle, in radians, for the arctangent
-&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;drad&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;atanh&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tanv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Scale this angle to 0..2^N-1 units, for N=32
-&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;atnh&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;drad&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;2.0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_PI&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;30&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;mf&quot;&gt;4.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Convert this value to an integer
-&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;ival&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int32_t&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;atnh&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Stop if this integer ever becomes zero
-&lt;/span&gt;		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ival&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Add this value to the table
-&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;atanhAngles&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;push_back&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ival&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Look at all of the math involved in getting this table right.  Consider what
-would’ve happened if there was just one error in this code above.&lt;/p&gt;
-
-&lt;p&gt;For these reasons, I will recommend that student’s not use pre-generated
-numbers within their code.  If you really need a table of numbers for your
-application (this is pretty common), then I would recommend that the code
-necessary to populate your table also be distributed with the &lt;em&gt;magic numbers&lt;/em&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-rule-of-one-not-three&quot;&gt;The rule of one (not three)&lt;/h2&gt;
-
-&lt;p&gt;&lt;strong&gt;Principle:&lt;/strong&gt; &lt;em&gt;Don’t repeat yourself.&lt;/em&gt;&lt;/p&gt;
-
-&lt;p&gt;If you have to build an algorithm, build it once.  Build it right, use it
-everywhere, but don’t repeat yourself.&lt;/p&gt;
-
-&lt;p&gt;Wikipedia refers to the &lt;a href=&quot;https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)&quot;&gt;rule of
-three&lt;/a&gt;
-in computer programming.  The basic rule is that once you have three copies of
-the same algorithm, then it is time to refactor all three versions of the
-algorithm so that they reference the same single piece of working code.&lt;/p&gt;
-
-&lt;p&gt;Allow me to argue that this rule applies &lt;em&gt;even more&lt;/em&gt; to students, and
-&lt;em&gt;especially&lt;/em&gt; to code that hasn’t been proven yet–code that may still be buggy.&lt;/p&gt;
-
-&lt;p&gt;Years ago I watched this lesson play out in a &lt;a href=&quot;https://en.wikipedia.org/wiki/Computer_engineering&quot;&gt;computer
-engineering&lt;/a&gt; course. 
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Computer_engineering&quot;&gt;Computer engineering&lt;/a&gt;, for
-those unfamiliar with it, is sort of a cross between &lt;a href=&quot;https://en.wikipedia.org/wiki/Computer_science&quot;&gt;computer
-science&lt;/a&gt; and
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Electrical_engineering&quot;&gt;electrical engineering&lt;/a&gt;.
-As a result, the course included both individuals with a &lt;a href=&quot;https://en.wikipedia.org/wiki/Computer_science&quot;&gt;computer
-science&lt;/a&gt;
-background, such as myself, and others with more of an &lt;a href=&quot;https://en.wikipedia.org/wiki/Electrical_engineering&quot;&gt;electrical
-engineering&lt;/a&gt;
-background.  The projects in the course involved building various circuits with
-computer chips and peripherals, and then programming the computer chip within
-those circuits to do some instructor provided task.&lt;/p&gt;
-
-&lt;p&gt;What I remember from the course is being surprised at how little the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Electrical_engineering&quot;&gt;electrical engineering&lt;/a&gt;
-students were re-using their code.  We were writing code in 8086 assembly
-at the time, and an example piece of code might be the software necessary to
-send a string over a serial port.  My approach was to convert any code that I
-needed more than once into functions that could then be called as often as I
-needed them.  I considered this to be a standard &lt;a href=&quot;https://en.wikipedia.org/wiki/Computer_science&quot;&gt;computer
-science&lt;/a&gt; principle.&lt;/p&gt;
-
-&lt;p&gt;What I observed was that the &lt;a href=&quot;https://en.wikipedia.org/wiki/Electrical_engineering&quot;&gt;electrical
-engineering&lt;/a&gt; students
-ended up spending a lot of their time debugging the same software over and over.&lt;/p&gt;
-
-&lt;p&gt;Please don’t get me wrong, I’m not trying to be critical of all &lt;a href=&quot;https://en.wikipedia.org/wiki/Electrical_engineering&quot;&gt;electrical
-engineering&lt;/a&gt; students.
-I’m just commenting about those I shared this class with who were kind enough
-to allow me to look over their shoulders.  While it may be that these students
-hadn’t yet learned this fundamental software lesson, I’d like to think that
-other &lt;a href=&quot;https://en.wikipedia.org/wiki/Electrical_engineering&quot;&gt;electrical
-engineering&lt;/a&gt;
-students know better.&lt;/p&gt;
-
-&lt;p&gt;The problem is that buggy code needs to be fixed, and buggy code in more than
-one place needs to be more than once.  Worse, if you aren’t (yet) certain that
-the code in question works in the first place, and you are searching for bugs,
-then it’s really easy to let a bug in one copy slip by you as you fix the other
-copy.&lt;/p&gt;
-
-&lt;p&gt;Time is tight, don’t waste it.&lt;/p&gt;
-
-&lt;p&gt;For this reason, I recommend the &lt;em&gt;rule of one&lt;/em&gt; for students and anyone else
-trying to get something to work for the first time.  Build it &lt;em&gt;once&lt;/em&gt;.
-Don’t copy it—especially don’t copy it before you &lt;em&gt;know&lt;/em&gt; that it works.
-Make a function and call that function instead.&lt;/p&gt;
-
-&lt;p&gt;This also applies to the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-designer: reuse logic by separating it into its own module rather
-than copying it multiple times across your code–&lt;em&gt;especially&lt;/em&gt; before you
-know whether or not the logic even works, or if it is the right logic for
-the job.&lt;/p&gt;
-
-&lt;h2 id=&quot;data-types&quot;&gt;Data Types&lt;/h2&gt;
-
-&lt;p&gt;&lt;strong&gt;Principle:&lt;/strong&gt; &lt;em&gt;Store items with different meanings in different data types.&lt;/em&gt;&lt;/p&gt;
-
-&lt;p&gt;To put things simply, let the compiler (or synthesis tool) find as many
-bugs for you as you can.&lt;/p&gt;
-
-&lt;p&gt;I know, I’m a die-hard C-programmer who uses Verilog rather than VHDL.  You
-might find it strange to hear this advice coming from me, but I’ll say it
-anyway: let the tools find as many errors as you can.&lt;/p&gt;
-
-&lt;p&gt;Use software data types to your advantage.  If a value will only be one of
-a handful, use an enumerated type (in software) or set the number of bits for
-that handful to the smallest number required in HDL.  If you have values
-occupying, for example, several stages within a
-&lt;a href=&quot;/dsp/2017/08/30-cordic.html&quot;&gt;CORDIC&lt;/a&gt;, each having &lt;code class=&quot;highlighter-rouge&quot;&gt;x&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;y&lt;/code&gt;,
-and &lt;code class=&quot;highlighter-rouge&quot;&gt;angle&lt;/code&gt; values, then don’t store those in an array.  Use a structure.&lt;/p&gt;
-
-&lt;p&gt;In Verilog, run &lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;verilator&lt;/a&gt;
-and &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;use the -Wall
-option&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;You can do the same in C++: Turn on the ‘-Wall’ compiler option.&lt;/p&gt;
-
-&lt;p&gt;Software data types are there for a reason–use them to your advantage.&lt;/p&gt;
-
-&lt;h2 id=&quot;pi-is-not-314159&quot;&gt;Pi is not 3.14159&lt;/h2&gt;
-
-&lt;p&gt;&lt;strong&gt;Principle:&lt;/strong&gt; Use the tools library to your advantage&lt;/p&gt;
-
-&lt;p&gt;I remember hearing a sad satellite story from years ago about the difficulty
-that the ground team was having while trying to track their satellite(s).
-Sadly, the details of this story have left me.  Perhaps someone else remembers
-and can fill me in.  What I remember from the story, though, was that when
-all was said and done the problem was the software that declared &lt;code class=&quot;highlighter-rouge&quot;&gt;PI&lt;/code&gt; to be
-&lt;code class=&quot;highlighter-rouge&quot;&gt;3.141&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;On my Linux machine, PI is defined in &lt;code class=&quot;highlighter-rouge&quot;&gt;math.h&lt;/code&gt; as&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;span class=&quot;cp&quot;&gt;#define M_PI               3.14159265358979323846  &lt;/span&gt;&lt;span class=&quot;cm&quot;&gt;/* pi */&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Use this definition.  Even for students: use this definition.  Get into the
-practice of using your tools–they are there for a reason.&lt;/p&gt;
-
-&lt;h2 id=&quot;be-kind-to-others--your-grade-depends-upon-it&quot;&gt;Be kind to others–your grade depends upon it&lt;/h2&gt;
-
-&lt;p&gt;&lt;strong&gt;Principle:&lt;/strong&gt; &lt;em&gt;Don’t bite the hand that feeds you.&lt;/em&gt;&lt;/p&gt;
-
-&lt;p&gt;I’ve had the wonderful opportunity to help many wayward students over the
-years.  The one thing that turns me off, however, is the student who is
-gets frustrated and then angry at whatever difficulty he is having.  This
-angry student will then show up on whatever forum looking for help.  He’ll
-swear at himself, he’ll yell, and destroy his own online reputation.&lt;/p&gt;
-
-&lt;p&gt;Sometimes these individuals turn to the forums spewing filth at whoever
-built the tool he’s using.  At this point, it doesn’t make a difference if
-the tool is good or bad, this individual will turn others off from helping him.&lt;/p&gt;
-
-&lt;p&gt;If you are getting angry then go take a walk.  Get some exercise.  If it’s
-late at night, get some sleep.  Come back to the problem later when you have
-a clearer mind.&lt;/p&gt;
-
-&lt;p&gt;The last thing you want to do is to proclaim to all that you are hard to work
-with, particularly when you need some help from others.&lt;/p&gt;
-
-&lt;h2 id=&quot;patience&quot;&gt;Patience&lt;/h2&gt;
-
-&lt;p&gt;&lt;strong&gt;Principle:&lt;/strong&gt; &lt;em&gt;And not only so, but we glory in tribulations also: knowing that tribulation worketh patience; and patience, experience; and experience, hope&lt;/em&gt;
-(Romans 5:3-4)&lt;/p&gt;
-
-&lt;p&gt;Yeah, I get it, your project is do in a month, in a week, or even tomorrow.
-I understand.  It’s late at night and it isn’t working.  I get it.  I’ve been
-there.  However, getting stressed or anxious about it isn’t going to help you
-get your design working any faster.&lt;/p&gt;
-
-&lt;p&gt;Sound engineering requires diligent patience, discipline, and careful attention
-to the smallest details.  This takes time.  It requires a cool and level
-head.  Engineering problems can be subtle.  They can hide in the difference
-between a ‘0’ and a zero.  Give yourself the time you need, and don’t try to
-rush the job—even as the end is imminent.&lt;/p&gt;
-
-&lt;p&gt;&lt;strong&gt;Corrolary:&lt;/strong&gt; &lt;em&gt;Give each project the time it needs.&lt;/em&gt;&lt;/p&gt;
-
-&lt;p&gt;If you can’t rush a project at the end, then front load the project and give
-it the time it needs early on so that you don’t end up rushed at the end.
-If your instructor gives you a couple of months, then trust him: he might know
-something.  Start early.  You won’t be able to recover any wasted time later.&lt;/p&gt;
-
-&lt;h2 id=&quot;prayer&quot;&gt;Prayer&lt;/h2&gt;
-
-&lt;p&gt;While I’m sure there are many other software engineering principles, I’d
-like to close with a final observation.  There have been &lt;em&gt;many&lt;/em&gt; times when
-I’ve personally gotten stuck on one problem or another.  Maybe it’s getting
-late and, after a long hard day, I still haven’t gotten a problem working.&lt;/p&gt;
-
-&lt;p&gt;Let me share with you my personal secret weapon: prayer.  Put the project down
-and take some time to pray.  &lt;em&gt;Trust God&lt;/em&gt; to take care of it, and then get some
-sleep.  In the morning, pray again before returning to the problem.&lt;/p&gt;
-
-&lt;p&gt;You’ll be amazed at how prayer both changes your outlook, as well as how
-God can just suddenly reveal key details to you that you were missing before.&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Rejoice, O young man, in thy youth; and let thy heart cheer thee in the days of thy youth, and walk in the ways of thine heart, and in the sight of thine eyes: but know thou, that for all these things God will bring thee into judgment. (Eccl 11:9)&lt;/em&gt;</description>
-        <pubDate>Mon, 30 Oct 2017 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/blog/2017/10/30/student-sw-engr.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/blog/2017/10/30/student-sw-engr.html</guid>
-        
-        
-        <category>blog</category>
         
       </item>
     
