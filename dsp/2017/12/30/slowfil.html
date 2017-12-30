@@ -182,10 +182,10 @@ been added together, we’ll use this accumulated result as our output.</p>
 
 <table align="center" style="float: none"><tr><td><img src="/img/fir-slowfil-acc-done.png" alt="" width="204" /></td></tr></table>
 
-<p>In Verilog, this might look something <em>like</em> the following.  On the first
+<p>In Verilog, this might look something like the following.  On the first
 clock, we’d read one tap from the tap (coefficient) memory, and multiply
 it by our incoming data sample, <code class="highlighter-rouge">i_sample</code>.  The result of that product
-could then be used to initialize an accumulator.</p>
+could then be used to initialize an accumulator, <code class="highlighter-rouge">r_acc</code>.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
 if (i_ce)
@@ -257,7 +257,8 @@ begin
 end</code></pre></figure>
 
 <p>That’s the general gist of what we need to do.  Sadly, however, the code above
-has multiple timing errors and conflicts within it.  For example, there should
+has multiple timing errors and pipeline scheduling conflicts within it.
+For example, there should
 be a clock delay between reading from memory and using the result, and another
 clock delay between multiplying two numbers together and using that result.
 As a result, the logic above will never work, but as a simple first draft
@@ -326,8 +327,9 @@ in data memory–just as the formula above indicated.</p>
 	<span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
 		<span class="n">acc</span> <span class="o">+=</span> <span class="o">*</span><span class="n">c</span><span class="o">++</span> <span class="o">*</span> <span class="o">*</span><span class="n">d</span><span class="o">--</span><span class="p">;</span></code></pre></figure>
 
-<p>A couple things make the loop more complicated.  The first of those is the
-fact that if you start reading backwards from the middle of memory, you
+<p>The fact that the data memory isn’t centered makes this a touch more
+complicated.  What that means is that if you start reading backwards
+from the middle of memory (where the most recent sample was), you
 will eventually run off the beginning of the memory.  Fig 3 shows this below.</p>
 
 <table align="center" style="float: none"><caption>Fig 3. Data memory contains both old and new data</caption><tr><td><img src="/img/fir-slow-memory.svg" alt="" width="780" /></td></tr></table>
@@ -353,7 +355,9 @@ sample in memory, and every coefficient value, is used exactly once.</p>
 
 <p>This is the basic algorithm we will write in Verilog below.  There will be
 some differences though.  The first and most obvious difference is the fact
-that several parts of this algorithm will run in parallel.  The next, not
+that several parts of this algorithm will run in parallel–this is <a href="/blog/2017/09/18/clocks-for-sw-engineers.html">running in
+hardware</a>
+after all.  The next, not
 quite so obvious difference, is that if the memory address is limited to
 some finite number of bits, then we won’t need to pay any attention to the
 memory break shown above in Fig 3.  Finally, the
@@ -366,7 +370,7 @@ floating point numbers that are so easy to use in the C++ above.</p>
 <p>Before moving on, I should make one point about the code above.  This C/C++
 <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
 implementation is only practical for
-<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
 with <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse responses</a>
 shorter than about 64 samples.  Anything more than 64 samples and you’ll
 want to use an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
@@ -400,7 +404,7 @@ taps, in addition to samples coming in and going out.</p>
 
 <p>We’ll start with the ability to set our
 <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
-coefficients.  As with our
+coefficients.  As with many of our
 <a href="https://github.com/ZipCPU/dspfilters/tree/master/rtl">other filters</a>,
 we’ll allow a parameter <code class="highlighter-rouge">FIXED_TAPS</code> to express whether or not this
 <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
@@ -474,7 +478,10 @@ value, we’ll increment the data memory write index,</p>
 		if (i_ce)
 			dmem[dwidx] &lt;= i_sample;</code></pre></figure>
 
-<p>Notice in this process how the data memory update process is <em>independent</em>
+<p>That may be about as simple as any logic could get!</p>
+
+<p>That said, there is a subtlety associated with this approach.
+Notice in this process how the data memory update process is <em>independent</em>
 of the <code class="highlighter-rouge">i_reset</code> signal.  It is dependent upon new sample data
 only.  Further, this will allow the
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
@@ -490,7 +497,8 @@ isn’t how most memories are built.  That means that, when we wish to clear
 this memory later, we’ll need to write as many zeros to it as are necessary
 to fill it with zeros.</p>
 
-<p>Those are the easy parts of the algorithm.  The next step is to calculate
+<p>Those two parts, loading tap coefficients and incoming data, are the easy
+parts of the algorithm, though.  The next step is to calculate
 the indices to be used for both reading from coefficient and data memories.
 Since this gets into scheduling, let’s take a moment to start scribbling
 a draft pipeline schedule.</p>
@@ -537,7 +545,8 @@ we can multiply these two values together on the third clock cycle,</p>
 		acc &lt;= acc + product;</code></pre></figure>
 
 <p>The final step would be to create our output.  This will need to take place
-some time into the future–at a time we’ll need to come back to and determine.</p>
+some time into the future–at a time we’ll need to come back to and determine
+later.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Clock ... some distance into the future
 	if (new_product_data)
@@ -550,9 +559,9 @@ some time into the future–at a time we’ll need to come back to and determine
 <p>Before moving on, I tried to draw this basic pipeline schedule out in Fig 5
 below for reference.  You should know, though, that whenever
 I build an algorithm like this I usually just start by writing
-the clock numbers in my code as we just did above.  I find these diagrams
-are most useful to me when telling someone else about one of my designs,
-such as I am doing now.</p>
+the clock numbers in my code as we just did above.  I find these diagrams,
+like Fig 5 below, are most useful to me when telling someone else about one
+of my designs, such as I am doing now, then they are when I write them.</p>
 
 <table align="center" style="float: none"><caption>Fig 5. Initial draft pipeline schedule</caption><tr><td><img src="/img/fir-slow-schedule-one.svg" alt="" width="780" /></td></tr></table>
 
@@ -659,11 +668,11 @@ formula we started with.</p>
 
 <p>We’ll also follow the clocks through the pipeline with a second
 <a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling CE</a>
-approach with a <a href="/blog/2017/08/14/strategies-for-pipelining.html">couple of other CE
+approach that will use a <a href="/blog/2017/08/14/strategies-for-pipelining.html">couple of other CE
 signals</a>.
 The first of these, <code class="highlighter-rouge">m_ce</code> is memory
 index valid signal,
-indicating that the first index is valid.  As you follow through the code,
+indicating that the first indices is valid.  As you follow through the code,
 you’ll see other similar CE signals, such as the <code class="highlighter-rouge">d_ce</code> signal to indicate
 the first set of data and coefficient values are valid and <code class="highlighter-rouge">p_ce</code> to indicate
 the first product is valid.  We’ll use these in a moment to determine when to
@@ -713,14 +722,13 @@ this time <code class="highlighter-rouge">p_ce</code>, denotes when this first p
 	always @(posedge i_clk)
 		product &lt;= tap * data;</code></pre></figure>
 
-<p>Only now can we can finally get to the
-accumulator at the penultimate stage of this chain.
-On the first value given to it, that is
+<p>Only now can we can finally get to the accumulator at the penultimate
+stage of this chain.  On the first value given to it, that is
 any time <code class="highlighter-rouge">p_ce</code> is true–which will be true with the first product value,
-<code class="highlighter-rouge">h[0]x[n]</code>,
-the accumulator is set to the result of that product.  Otherwise, any time a
-subsequent product is valid–as noted by <code class="highlighter-rouge">pre_acc_ce[2]</code> being high, the
-accumulator value is increased by the last <code class="highlighter-rouge">h[k]x[n-k]</code> value.</p>
+<code class="highlighter-rouge">h[0]x[n]</code>, the accumulator is set to the result of that first product.
+Otherwise, any time a subsequent product is valid–as noted by
+<code class="highlighter-rouge">pre_acc_ce[2]</code> being high, the accumulator value is increased
+by that clock’s <code class="highlighter-rouge">h[k]x[n-k]</code> value.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	r_acc = 0;
 	always @(posedge i_clk)
@@ -730,9 +738,10 @@ accumulator value is increased by the last <code class="highlighter-rouge">h[k]x
 			r_acc &lt;= r_acc + { {(OW-(IW+TW)){product[(IW+TW-1)]}},
 						product };</code></pre></figure>
 
-<p>This almost looks like the draft code above.  The biggest difference is that
-we’ve done some sign extension work to make sure this works across
-multiple synthesis tools.</p>
+<p>This almost looks like the draft code we created to work out pipeline
+scheduling.  The biggest difference is that we’ve done some sign extension
+work above to make sure this works across multiple synthesis tools and
+lint checkers.</p>
 
 <p>On the same clock we place a new value into the accumulator, we can also read
 the last value out.  Hence we set <code class="highlighter-rouge">o_result</code> to the output of the accumulator
@@ -754,9 +763,11 @@ last accumulator value will not be read out.  Likewise, if the <code class="high
 come with fewer than <code class="highlighter-rouge">NTAPS</code> steps between them, then the <code class="highlighter-rouge">o_ce</code> values will
 only report partial
 <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
-products.  There is no error detection or correction here.</p>
+products.  There is no error detection or correction here–but you can feel
+free to add it if you would like.</p>
 
-<p>Still, that’s what it takes to generate a slow
+<p>Still, that’s what it takes to generate a
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">slow</a>
 <a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
 <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
 in Verilog for an
@@ -780,7 +791,7 @@ As a result, testing
 only requires making a couple of small changes.  Indeed, if you run a
 <a href="https://en.wikipedia.org/wiki/Diff_utility">diff</a>
 between the original
-<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench for a generic filter</a>,
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/genericfir_tb.cpp">test bench for a generic filter</a>
 and the
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a> for
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>,
@@ -795,7 +806,7 @@ per input clock enable, <code class="highlighter-rouge">i_ce</code>  associated 
 turns out, we did a good job
 <a href="/dsp/2017/11/04/genfil-tb.html">building the initial</a>
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness</a>,
-so not much needed to change there.</p>
+so there’s not much that needs to be changed there.</p>
 
 <p>Second, unlike the
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/genfil_tb.cpp">prior filter</a>, resetting this one so that all the memory is
@@ -807,10 +818,13 @@ from a known state.</p>
 
 <p>With those two caveats aside, let’s start looking at the code.</p>
 
-<p>As with any code using our
-basic filtering test bench,
-it starts out be declaring constants shared between the test bench code and
-the filter itself.  These include the number of bits in the input, the
+<p>As with any code using our <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">basic filtering test
+bench</a>,
+it starts out be declaring constants shared between the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test bench code</a>
+and the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+itself.  These include the number of bits in the input, the
 coefficients, the output, the number of coefficients, the delay between
 input and the first output resulting from that input, and the number of
 clocks per input sample.</p>
@@ -843,15 +857,16 @@ class.</p>
 details of the test bench changes.</p>
 
 <p>The first change that needs to be made is to the <code class="highlighter-rouge">test()</code> routine.  This
-routine, as you
-may remember,
-takes an input data stream, applies the filter, and returns the result.  It
-also depends upon the filter having a zero internal state.  Since clearing
-the state in this
-test bench
+routine, as you <a href="/dsp/2017/11/04/genfil-tb.html">may
+remember</a>,
+takes an input data stream, applies the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+and returns the result.  It also depends upon the filter having a zero
+internal state.  Since clearing the state in this
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test bench</a>
 is a little more awkward, we’ll make certain to call a function to make
 certain the state is cleared before calling the <code class="highlighter-rouge">test()</code> function in the
-test harness
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>
 itself.  The neat part of this change, though, is that by
 <a href="https://en.wikipedia.org/wiki/Method_overriding">overloading</a>,
 this <code class="highlighter-rouge">test()</code> operator and using
@@ -864,7 +879,7 @@ this change only requires the following four lines of code.</p>
 	<span class="p">}</span></code></pre></figure>
 
 <p>Unlike the
-other filters
+<a href="/dsp/2017/12/06/fastfir-tb.html">other filters</a>
 we’ve tested, this one requires a reset prior to loading any
 new <a href="https://en.wikipedia.org/wiki/Impulse_response">coefficients</a>.  As
 you may recall from above, resetting
@@ -873,7 +888,7 @@ sets the index into the coefficient memory back to zero, so it is an
 important part of loading a new set of
 <a href="https://en.wikipedia.org/wiki/Impulse_response">coefficients</a>.  Just a
 slight modification to the
-test bench,
+<a href="/dsp/2017/11/04/genfil-tb.html">test bench</a>,
 and this change has now been made as well.</p>
 
 <figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">load</span><span class="p">(</span><span class="kt">int</span> <span class="n">nlen</span><span class="p">,</span> <span class="kt">long</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
@@ -883,15 +898,19 @@ and this change has now been made as well.</p>
 
 <p>Perhaps the most important change, though, is the function that we need to
 write to clear the data memory within
-this filter.  We’ll call this function <code class="highlighter-rouge">clear_filter()</code>.  It will work by
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>.
+We’ll call this function <code class="highlighter-rouge">clear_filter()</code>.  It will work by
 providing one clock with <code class="highlighter-rouge">i_ce</code> high and <code class="highlighter-rouge">i_sample</code> set to zero per element
 in the memory array.  Since the array will always be a length given by a power
-of two, it may also be longer than the number of taps, <code class="highlighter-rouge">NTAPS()</code> in this
-filter.</p>
+of two, the internal memory may also be longer than the number of
+taps, <code class="highlighter-rouge">NTAPS()</code> in
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>.
+For this reason, we’ll round up to the next power of two using <code class="highlighter-rouge">nextlg()</code>.</p>
 
-<p>What may surprise you, though, is that we are going to hit this filter with
-one new sample per clock, while ignoring the output.  The result of this will
-be that the output of this run will be invalid, although the new data will
+<p>What may surprise you, though, is that we are going to hit
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+with one new sample per clock, while ignoring the output.  The result of this
+will be that the output of this run will be invalid, although the new data will
 loaded into he memory as desired.</p>
 
 <figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">clear_filter</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
@@ -904,8 +923,11 @@ loaded into he memory as desired.</p>
 			<span class="n">tick</span><span class="p">();</span></code></pre></figure>
 
 <p>As one final step, once the memory has been loaded, we’ll let the last sample
-propagate through the filter, so as to make certain the filter is in a
-usable state when we apply our test vectors.</p>
+propagate through
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">the filter</a>,
+so as to make certain
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">the filter</a>
+is in a usable state when we apply our test vectors.</p>
 
 <figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">CKPCE</span><span class="p">();</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
@@ -914,7 +936,7 @@ usable state when we apply our test vectors.</p>
 <span class="p">};</span></code></pre></figure>
 
 <p>At this point, all we need to do is switch our main program to running the
-test bench
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>
 created for this new code, and everything is roughly the same as before.</p>
 
 <figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">SLOWFIL_TB</span>	<span class="o">*</span><span class="n">tb</span><span class="p">;</span>
@@ -923,7 +945,10 @@ created for this new code, and everything is roughly the same as before.</p>
 	<span class="n">Verilated</span><span class="o">::</span><span class="n">commandArgs</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">);</span>
 	<span class="n">tb</span> <span class="o">=</span> <span class="k">new</span> <span class="n">SLOWFIL_TB</span><span class="p">();</span></code></pre></figure>
 
-<p>How’s that for fairly simple?</p>
+<p>How’s that for fairly simple?  Indeed, implementing the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter itself</a>
+was harder than this
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>.</p>
 
 <p>Of course, it’s only that simple because of the work we’ve already done,
 but that just underscores the power of
@@ -941,7 +966,9 @@ in the
 <a href="/blog/2017/07/31/vcd.html">VCD file</a>
 containing a trace of what
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
-does.  Be careful–the trace can quickly
+does in response to the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>’s
+stimulus.  Be careful–the trace can quickly
 become hundreds of megabytes, if not several gigabytes, in length.</p>
 
 <p>Still, let’s turn that on to see if we can get a feel for how
@@ -974,16 +1001,19 @@ zeros into the memory.</p>
   </li>
   <li>
     <p>The <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>
-then applies an impulse to the
+then applies an
+<a href="https://en.wikipedia.org/wiki/Kronecker_delta">impulse</a> to the
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>,
 to verify the <a href="https://en.wikipedia.org/wiki/Impulse_response">response</a>.
-Both impulse and coefficient value are negative maximums, to see if the
+Both <a href="https://en.wikipedia.org/wiki/Kronecker_delta">impulse</a>
+and coefficient value are negative maximums, to see if the
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
-will overflow as a result.  What that means, though, is
-that the
+will overflow as a result.  What that means, though, is that the
 <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>’s
 output given these coefficients and this input will be a
-single positive impulse, as shown in the figure above.</p>
+single positive
+<a href="https://en.wikipedia.org/wiki/Kronecker_delta">impulse</a>,
+as shown in the figure above.</p>
   </li>
 </ol>
 
