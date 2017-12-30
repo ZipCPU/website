@@ -1,0 +1,1139 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>A better filter implementation for slower signals</title>
+  <meta name="description" content="Fig 1. A Generic filter implementation">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2017/12/30/slowfil.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">A better filter implementation for slower signals</h1>
+    <p class="post-meta"><time datetime="2017-12-30T00:00:00-05:00" itemprop="datePublished">Dec 30, 2017</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <table align="center" style="float: right"><caption>Fig 1. A Generic filter implementation</caption><tr><td><img src="/img/fir-form.svg" alt="" width="480" /></td></tr></table>
+
+<p>We’ve slowly been working through several
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://github.com/ZipCPU/dspfilters/tree/master/rtl">implementations</a> on
+<a href="http://zipcpu.com/">this blog</a>.  Each of these
+<a href="https://github.com/ZipCPU/dspfilters/tree/master/rtl">implementations</a>
+includes the logic necessary to evaluate a typical
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>,
+such as the one shown in Fig 1 on the right.</p>
+
+<p>We’ve presented both a
+<a href="/dsp/2017/09/15/fastfir.html">fairly generic FIR filter implementation</a>
+for high rate data signals, as well as a
+<a href="/dsp/2017/09/29/cheaper-fast-fir.html">simple modification to that implementation</a>
+that uses fewer resources but has a higher fanout.  We’ve also discussed a
+<a href="/dsp/2017/11/04/genfil-tb.html">generic test harness</a>
+that can be used to test and prove some of
+<a href="https://github.com/ZipCPU/dspfilters">these filters</a>,
+and even showed <a href="/dsp/2017/12/06/fastfir-tb.html">how that harness might be
+applied</a>.
+Further, we’ve discussed the usefulness of a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>,
+as well as
+<a href="/dsp/2017/11/22/fltr-response.html">how to measure it</a>
+using the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">same test harness</a>.</p>
+
+<p>However, if you want to try any of these initial filter implementations
+on signals with a slower sample rate, such as audio signals, you’ll
+quickly find these <em>faster</em> filtering implementations to be very resource
+intensive.</p>
+
+<p>For example, if you want to apply a 2047 tap filter to a 48kHz audio
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+while running your
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+at a 100MHz system clock, then the
+<a href="/dsp/2017/09/15/fastfir.html">generic filter implementation</a>
+will cost you 2047 hardware multiplies.  This will force you to the most
+expensive and feature rich Virtex-7 FPGA, the
+<a href="https://www.digikey.com/product-detail/en/xilinx-inc/XC7VH870T-1FLG1932C/XC7VH870T-1FLG1932C-ND/5247347">XC7VH870T</a>–a chip that will cost
+you a minimum of $18k USD today on
+<a href="https://www.digikey.com">Digikey</a>.  On the other hand, if you used the
+implementation presented below, you might still be able to use an
+<a href="https://www.digikey.com/product-detail/en/xilinx-inc/XC7A15T-1FTG256C/122-1930-ND/5248117">Artix-7 priced at less than $26</a> on
+<a href="https://www.digikey.com">Digikey</a>, and available as part of many hobby
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+boards for fairly reasonable prices (about $100USD).
+<a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/">[1]</a>
+<a href="https://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists/">[2]</a></p>
+
+<p>For all of these reasons, it’s important to know how to build a
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+that re-uses its hardware multiplies to the maximum extent possible.  The
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+that we’ll present below, for example, uses only one hardware
+multiply–although that will limit the number of coefficients this
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">implementation</a>
+can handle.</p>
+
+<p>Let’s take a look at what how this
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+will need to operate, and then look at how to
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">implement</a>
+it.  Once implemented, we’ll show how easy it is
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">to test</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+using the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness</a>
+we built some time ago.</p>
+
+<h2 id="the-operation">The Operation</h2>
+
+<p>If you’ve gone through the posts above, then you are already aware that a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">digital filter</a>
+evaluates a
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>.
+For example, if <code class="highlighter-rouge">x[n]</code> were our input, <code class="highlighter-rouge">y[n]</code> our output, and <code class="highlighter-rouge">h[n]</code> a
+series of coefficients, then we might write that,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/fir-convolution.png" alt="" width="255" /></td></tr></table>
+
+<p>Pictorially, this equation describes the operation shown in Fig 1 above.</p>
+
+<p>Today’s <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter
+implementation</a>
+will follow directly from a straight-forward evaluation of the summation
+in the equation above.  In other words, we’ll start by setting an
+accumulator to the first value,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/fir-slowfil-acc-zero.png" alt="" width="205" /></td></tr></table>
+
+<p>Then, on each subsequent clock we’ll add the next value to it,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/fir-slowfil-acc-step.png" alt="" width="409" /></td></tr></table>
+
+<table align="center" style="float: right"><caption>Fig 2. A Time Multiplexed filter implementation</caption><tr><td><img src="/img/fir-slow-form.svg" alt="" width="480" /></td></tr></table>
+
+<p>Fig 2 on the right shows a diagram of how this approach might look.
+Basically, at every step we’ll read both an <code class="highlighter-rouge">h[k]</code> value and an <code class="highlighter-rouge">x[n-k]</code>
+value from separate memories, multiply the two together, and add the product
+together with the value from an accumulator.  Once all the values have
+been added together, we’ll use this accumulated result as our output.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/fir-slowfil-acc-done.png" alt="" width="204" /></td></tr></table>
+
+<p>In Verilog, this might look something <em>like</em> the following.  On the first
+clock, we’d read one tap from the tap (coefficient) memory, and multiply
+it by our incoming data sample, <code class="highlighter-rouge">i_sample</code>.  The result of that product
+could then be used to initialize an accumulator.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_ce)
+begin
+	// first clock
+	tap &lt;= tapmem[0];
+
+	// second clock
+	product &lt;= tap * i_sample;
+
+	// third clock
+	r_acc &lt;= product;</code></pre></figure>
+
+<p>Sounds simple so far, right?  Okay, so we’ve ignored any pipeline scheduling
+(<code class="highlighter-rouge">i_ce</code> will only be true for one clock in <code class="highlighter-rouge">N</code>), but let’s come back to that
+in a moment.</p>
+
+<p>Further, we’re going to need to read from block RAM memory on every clock
+following.  This means we’ll need to place this new sample value into
+memory, and then increment the write pointer.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Write the new data to memory, then increment the memory pointer
+	dmem[dwidx] &lt;= i_sample;
+	dwidx &lt;= dwidx + 1'b1;	// increment the memory write pointer</code></pre></figure>
+
+<p>We’re also going to want to be able to read the coefficient index pointer
+and the data index pointer on the next clock, so let’s set these as part
+of the same clock that the new data shows in on.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Still on i_ce
+	tidx &lt;= 1;
+	didx &lt;= dwidx;</code></pre></figure>
+
+<p>After the accumulator has been given an initial value, we’ll then need to read
+both the coefficient values and the data values from an on-chip block RAM
+memory.  Placing
+the data into a data memory to make this happen will require a memory write
+and some memory address manipulation.  That means that the second part of
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this algorithm</a>
+might look like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">end else if (!done)
+begin
+	// Now, between clocks, we'll need to read the data and the coefficient
+	data &lt;= dmem[didx];	// Read data from the sample memory, x[n-k]
+	tap &lt;= tapmem[tidx];	// Read from the coefficient memory, h[k]
+
+	// Update the pointers to each.  Notice that the coefficient index,
+	// tidx increases while the data index decreases--just as we have
+	// above.
+	didx &lt;= didx - 1'b1;
+	tidx &lt;= tidx + 1'b1;
+
+	// and calculate the product
+	product &lt;= tap * data;
+
+	// Use the product to update the accumulator
+	r_acc &lt;= r_acc + product</code></pre></figure>
+
+<p>Once we are done with all of the above, we’ll set the <a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling
+CE</a>
+values associated with the output, <code class="highlighter-rouge">o_ce</code>, and set the output 
+value according to the last <code class="highlighter-rouge">r_acc</code> value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">end else // if (done)
+begin
+	o_ce &lt;= 1'b1;
+	o_result &lt;= r_acc;
+end</code></pre></figure>
+
+<p>That’s the general gist of what we need to do.  Sadly, however, the code above
+has multiple timing errors and conflicts within it.  For example, there should
+be a clock delay between reading from memory and using the result, and another
+clock delay between multiplying two numbers together and using that result.
+As a result, the logic above will never work, but as a simple first draft
+it should be able to convey (roughly) what it is we hope to do.</p>
+
+<h2 id="the-basic-filter-written-in-c">The basic filter, written in C++</h2>
+
+<p>Perhaps if you have a software background, you might appreciate seeing this
+code written out in C++.  The following is an excerpt from an
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+implementation found in my own personal signal processing library.  The code
+uses double’s instead of fixed point, but it’s still basically the same thing.</p>
+
+<p>This C++ algorithm depends upon an array of <code class="highlighter-rouge">m_len</code> coefficients, <code class="highlighter-rouge">m_coeff</code>.
+This array will be initialized with the coefficients associated with the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+before starting.</p>
+
+<p>It also needs an array of data, <code class="highlighter-rouge">m_data</code>, of the same length.  Rather than
+moving all the data through the array at every point in time, we’ll just
+keep track of the address of the last data element in the tapped delay line,
+<code class="highlighter-rouge">m_loc</code>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">class</span>	<span class="nc">FIR</span> <span class="p">{</span>
+	<span class="kt">int</span>	<span class="n">m_len</span><span class="p">;</span>	<span class="c1">// Number of taps in the filter
+</span>	<span class="kt">double</span>	<span class="o">*</span><span class="n">m_coeff</span><span class="p">;</span>
+
+	<span class="c1">// ...
+</span>	<span class="kt">int</span>	<span class="n">m_loc</span><span class="p">;</span>		<span class="c1">// Location of the last sample in the buffer
+</span>	<span class="kt">double</span>	<span class="o">*</span><span class="n">m_data</span><span class="p">;</span>	<span class="c1">// Data buffer, double[m_len]
+</span>
+	<span class="c1">// ...
+</span>	<span class="c1">// Declare our operator
+</span>	<span class="kt">double</span>	<span class="n">apply</span><span class="p">(</span><span class="kt">double</span> <span class="n">i_sample</span><span class="p">);</span>
+<span class="p">};</span></code></pre></figure>
+
+<p>Were this written in Verilog, such as we will do in the next section, these two
+arrays would be captured in block RAMs.</p>
+
+<p>To evaluate the
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a> via the
+equation above, we’ll run the following code when given a new sample,
+<code class="highlighter-rouge">i_sample</code>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="kt">double</span>	<span class="n">FIR</span><span class="o">::</span><span class="n">apply</span><span class="p">(</span><span class="kt">double</span> <span class="n">i_sample</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">int</span>             <span class="n">i</span><span class="p">,</span> <span class="n">ln</span><span class="p">;</span>
+	<span class="kt">double</span>  <span class="n">acc</span><span class="p">,</span> <span class="o">*</span><span class="n">d</span><span class="p">,</span> <span class="o">*</span><span class="n">c</span><span class="p">;</span></code></pre></figure>
+
+<p>Our first step will be to record the new sample into the data memory.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">m_data</span><span class="p">[</span><span class="n">m_loc</span><span class="o">++</span><span class="p">]</span> <span class="o">=</span> <span class="n">dat</span><span class="p">;</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">m_loc</span> <span class="o">&gt;=</span> <span class="n">m_len</span><span class="p">)</span>
+		<span class="n">m_loc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>After this point, we’ll enter a loop whereby we grab one sample from
+data memory and one coefficient from the coefficient memory, multiply the
+two together, and accumulate the result into an accumulator, <code class="highlighter-rouge">acc</code>.  We’ll
+start the accumulator at zero.  Further, after each sample,
+we’ll increase the address in coefficient memory, and decrease the address
+in data memory–just as the formula above indicated.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">acc</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">;</span>
+	<span class="n">d</span>   <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="n">m_loc</span><span class="o">-</span><span class="mi">1</span><span class="p">];</span>
+	<span class="n">c</span>   <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_coeff</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+	<span class="n">ln</span>  <span class="o">=</span> <span class="n">m_loc</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">acc</span> <span class="o">+=</span> <span class="o">*</span><span class="n">c</span><span class="o">++</span> <span class="o">*</span> <span class="o">*</span><span class="n">d</span><span class="o">--</span><span class="p">;</span></code></pre></figure>
+
+<p>A couple things make the loop more complicated.  The first of those is the
+fact that if you start reading backwards from the middle of memory, you
+will eventually run off the beginning of the memory.  Fig 3 shows this below.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. Data memory contains both old and new data</caption><tr><td><img src="/img/fir-slow-memory.svg" alt="" width="780" /></td></tr></table>
+
+<p>In this figure, you can see the location <code class="highlighter-rouge">m_loc</code> (just right of the center
+of the figure) which is one past where
+the new data, <code class="highlighter-rouge">i_sample</code>, has just been written.  You can also see how
+the <code class="highlighter-rouge">x[n-k]</code> sequence extends to the left of this location.  Once this
+data sequence runs off the end of memory to the left, a second pass is
+required to get the rest of the data coming from the far end on the right.
+This second pass continues back to where we started, making sure every data
+sample in memory, and every coefficient value, is used exactly once.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">d</span>   <span class="o">=</span> <span class="n">m_data</span><span class="p">[</span><span class="n">m_len</span><span class="o">-</span><span class="mi">1</span><span class="p">];</span>
+	<span class="n">ln</span>  <span class="o">=</span> <span class="n">ln</span><span class="o">-</span><span class="n">m_loc</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">acc</span> <span class="o">+=</span> <span class="o">*</span><span class="n">c</span><span class="o">++</span> <span class="o">*</span> <span class="o">*</span><span class="n">d</span><span class="o">--</span><span class="p">;</span></code></pre></figure>
+
+<p>Once all of the multiplies have been completed, the result is returned.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>This is the basic algorithm we will write in Verilog below.  There will be
+some differences though.  The first and most obvious difference is the fact
+that several parts of this algorithm will run in parallel.  The next, not
+quite so obvious difference, is that if the memory address is limited to
+some finite number of bits, then we won’t need to pay any attention to the
+memory break shown above in Fig 3.  Finally, the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+algorithm <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">implemented in
+Verilog</a>
+will be written using fixed point numbers instead of the <code class="highlighter-rouge">double</code>-precision
+floating point numbers that are so easy to use in the C++ above.</p>
+
+<p>Before moving on, I should make one point about the code above.  This C/C++
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+implementation is only practical for
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+with <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse responses</a>
+shorter than about 64 samples.  Anything more than 64 samples and you’ll
+want to use an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+based
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filtering</a>
+approach.  The differences between the two approaches will become
+particularly stark after double the
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+length only a few times.</p>
+
+<h2 id="verilog">Verilog</h2>
+
+<table align="center" style="float: right"><caption>Fig 4. Test Harness Filter Interface</caption><tr><td><img src="/img/fir-ports.svg" alt="" width="240" /></td></tr></table>
+
+<p>You may remember from our
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness discussion</a>
+that as long as a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+implementation has the ports we discussed then, and shown again here in
+Fig 4 at the right, that we can continue using our <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">generic filtering test
+harness</a>.
+While we’ll be able to
+<a href="https://en.wikipedia.org/wiki/Inheritance_(object-oriented_programming)">inherit</a>
+and modify
+the <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness</a>
+with additional functionality in the next section, we’ll 
+need to start out this section by remembering that our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+implementation will need to have a reset, and the ability to load
+taps, in addition to samples coming in and going out.</p>
+
+<p>We’ll start with the ability to set our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients.  As with our
+<a href="https://github.com/ZipCPU/dspfilters/tree/master/rtl">other filters</a>,
+we’ll allow a parameter <code class="highlighter-rouge">FIXED_TAPS</code> to express whether or not this
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+has a tap-update capability at all.  If the coefficients are fixed, then
+we’ll <code class="highlighter-rouge">$readmemh</code> them from a <code class="highlighter-rouge">.hex</code> file whose name is given in
+<code class="highlighter-rouge">INITIAL_COEFFS</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	generate if (FIXED_TAPS)
+	begin
+		initial $readmemh(INITIAL_COEFFS, tapmem);
+		// ...
+	end else begin</code></pre></figure>
+
+<p>On the other hand, if our
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+coefficients are not fixed, <code class="highlighter-rouge">FIXED_TAPS</code> will be false, and we’ll need
+to load our coefficients into memory.  To do this, we’ll start with a
+memory index, <code class="highlighter-rouge">tapwidx</code>, or tap writing index.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		reg	[(LGNTAPS-1):0]	tapwidx;</code></pre></figure>
+
+<p>We’ll set this index to zero initially, and to return to zero upon any reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		initial	tapwidx = 0;
+		always @(posedge i_clk)
+			if(i_reset)
+				tapwidx &lt;= 0;</code></pre></figure>
+
+<p>Otherwise, anytime the <code class="highlighter-rouge">i_tap_wr</code> signal is high, a new coefficient is present
+in <code class="highlighter-rouge">i_tap</code> which we’ll write to coefficient memory.  We’ll also need to
+increment this index.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			else if (i_tap_wr)
+				tapwidx &lt;= tapwidx + 1'b1;</code></pre></figure>
+
+<p>Here’s where we actually use the tap (coefficient) writing index, <code class="highlighter-rouge">tapwidx</code>
+to write into the coefficient memory, <code class="highlighter-rouge">tapmem</code>.  This is also the section
+of the code to specify any memory initialization, so we’ll initialize the
+memory if the <code class="highlighter-rouge">INITIAL_COEFFS</code> file name is empty.  Note that the <code class="highlighter-rouge">if</code>
+statement is <em>outside</em> of the <code class="highlighter-rouge">initial</code> block.  That will keep the
+synthesizer from looking for this file if the name hasn’t been given.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		if (INITIAL_COEFFS != 0)
+			initial $readmemh(INITIAL_COEFFS, tapmem);
+		always @(posedge i_clk)
+			if (i_tap_wr)
+				tapmem[tapwidx] &lt;= i_tap;
+	end endgenerate</code></pre></figure>
+
+<p>That’s all that’s required for dynamically setting or adjusting coefficient
+memory.  We started with an <code class="highlighter-rouge">i_reset</code> signal to clear the index, and then
+wrote one coefficient and stepped the index on any clock where <code class="highlighter-rouge">i_tap_wr</code> was
+true.</p>
+
+<p>So let’s now turn our attention to the <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter
+implementation</a>
+itself.</p>
+
+<p>We’ll start with updating the data memory, herein called <code class="highlighter-rouge">dmem</code>.  We’ll
+use a data memory write index, <code class="highlighter-rouge">dwidx</code> to do this.  Hence, on every <code class="highlighter-rouge">i_ce</code>
+value, we’ll increment the data memory write index,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	dwidx = 0;
+	always @(posedge i_clk)
+		if (i_ce)
+			dwidx &lt;= dwidx + 1'b1;</code></pre></figure>
+
+<p>and write the new sample into the data memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		if (i_ce)
+			dmem[dwidx] &lt;= i_sample;</code></pre></figure>
+
+<p>Notice in this process how the data memory update process is <em>independent</em>
+of the <code class="highlighter-rouge">i_reset</code> signal.  It is dependent upon new sample data
+only.  Further, this will allow the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+to immediately start with valid data following any reset.</p>
+
+<p>This <em>feature</em>, however, will become a thorn in our side when we build our
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>.
+The basic problem is that we’ll want to apply test vectors to the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+that assume the memory is clear (all zeros).  While the preferred solution
+might be to clear all memory elements any time <code class="highlighter-rouge">i_reset</code> is asserted, this
+isn’t how most memories are built.  That means that, when we wish to clear
+this memory later, we’ll need to write as many zeros to it as are necessary
+to fill it with zeros.</p>
+
+<p>Those are the easy parts of the algorithm.  The next step is to calculate
+the indices to be used for both reading from coefficient and data memories.
+Since this gets into scheduling, let’s take a moment to start scribbling
+a draft pipeline schedule.</p>
+
+<p>Usually, when I build a pipeline schedule, I start by writing out my code and
+marking each line with the appropriate clock.  Doing this might result in
+pseudocode looking something like the following.</p>
+
+<p>The first clock would set the memory reading indexes.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Clock 1 -- i_ce and i_sample are true, tidx and didx are set
+	if (i_ce)
+	begin
+		tidx &lt;= 0;
+		didx &lt;= dwidx;
+	end else begin
+		tidx &lt;= tidx + 1'b1;
+		didx &lt;= didx - 1'b1;
+	end</code></pre></figure>
+
+<p>Notice how we are using the <code class="highlighter-rouge">i_ce</code> signal as an indication of when to reset
+the indices for the data and coefficient memories, <code class="highlighter-rouge">didx</code> and <code class="highlighter-rouge">tidx</code>,
+to the beginning of our run.  At the same time, we’ll write the new data
+sample into memory–we discussed that above.  That’s the first clock.</p>
+
+<p>The second clock would read from memory,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Clock 2.
+	tap &lt;= tapmem[tidx];
+	data &lt;= dmem[didx];</code></pre></figure>
+
+<p>This will give us the information we need to calculate <code class="highlighter-rouge">h[k][x[n-k]</code>, hence
+we can multiply these two values together on the third clock cycle,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Clock 3.
+	product &lt;= tap * data;</code></pre></figure>
+
+<p>Once the product is available, we’d add it to our accumulator.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Clock 4.
+	if (new_product_data)
+		acc &lt;= product;
+	else if (subsequent_product_data)
+		acc &lt;= acc + product;</code></pre></figure>
+
+<p>The final step would be to create our output.  This will need to take place
+some time into the future–at a time we’ll need to come back to and determine.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Clock ... some distance into the future
+	if (new_product_data)
+	begin
+		o_ce &lt;= 1'b1;
+		o_result &lt;= acc;
+	end else
+		o_ce &lt;= 1'b0;</code></pre></figure>
+
+<p>Before moving on, I tried to draw this basic pipeline schedule out in Fig 5
+below for reference.  You should know, though, that whenever
+I build an algorithm like this I usually just start by writing
+the clock numbers in my code as we just did above.  I find these diagrams
+are most useful to me when telling someone else about one of my designs,
+such as I am doing now.</p>
+
+<table align="center" style="float: none"><caption>Fig 5. Initial draft pipeline schedule</caption><tr><td><img src="/img/fir-slow-schedule-one.svg" alt="" width="780" /></td></tr></table>
+
+<p>If you aren’t familiar with this sort of table, I use it to communicate
+when variables are <em>valid</em> within a design.  In this case, on the clock that
+any new data is present, i.e.  <a href="/blog/2017/08/14/strategies-for-pipelining.html">the clock where <code class="highlighter-rouge">i_ce</code> is
+high</a>,
+the write
+index for the data memory will also be valid.  These clock numbers are off by
+one from the ones above, simply because variables set on one clock (as shown
+in the code above) will be valid on the next clock–as shown in Fig 5.</p>
+
+<p>So, that’s generally what we wish to do.  To make this happen, though, let’s
+add some
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling valid flags</a>
+to this pipeline.  Specifically, we are going to want to know when to reset
+the accumulator with a new product, and when to add other products into the
+accumulator.  We’re also going to need to know when to set <code class="highlighter-rouge">o_ce</code> and
+<code class="highlighter-rouge">o_result.</code></p>
+
+<p>The first <a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling valid
+flag</a>
+we’ll call <code class="highlighter-rouge">pre_acc_ce</code>–or the pre clock
+enable for the accumulator.  We’ll use a shift register for this purpose.
+Hence, on the first clock we’ll set <code class="highlighter-rouge">pre_acc_ce[0]</code> to let us know that the
+indices will be valid on the next clock.  On that next clock, we’ll set
+<code class="highlighter-rouge">pre_acc_ce[1]</code> to indicate that the memory reads are valid.  Finally, we’ll
+set <code class="highlighter-rouge">pre_acc_ce[2]</code> to indicate that the product is valid.  Further, we’ll
+clear <code class="highlighter-rouge">pre_acc_ce[0]</code> as soon as the last tap has been read.  This will then
+be the indicator needed to know when to stop accumulating values.</p>
+
+<p>The only real trick in this logic chain is knowing when to shut <code class="highlighter-rouge">pre_acc_ce[0]</code>
+off.  In particular, it needs to be shut off once we have exhausted all of the
+coefficients in the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>.
+We’ll come back to this in a moment, but for now
+we are talking about a simple piece of scheduling logic such as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	wire	last_tap_index;
+	// ...
+	reg	[2:0]	pre_acc_ce;
+	initial	pre_acc_ce = 3'h0;
+	always @(posedge i_clk)
+		if (i_reset)
+			pre_acc_ce[0] &lt;= 1'b0;
+		else if (i_ce)
+			pre_acc_ce[0] &lt;= 1'b1;
+		else if ((pre_acc_ce[0])&amp;&amp;(last_tap_index))
+			pre_acc_ce[0] &lt;= 1'b1;
+		else
+			pre_acc_ce[0] &lt;= 1'b0;
+	// ...
+
+	always @(posedge i_clk)
+		if (i_reset)
+			pre_acc_ce[2:1] &lt;= 2'b0;
+		else
+			pre_acc_ce[2:1] &lt;= pre_acc_ce[1:0];</code></pre></figure>
+
+<p>Once <code class="highlighter-rouge">i_ce</code> is valid, the memory index will be valid on the next clock–so
+we’ll set <code class="highlighter-rouge">pre_ce_acc[0]</code> to true.  We’ll leave it true until we get to the
+last tap index.  Likewise the values will flow through this structure just
+like a shift register.</p>
+
+<p>But when shall we cut it off?  It needs to be cut off such that, when
+the coefficient index, <code class="highlighter-rouge">tidx</code>, is referencing the last coefficient,
+<code class="highlighter-rouge">pre_acc_ce[0]</code> will be false on the next clock.  Since our coefficient index
+is counting from <code class="highlighter-rouge">0</code> to <code class="highlighter-rouge">NTAPS-1</code>, this can be expressed as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	last_tap_index = (NTAPS[LGNTAPS-1:0]-tidx &lt;= 1);</code></pre></figure>
+
+<p>The neat thing about this piece of logic, as you’ll see as we move forward,
+is that it keeps the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+from outputting an invalid answer any time
+too many clocks are given between <code class="highlighter-rouge">i_ce</code> values.  Hence, if you have a
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+with <code class="highlighter-rouge">NTAPS</code> coefficients, yet there are more than <code class="highlighter-rouge">NTAPS</code> clocks between
+samples, then the accumulator will only pay attention to the first
+<code class="highlighter-rouge">NTAPS</code> products.</p>
+
+<p>This brings us to our next step: the block RAM read indices.  Upon any new
+value, the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+starts accumulating from the product of coefficient zero
+and the most recent data sample.  Coefficients then work forwards in their
+array, while the data indexes work backwards–just like they did in the
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+formula we started with.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	didx = 0;
+	initial	tidx = 0;
+	always @(posedge i_clk)
+		if (i_ce)
+		begin
+			didx &lt;= dwidx;
+			tidx &lt;= 0;
+		end else begin
+			didx &lt;= didx - 1'b1;
+			tidx &lt;= tidx + 1'b1;
+		end</code></pre></figure>
+
+<p>Indeed, this logic is essentially identical to our last draft.</p>
+
+<p>We’ll also follow the clocks through the pipeline with a second
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling CE</a>
+approach with a <a href="/blog/2017/08/14/strategies-for-pipelining.html">couple of other CE
+signals</a>.
+The first of these, <code class="highlighter-rouge">m_ce</code> is memory
+index valid signal,
+indicating that the first index is valid.  As you follow through the code,
+you’ll see other similar CE signals, such as the <code class="highlighter-rouge">d_ce</code> signal to indicate
+the first set of data and coefficient values are valid and <code class="highlighter-rouge">p_ce</code> to indicate
+the first product is valid.  We’ll use these in a moment to determine when to
+load the accumulator vs adding a new value to it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// m_ce is valid when the first index is valid
+	initial	m_ce = 1'b0;
+	always @(posedge i_clk)
+		m_ce &lt;= (i_ce)&amp;&amp;(!i_reset);</code></pre></figure>
+
+<p>On every clock cycle, we’ll read two values from block RAM–a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+<a href="https://en.wikipedia.org/wiki/Impulse_response">coefficient value</a>
+and a data value.  Note how the block RAM reading code below is explicitly
+kept very simple.  This is to make certain that the tools recognize these as
+reads from block RAM’s, rather than more complex logic such as one would need
+to implement via a
+<a href="/blog/2017/06/12/minimizing-luts.html">look-up-tables</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	tap = 0;
+	always @(posedge i_clk)
+		tap &lt;= tapmem[tidx[(LGNTAPS-1):0]];
+
+	initial	data = 0;
+	always @(posedge i_clk)
+		data &lt;= dmem[didx];</code></pre></figure>
+
+<p>Once read, we’ll set a data CE, or <code class="highlighter-rouge">d_ce</code>, to indicate that the first data
+value is now valid.  This will follow the first memory indices are valid
+CE, <code class="highlighter-rouge">m_ce</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	d_ce = 0;
+	always @(posedge i_clk)
+		d_ce &lt;= (m_ce)&amp;&amp;(!i_reset);</code></pre></figure>
+
+<p>After all this work, we
+can now calculate the product of <code class="highlighter-rouge">h[k]x[n-k]</code>, herein referenced as just
+<code class="highlighter-rouge">tap * data</code>.  Another <a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling CE
+value</a>,
+this time <code class="highlighter-rouge">p_ce</code>, denotes when this first product is valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	p_ce = 1'b0;
+	always @(posedge i_clk)
+		p_ce &lt;= (d_ce)&amp;&amp;(!i_reset);
+
+	initial	product = 0;
+	always @(posedge i_clk)
+		product &lt;= tap * data;</code></pre></figure>
+
+<p>Only now can we can finally get to the
+accumulator at the penultimate stage of this chain.
+On the first value given to it, that is
+any time <code class="highlighter-rouge">p_ce</code> is true–which will be true with the first product value,
+<code class="highlighter-rouge">h[0]x[n]</code>,
+the accumulator is set to the result of that product.  Otherwise, any time a
+subsequent product is valid–as noted by <code class="highlighter-rouge">pre_acc_ce[2]</code> being high, the
+accumulator value is increased by the last <code class="highlighter-rouge">h[k]x[n-k]</code> value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	r_acc = 0;
+	always @(posedge i_clk)
+		if (p_ce)
+			r_acc &lt;={ {(OW-(IW+TW)){product[(IW+TW-1)]}}, product };
+		else if (pre_acc_ce[2])
+			r_acc &lt;= r_acc + { {(OW-(IW+TW)){product[(IW+TW-1)]}},
+						product };</code></pre></figure>
+
+<p>This almost looks like the draft code above.  The biggest difference is that
+we’ve done some sign extension work to make sure this works across
+multiple synthesis tools.</p>
+
+<p>On the same clock we place a new value into the accumulator, we can also read
+the last value out.  Hence we set <code class="highlighter-rouge">o_result</code> to the output of the accumulator
+on that same clock, and <code class="highlighter-rouge">o_ce</code> to indicate this result is valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	o_result = 0;
+	always @(posedge i_clk)
+		if (p_ce)
+			o_result &lt;= r_acc;
+
+	initial	o_ce = 1'b0;
+	always @(posedge i_clk)
+		o_ce &lt;= (p_ce)&amp;&amp;(!i_reset);
+endmodule</code></pre></figure>
+
+<p>Note that, as a consequence of this approach, <code class="highlighter-rouge">o_ce</code> will always be true a
+fixed number of clock ticks from <code class="highlighter-rouge">i_ce</code>.  Hence, if the data stops coming, the
+last accumulator value will not be read out.  Likewise, if the <code class="highlighter-rouge">i_ce</code> values
+come with fewer than <code class="highlighter-rouge">NTAPS</code> steps between them, then the <code class="highlighter-rouge">o_ce</code> values will
+only report partial
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+products.  There is no error detection or correction here.</p>
+
+<p>Still, that’s what it takes to generate a slow
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+in Verilog for an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.  Sadly,
+though, the code is complex enough that we are going to lean heavily on our
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>
+code to know if it works or not.</p>
+
+<h2 id="test-bench">Test bench</h2>
+
+<p>When it comes time to building a
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a> for
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>,
+we’ve really already done most of the work in the <a href="/dsp/2017/11/04/genfil-tb.html">generic filtering
+test harness</a>
+we built for the
+<a href="/dsp/2017/09/15/fastfir.html">generic filter</a>’s
+<a href="/dsp/2017/12/06/fastfir-tb.html">test bench</a>.
+As a result, testing
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+only requires making a couple of small changes.  Indeed, if you run a
+<a href="https://en.wikipedia.org/wiki/Diff_utility">diff</a>
+between the original
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench for a generic filter</a>,
+and the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a> for
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>,
+you’ll see the changes we are about to discuss below.  You might even be
+surprised at how much code is in common between the two.</p>
+
+<p><a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">This</a>
+will, however, be the first
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+that will test the fixed number of clocks
+per input clock enable, <code class="highlighter-rouge">i_ce</code>  associated with the sample value.  As it
+turns out, we did a good job
+<a href="/dsp/2017/11/04/genfil-tb.html">building the initial</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness</a>,
+so not much needed to change there.</p>
+
+<p>Second, unlike the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/genfil_tb.cpp">prior filter</a>, resetting this one so that all the memory is
+zero requires more work than just setting the reset flag.  In particular,
+the way block RAM’s are built, they cannot be cleared in a single clock.
+As a result, we’ll need to write a routine to explicitly write zero samples to
+the filter’s internal memory so that any test vector generator can start
+from a known state.</p>
+
+<p>With those two caveats aside, let’s start looking at the code.</p>
+
+<p>As with any code using our
+basic filtering test bench,
+it starts out be declaring constants shared between the test bench code and
+the filter itself.  These include the number of bits in the input, the
+coefficients, the output, the number of coefficients, the delay between
+input and the first output resulting from that input, and the number of
+clocks per input sample.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">const</span>	<span class="kt">unsigned</span> <span class="n">IW</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+		<span class="n">TW</span> <span class="o">=</span> <span class="mi">16</span><span class="p">,</span>
+		<span class="n">OW</span> <span class="o">=</span> <span class="n">IW</span><span class="o">+</span><span class="n">TW</span><span class="o">+</span><span class="mi">7</span><span class="p">,</span>
+		<span class="n">NTAPS</span> <span class="o">=</span> <span class="mi">110</span><span class="p">,</span>
+		<span class="n">DELAY</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span>
+		<span class="n">CKPCE</span> <span class="o">=</span> <span class="n">NTAPS</span><span class="p">;</span></code></pre></figure>
+
+<p>These values are not only declared as constants at the beginning of the
+test bench, but they are also used to when initializing our test bench
+class.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">class</span>	<span class="nc">SLOWFIL</span><span class="n">_TB</span> <span class="o">:</span> <span class="k">public</span> <span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">Vslowfil</span><span class="o">&gt;</span> <span class="p">{</span>
+<span class="k">public</span><span class="o">:</span>
+	<span class="n">bool</span>		<span class="n">m_done</span><span class="p">;</span>
+
+	<span class="n">SLOWFIL_TB</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">IW</span><span class="p">(</span><span class="o">::</span><span class="n">IW</span><span class="p">);</span>
+		<span class="n">TW</span><span class="p">(</span><span class="o">::</span><span class="n">TW</span><span class="p">);</span>
+		<span class="n">OW</span><span class="p">(</span><span class="o">::</span><span class="n">OW</span><span class="p">);</span>
+		<span class="n">NTAPS</span><span class="p">(</span><span class="o">::</span><span class="n">NTAPS</span><span class="p">);</span>
+		<span class="n">DELAY</span><span class="p">(</span><span class="o">::</span><span class="n">DELAY</span><span class="p">);</span>
+		<span class="n">CKPCE</span><span class="p">(</span><span class="o">::</span><span class="n">CKPCE</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>This is just normal setup though.  Now we need to get into the actual
+details of the test bench changes.</p>
+
+<p>The first change that needs to be made is to the <code class="highlighter-rouge">test()</code> routine.  This
+routine, as you
+may remember,
+takes an input data stream, applies the filter, and returns the result.  It
+also depends upon the filter having a zero internal state.  Since clearing
+the state in this
+test bench
+is a little more awkward, we’ll make certain to call a function to make
+certain the state is cleared before calling the <code class="highlighter-rouge">test()</code> function in the
+test harness
+itself.  The neat part of this change, though, is that by
+<a href="https://en.wikipedia.org/wiki/Method_overriding">overloading</a>,
+this <code class="highlighter-rouge">test()</code> operator and using
+<a href="https://en.wikipedia.org/wiki/Inheritance_(object-oriented_programming)">inheritance</a>,
+this change only requires the following four lines of code.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">test</span><span class="p">(</span><span class="kt">int</span> <span class="n">nlen</span><span class="p">,</span> <span class="kt">long</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">clear_filter</span><span class="p">();</span>
+		<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">Vslowfil</span><span class="o">&gt;::</span><span class="n">test</span><span class="p">(</span><span class="n">nlen</span><span class="p">,</span> <span class="n">data</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Unlike the
+other filters
+we’ve tested, this one requires a reset prior to loading any
+new <a href="https://en.wikipedia.org/wiki/Impulse_response">coefficients</a>.  As
+you may recall from above, resetting
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+sets the index into the coefficient memory back to zero, so it is an
+important part of loading a new set of
+<a href="https://en.wikipedia.org/wiki/Impulse_response">coefficients</a>.  Just a
+slight modification to the
+test bench,
+and this change has now been made as well.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">load</span><span class="p">(</span><span class="kt">int</span> <span class="n">nlen</span><span class="p">,</span> <span class="kt">long</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">reset</span><span class="p">();</span>
+		<span class="n">FILTERTB</span><span class="o">&lt;</span><span class="n">Vslowfil</span><span class="o">&gt;::</span><span class="n">load</span><span class="p">(</span><span class="n">nlen</span><span class="p">,</span> <span class="n">data</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Perhaps the most important change, though, is the function that we need to
+write to clear the data memory within
+this filter.  We’ll call this function <code class="highlighter-rouge">clear_filter()</code>.  It will work by
+providing one clock with <code class="highlighter-rouge">i_ce</code> high and <code class="highlighter-rouge">i_sample</code> set to zero per element
+in the memory array.  Since the array will always be a length given by a power
+of two, it may also be longer than the number of taps, <code class="highlighter-rouge">NTAPS()</code> in this
+filter.</p>
+
+<p>What may surprise you, though, is that we are going to hit this filter with
+one new sample per clock, while ignoring the output.  The result of this will
+be that the output of this run will be invalid, although the new data will
+loaded into he memory as desired.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">clear_filter</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_tap_wr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="c1">// ..
+</span>		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span>     <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_sample</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">nextlg</span><span class="p">(</span><span class="n">NTAPS</span><span class="p">());</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">tick</span><span class="p">();</span></code></pre></figure>
+
+<p>As one final step, once the memory has been loaded, we’ll let the last sample
+propagate through the filter, so as to make certain the filter is in a
+usable state when we apply our test vectors.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_ce</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">CKPCE</span><span class="p">();</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">tick</span><span class="p">();</span>
+	<span class="p">}</span>
+<span class="p">};</span></code></pre></figure>
+
+<p>At this point, all we need to do is switch our main program to running the
+test bench
+created for this new code, and everything is roughly the same as before.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">SLOWFIL_TB</span>	<span class="o">*</span><span class="n">tb</span><span class="p">;</span>
+
+<span class="kt">int</span>	<span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">Verilated</span><span class="o">::</span><span class="n">commandArgs</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">);</span>
+	<span class="n">tb</span> <span class="o">=</span> <span class="k">new</span> <span class="n">SLOWFIL_TB</span><span class="p">();</span></code></pre></figure>
+
+<p>How’s that for fairly simple?</p>
+
+<p>Of course, it’s only that simple because of the work we’ve already done,
+but that just underscores the power of
+<a href="https://en.wikipedia.org/wiki/Object-oriented_programming">Object Oriented Programming (OOP)</a>.</p>
+
+<h2 id="example-traces">Example Traces</h2>
+
+<p>If you’d like to see a trace of how this all works, there’s a commented line
+in the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>,</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="o">//</span> <span class="n">tb</span><span class="o">-&gt;</span><span class="n">opentrace</span><span class="p">(</span><span class="s">"trace.vcd"</span><span class="p">);</span></code></pre></figure>
+
+<p>which, if uncommented, will create a
+<a href="/blog/2017/07/31/vcd.html">VCD file</a>
+containing a trace of what
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+does.  Be careful–the trace can quickly
+become hundreds of megabytes, if not several gigabytes, in length.</p>
+
+<p>Still, let’s turn that on to see if we can get a feel for how
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+works.  We’ll stop the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>
+after the
+<a href="/blog/2017/07/31/vcd.html">trace file</a>
+gets to about 28MB–which is still more than we need for this demo.  We
+can then use
+<a href="https://gtkwave.sourceforge.net">GTKwave</a>
+to display the results.  You can see a screen capture of the result
+in Fig 6 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 6. Trace of the First Impulse Test</caption><tr><td><img src="/img/fir-slowfil-trace.png" alt="" width="780" /></td></tr></table>
+
+<p>The figure shows several key steps in the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>.</p>
+
+<ol>
+  <li>
+    <p>First, at the far left, <code class="highlighter-rouge">i_tap_wr</code> is high for many clocks as the
+coefficients (<code class="highlighter-rouge">i_tap</code>) are loaded into the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>.</p>
+  </li>
+  <li>
+    <p>The <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+is then <em>cleared</em> by writing a series of (roughly) <code class="highlighter-rouge">NTAPS()</code>
+zeros into the memory.</p>
+  </li>
+  <li>
+    <p>The <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench</a>
+then applies an impulse to the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>,
+to verify the <a href="https://en.wikipedia.org/wiki/Impulse_response">response</a>.
+Both impulse and coefficient value are negative maximums, to see if the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>
+will overflow as a result.  What that means, though, is
+that the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">filter</a>’s
+output given these coefficients and this input will be a
+single positive impulse, as shown in the figure above.</p>
+  </li>
+</ol>
+
+<p>Suppose we zoomed in some more on how
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+operated?  In this case, see Fig 7 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 7. Zooming in on the first test vector</caption><tr><td><img src="/img/fir-slowfil-trace-zoom.png" alt="" width="780" /></td></tr></table>
+
+<p>At this zoom level, you can see how the various <code class="highlighter-rouge">CE</code>s (really misnamed
+valid signals) make their way through the system until the final <code class="highlighter-rouge">o_ce</code> and
+<code class="highlighter-rouge">o_result</code> are valid.  You can also see the <code class="highlighter-rouge">pre_acc_ce[2:0]</code> shift register
+note when the tap index and data index became valid, <code class="highlighter-rouge">m_ce</code>, when the memory
+reads were valid, <code class="highlighter-rouge">d_ce</code>, and when the products became valid, <code class="highlighter-rouge">p_ce</code>.</p>
+
+<p>The point here is, even if you are struggling to understand the code itself
+above, sometimes a trace becomes easier to make sense of.</p>
+
+<h2 id="conclusions">Conclusions</h2>
+
+<p>This filtering approach is really quite powerful.  Not only were we able
+to reduce the number of multiplies required in order to implement
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>,
+but we were also able to prove it using little more than the <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/filtertb.cpp">test harness
+code</a>
+we’ve already built.</p>
+
+<p>Remember the discussion we started out with regarding a 2047 tap
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>?
+Such a <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+would be sufficient to generate a
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+with a 480Hz
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>,
+a 176Hz transition band, and a 70dB stop band.  That’s probably
+good enough for any audio work you might wish to do.</p>
+
+<p>That doesn’t mean
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this</a>
+is the best (or worst)
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+out there, just one to place into your tool box.  It has a purpose, and it
+works well in its own niche.</p>
+
+<p>What other approaches might we have tried?</p>
+
+<p>I’ve mentioned for some time that I’d like to build and demonstrate a
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetrical filter</a>.
+At high speed, that filter is now built and just waiting
+for a good blog post.  Similarly, a fun challenge might be to modify
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>
+to handle
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric coefficients</a>,
+something that would allow it to run twice as many coefficients at once.</p>
+
+<p>Another future
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+that will be fun to present is what I’m going to call
+a cascaded
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+By cascaded
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>, I mean one that
+is basically identical to
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">this filter</a>,
+except that it allows multiple
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>s
+of this type to be cascaded together in order to effectively create a <em>much</em>
+longer <a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+In many ways, this may seem like the holy grail of generic
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+implementation–a
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>
+that can be adjusted to use only as many hardware multiplies
+as it is required to use given the incoming data rate.</p>
+
+<p>Perhaps the ultimate
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>,
+however, is the multirate implementation of a 
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a>.
+Using multirate techniques, it should be possible to apply a
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass</a>
+<a href="https://en.wikipedia.org/wiki/Digital_filter">filter</a> of
+any bandwidth to full speed data for a cost of only 10-12 multiplies.</p>
+
+<p>But these are all topics for another day.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Then took Mary a pound of ointment of spikenard, very costly, and anointed the feet of Jesus, and wiped his feet with her hair: and the house was filled with the odour of the ointment. (John 12:3)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
