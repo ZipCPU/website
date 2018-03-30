@@ -1,0 +1,1853 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Quadratic fits are entirely inappropriate for DSP</title>
+  <meta name="description" content="Waveforms in nature have two characteristics that are difficult to handle insignal processingapplications: natural waveforms arecontinuousand they are tend t...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2018/03/30/quadratic.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Quadratic fits are entirely inappropriate for DSP</h1>
+    <p class="post-meta"><time datetime="2018-03-30T00:00:00-04:00" itemprop="datePublished">Mar 30, 2018</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Waveforms in nature have two characteristics that are difficult to handle in
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">signal processing</a>
+applications: natural waveforms are
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+and they are tend to last for a <em>long time</em>.</p>
+
+<p>This is to be contrasted to the “signals” that <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">Digital Signal Processing
+(DSP)</a>
+algorithms act upon.
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a>
+algorithms are applied to <em>finite</em> sections of
+(typically) longer waveforms that have been
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a>
+at evenly spaced intervals.</p>
+
+<p>This leads to a fundamental problem: if you want to work on a waveform
+as though it were
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+instead of
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a>,
+then you need to figure out how to reconstruct what the signal
+<em>should be</em> between the
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points.  Perhaps you need to
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resample</a>
+that signal at some new rate whose ratio is far from simple when compared
+to the old rate.  Perhaps you need to
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resample</a>
+your signal at locations driven by a tracking loop, such as a digital receiver
+would need to do.  Perhaps you just want to zoom in on a screen plot of your
+signal and <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear
+interpolation</a>
+leaves you with a signal that looks nothing like the original reality.  Either
+way, if you want to
+<a href="https://en.wikipedia.org/wiki/Interpolation">recover</a>
+what your signal does between
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>,
+you’ll want to apply some form of
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>.</p>
+
+<p>In the past, we’ve looked at both a <a href="/dsp/2017/06/06/simple-interpolator.html">sample-and-hold
+“interpolator”</a>
+and a <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear
+interpolator</a>
+as possible subsample
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a> methods.
+However, if <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear
+interpolation</a>
+isn’t good enough for your application, then the next best approach is some
+form of <a href="https://en.wikipedia.org/wiki/Polynomial_interpolation">quadratic
+interpolation</a>.
+Indeed, it’s not that hard to take three points and generate a
+<a href="https://en.wikipedia.org/wiki/Quadratic_function">quadratic</a>
+that will pass three all three of them.</p>
+
+<p>Stop.  Now.  Don’t do that.  Really.  Don’t.</p>
+
+<p>In a moment I’ll show you why not.  Then I’ll show you a better approach.
+Further, when <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">implemented in
+logic</a>,
+this better approach will still use only the same two hardware multiplies that
+a quadratic fit would’ve used.</p>
+
+<h2 id="why-interpolation">Why interpolation</h2>
+
+<p><a href="https://en.wikipedia.org/wiki/Interpolation">Interpolation</a> is the term used
+to describe an algorithm that can be used to create (or estimate) data points
+between
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>.
+This is often called
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a> in a
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">Signal Processing</a>
+context, with the difference between
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsamplers</a>
+and those that are not
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+is that the output of an
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is guaranteed to go through the original
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points, whereas this is not necessarily the case of a more generic
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampler</a>.</p>
+
+<p>Today, we’ll be discussing
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+that are also infinite
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsamplers</a>, such as those <a href="/dsp/2018/01/16/interpolation-is-convolution.html">we
+discussed earlier</a>
+when proving that all such
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+could be modeled as
+<a href="https://en.wikipedia.org/wiki/Convolution">convolutions</a>
+of discrete-time signals with a
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+time filter.  Such 
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+can form the basis of an <em>asynchronous <a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">sample rate
+converter</a></em>.
+For our purposes today, though, we will limit our discussion to
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+which are simply the result of a
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsamplers</a>.  We’ll even limit the
+discussion further to that subset of all
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsamplers</a>
+that is formed from quadratic
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomials</a>.</p>
+
+<p>I first learned the idea of
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a>
+from <a href="ieeexplore.ieee.org/document/679201">Harris</a>,
+although it seems as though
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>
+was the actual originator of the idea.  Hence, you might recognize our
+ultimate solution as a
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>
+filter, although it may not look like any
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>
+filter you’ve seen before.  Even better, it will have provably better
+asymptotic out of band performance than any
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>
+filter or approach I’ve seen published to date.</p>
+
+<h2 id="the-problem-with-quadratic-fitting">The Problem with Quadratic Fitting</h2>
+
+<p>I started out this post by declaring that using a quadratic fit to
+the nearest three points were a horrible means of
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a>.
+Let’s take a moment before going
+further to see why this is the case.  We’ll do this by first creating a fit
+to the nearest three points of a signal, and then examining what happens when
+you extend this fit beyond those three points into the points nearby.</p>
+
+<p>As with any
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>
+problem, we’ll start with a signal, <code class="highlighter-rouge">x[n]</code>.  I’ll
+use the square brackets, <code class="highlighter-rouge">[]</code>, to emphasize that this is a
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled signal</a>
+and hence only integer indices are allowed.  From this
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled signal</a>,
+our goal will be to create a new signal, <code class="highlighter-rouge">y(t)</code>, with a
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+index, <code class="highlighter-rouge">t</code>–herein noted by the parentheses, <code class="highlighter-rouge">()</code>.</p>
+
+<p>To create a quadratic fit, well pick three points from this signal,
+<code class="highlighter-rouge">x[n-1]</code>, <code class="highlighter-rouge">x[n]</code>, and <code class="highlighter-rouge">x[n+1]</code>, and then fit a quadratic function, <code class="highlighter-rouge">f_n(t)</code>
+to these three points so that:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-genquad.png" alt="f_n(t-n) = a(t-n)^2 + b(t-n) + c" width="599" /></td></tr></table>
+
+<p>Further, if we assume that our
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+are spaced one unit apart, then</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-triplet.png" alt="" width="203" /></td></tr></table>
+
+<p>The constant term of this quadratic
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+is very simple to solve.  If we examine <code class="highlighter-rouge">t=n</code>, then,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-fzero.png" alt="f_0(0) = a(0)+b(0)+c" width="418" /></td></tr></table>
+
+<p>The linear term is just a bit harder, but it can be obtained by subtracting
+<code class="highlighter-rouge">f_n(-1)</code> from <code class="highlighter-rouge">f_n(1)</code>,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-fsub.png" alt="" width="605" /></td></tr></table>
+
+<p>In other words,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-b.png" alt="" width="296" /></td></tr></table>
+
+<p>Getting the last coefficient is just a little bit more work, but follows from
+adding the two end point values, <code class="highlighter-rouge">f_n(1)</code> and <code class="highlighter-rouge">f_n(-1)</code> together,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-fsum.png" alt="" width="531" /></td></tr></table>
+
+<p>This yields our quadratic coefficint,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-a.png" alt="" width="367" /></td></tr></table>
+
+<p>Therefore, we can fit any three
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+values to the
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-complete.png" alt="" width="632" /></td></tr></table>
+
+<p>Fig 1 shows an example of one such fit.</p>
+
+<table align="center" style="float: none"><caption>Fig 1. An example quadratic fit of three points</caption><tr><td><img src="/img/quadeqn-fit-result.png" alt="" width="410" /></td></tr></table>
+
+<p>At first glance, this looks pretty good.  We started with three data points,
+and now we’ve created a
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+line that smoothly
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolates</a>
+between these three data points.  What could the problem be?</p>
+
+<p>The problem comes into play when you expand out from these three data points
+and examine the infinite set of
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+that are the incoming data.  In this case, the quadratic fit turns from a nice
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>,
+to discontinuous
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>,
+where the discontinuity takes place halfway between any pair of
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 2. Using a quadratic fit across multiple sample points create discontinuities</caption><tr><td><img src="/img/interpolation-discontinuous-quadratic.png" alt="" width="603" /></td></tr></table>
+
+<p>What happened?</p>
+
+<p>What happened was that we chose to only use <code class="highlighter-rouge">f_n</code> between <code class="highlighter-rouge">n-1/2</code> and
+<code class="highlighter-rouge">n+1/2</code>.  Once past <code class="highlighter-rouge">n+1/2</code>, we switched to a new
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>,
+<code class="highlighter-rouge">f_{n+1}</code>.  Since we did nothing to constrain our
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+solution so that it was
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+between data sets, the result wasn’t
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>.</p>
+
+<p>Before going further, let’s consider my previous statement that “<a href="/dsp/2018/01/16/interpolation-is-convolution.html">Interpolation
+is just a special type of
+convolution</a>.”
+Why?  Because if you can understand this quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a> as just a
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+of your data with a
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous function</a>,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/interp-is-convolution.png" alt="" width="275" /></td></tr></table>
+
+<p>then we can plot the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of this
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.
+Knowing that
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+will allow us, further on, to compare  this quadratic fit
+with other alternative quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>.</p>
+
+<p>To see how this fits into the form of a filter’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>, let’s
+examine what happens when this
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is applied to an
+<a href="https://en.wikipedia.org/wiki/Kronecker_delta">impulse</a>.
+If we allow <code class="highlighter-rouge">x[n]</code> to be a
+<a href="https://en.wikipedia.org/wiki/Kronecker_delta">Kronecker delta function</a>,
+where <code class="highlighter-rouge">x[n]=0</code> for all <code class="highlighter-rouge">n</code> save for <code class="highlighter-rouge">x[0]=1</code>, then the result of applying
+this quadratic fit to this
+<a href="https://en.wikipedia.org/wiki/Kronecker_delta">sequence</a>
+will be the <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse
+response</a>
+of this <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.  Let’s do
+that now.</p>
+
+<p>First, <code class="highlighter-rouge">f_{-1}(t+1)</code> will
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+<code class="highlighter-rouge">x[0]=1</code> in it’s <code class="highlighter-rouge">n+1</code> term, yielding the
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-impulse-neg.png" alt="" width="354" /></td></tr></table>
+
+<p>Likewise, <code class="highlighter-rouge">f_{0}(t)</code> will
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+<code class="highlighter-rouge">x[0]=1</code> in it’s <code class="highlighter-rouge">n</code> term, yielding,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-impulse-zero.png" alt="" width="175" /></td></tr></table>
+
+<p>Next, the <code class="highlighter-rouge">f_{1}(t)</code> term will
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+<code class="highlighter-rouge">x[0]=1</code> in it’s <code class="highlighter-rouge">n-1</code> term, giving us
+our final <a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> component,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-impulse-pos.png" alt="" width="341" /></td></tr></table>
+
+<p>Put together, you can see this
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+plotted out in Fig 3.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. Impulse response of a Quadratic Fit Interpolator</caption><tr><td><img src="/img/interpolation-fig-qfit.png" alt="" width="325" /></td></tr></table>
+
+<p>See what happened?  This
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a> isn’t
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+at all!  This is the reason why our
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolated</a>
+signal wasn’t <a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+either.</p>
+
+<p>Further, it only takes some basic integral calculus to plot the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of this function in Fig 4.  (I’ll spare you the calculation–while basic,
+it isn’t pretty.)</p>
+
+<table align="center" style="float: none"><caption>Fig 4. Fourier Transform of a Quadratic Fit</caption><tr><td><img src="/img/interpolation-fig-qfit-H.png" alt="" width="325" /></td></tr></table>
+
+<p>The gray line in Fig 4 is proportional to <code class="highlighter-rouge">1/f</code>, showing how this
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+only slowly converges towards zero as <code class="highlighter-rouge">f</code> goes to infinity.  This is the
+consequence of the discontinuities in the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+of this fit.</p>
+
+<p>Now that you see the problem with using a simple quadratic fit as an
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>,
+let’s see if we can do better.</p>
+
+<h2 id="a-better-interpolator">A Better Interpolator</h2>
+
+<table align="center" style="float: right"><caption>Fig 5. A Piecewise Polynomial</caption><tr><td><img src="/img/interpolation-piecewise-poly.png" alt="" width="278" /></td></tr></table>
+
+<p>Now that we know what can go wrong with a
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>,
+it’s time to return to where we left off in our <a href="/dsp/2018/01/16/interpolation-is-convolution.html">prior
+post</a>
+on this topic, and use the principles we developed there to develop
+a better <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.
+In that post, we showed that all
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+that met a minimum set of problem related assumptions have the form of a
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>,
+such as is shown in Fig 5.</p>
+
+<p>Further, <a href="/dsp/2018/01/16/interpolation-is-convolution.html">we pointed
+out</a>
+that an <code class="highlighter-rouge">h(t)</code> function that is given by a
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>,
+such as the one shown in Fig 5, can be a
+<a href="https://en.wikipedia.org/wiki/Linear_system">linear</a>,
+discrete shift invariant,
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampler</a>.
+In Fig 5, you can see separate regions of an example filter, <code class="highlighter-rouge">h(t)</code>, shown
+in separate colors.  Each colored region represents a separate quadratic
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>.  Our goal will be
+to try to use some criteria to create a useful set of
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomials</a>.</p>
+
+<p>As a first step to building our own, let’s define our component
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomials</a> as,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-nfit-piecewise-eqn.png" alt="" width="818" /></td></tr></table>
+
+<p>That is to say, we’re going to look for a
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomials</a>
+function, <code class="highlighter-rouge">h(t)</code>, defined by the equations,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-eqn-defns.png" alt="" width="666" /></td></tr></table>
+
+<p>Why only five intervals?  This is an arbitrary choice.
+There’s no hard and fast rule here.  More intervals or a higher
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+degree might produce a better filter, but one that will cost more logic to
+calculate.  Such longer filters can be the topic for another
+discussion on another day.  I do know that this setup will yield a nicely
+implementable solution ultimately requiring only two RTL multiplies.</p>
+
+<p>Two multiplies you ask?  What about all those arbitrary coefficients in <code class="highlighter-rouge">h(t)</code>?
+Hang on, we’ll get there.</p>
+
+<p>Why is there no <code class="highlighter-rouge">b</code> coefficient for the middle interval?  Or, equivalently,
+why are the <code class="highlighter-rouge">*_1</code> and <code class="highlighter-rouge">*_2</code> coefficients repeated?  Because I have chosen a
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a>
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>
+filter, in the hopes of achieving a
+<a href="https://en.wikipedia.org/wiki/Linear_phase">linear phase</a>
+result.  Further, I’ve started this derivation often enough without
+pre-specifying these certain coefficients, and I end up specifying
+them via equations anyway.  By doing it this way, it just reduces the
+number of coefficients we’ll need to solve for from the beginning.</p>
+
+<p>To get to our result, all that remains is to determine the coefficients of the
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomials</a>
+in our chosen filter.  To do this, we’ll use some (rather ad-hoc) criteria to
+set up a system of linear equations to yield the as yet unknown coefficients.</p>
+
+<ol>
+  <li><strong>Interpolator</strong></li>
+</ol>
+
+<p>Our first criteria for <code class="highlighter-rouge">h(t)</code> is that the resulting waveform needs to
+   <a href="https://en.wikipedia.org/wiki/Interpolation">interpolate</a>
+   the incoming waveform.  In other words, whenever <code class="highlighter-rouge">t</code> is
+   an integer, the output value should equal the input.  That is, if <code class="highlighter-rouge">t=n</code>
+   then <code class="highlighter-rouge">y(n) = x[n]</code>.</p>
+
+<p>If we work this from the equation standpoint,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/interp-is-convolution.png" alt="" width="275" /></td></tr></table>
+
+<p style="list-style-type: none;">you can see that if <code class="highlighter-rouge">t=n</code> then <code class="highlighter-rouge">y(n)</code> is composed of a summation across
+   several <code class="highlighter-rouge">h(t)</code>
+   values, each with the index <code class="highlighter-rouge">n-k</code>.  Further, when <code class="highlighter-rouge">n=k</code> we get the one
+   component we want, and all of the other components will just pull us off in
+   one direction or another.  Hence, we need to insist that,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-interpolator.png" alt="" width="364" /></td></tr></table>
+
+<table align="center" style="float: right"><caption>Fig 6. An interpolating filter must go through zero for all integers but zero</caption><tr><td><img src="/img/quadeqn-criteria-interpolator-dots.png" alt="" width="325" /></td></tr></table>
+
+<p>This means that every one of our
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> component
+functions, save the one in the center, will need to go through zero
+near the integer within it, as shown in Fig 6.  The point in the center,
+on the other hand, will need to pass through <code class="highlighter-rouge">y=1</code>.</p>
+
+<p>It shouldn’t take too much work to see that our set of
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> will
+meet this criteria if we simply set <code class="highlighter-rouge">c_1</code> and <code class="highlighter-rouge">c_2</code> to be zero.  Indeed,
+this is the reason why it was constructed it based upon <code class="highlighter-rouge">t-n</code> terms in the
+first place.</p>
+
+<p><strong>DSP Guru Meditation</strong>: It can be shown that if <code class="highlighter-rouge">h(n)</code> is a
+<a href="https://en.wikipedia.org/wiki/Kronecker_delta">Kronecker Delta function</a>,
+then it must also be true that,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-interpolator-guru-1.png" alt="" width="213" /></td></tr></table>
+
+<p>or, equivalently,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-interpolator-guru-2.png" alt="" width="330" /></td></tr></table>
+
+<p>This, plus the fact that <code class="highlighter-rouge">h(t)</code> is real, forces the awkward reality
+that <code class="highlighter-rouge">H(1/2)</code> <em>must be</em> <code class="highlighter-rouge">1/2</code> as well for all practical
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">low-pass</a>
+filters.  Hence, this criteria alone forces the
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a> and
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+cutoff frequencies of any
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+to be <code class="highlighter-rouge">f=1/2</code>.  This is a somewhat unfortunate limitation on the
+performance that might be achieved using this approach.</p>
+
+<p>This criteria is also a point of separation from
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>’s work, since
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a> never insisted that the
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resamplers</a>
+he developed went through the original
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points.</p>
+
+<ol start="2">
+  <li><strong>Constant -&gt; Constant</strong>: <code class="highlighter-rouge">x[n]=c</code> implies <code class="highlighter-rouge">y(t)=c</code></li>
+</ol>
+
+<p>When I built my first
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>
+filter
+from a quadratic
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>,
+I was surprised to discover that a constant input to my filter was producing
+a non-constant output.  Instead, there was a small but repeating quadratic
+component.  How could this to happen?!  How could I call this an
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>, if the
+resulting
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolated</a> waveform
+didn’t smoothly go through the given points?</p>
+
+<p>So I then went back to my equations for <code class="highlighter-rouge">h(t)</code> and the coefficients of the
+component <a href="https://en.wikipedia.org/wiki/Polynomial">polynomials</a>, 
+and rebuilt them to insist that if <code class="highlighter-rouge">x[n]</code> is the constant <code class="highlighter-rouge">c</code>, then
+<code class="highlighter-rouge">y(t)</code> should equal that same constant <code class="highlighter-rouge">c</code> as well.</p>
+
+<p>Let’s do that here.  With just a little manipulation, you’ll see that,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-const-deriv.png" alt="" width="330" /></td></tr></table>
+
+<p>Hence, we’ll want</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-const.png" alt="" width="375" /></td></tr></table>
+
+<p>for all possible values of <code class="highlighter-rouge">t</code> between <code class="highlighter-rouge">-1/2</code> and <code class="highlighter-rouge">1/2</code>.</p>
+
+<p>We can apply this criteria to our
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+filter without too much hassle.  I’ll spare you the gory details, although
+you should know that the result is a set of equations further constraining our
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> coefficients.</p>
+
+<p>If we continue solving for our eight coefficients,
+we’ll still need some more equations.</p>
+
+<table align="center" style="float: right"><caption>Fig 7. The frequency response of a linear interpolator, showing a zero response for all integer frequencies but zero</caption><tr><td><img src="/img/quadeqn-criteria-const-H.png" alt="" width="378" /></td></tr></table>
+
+<p><strong>DSP Guru Meditation</strong>:
+If you examine this property in
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency</a>,
+it forces a unique and very desirable property upon the
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+filter’s
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>.
+In particular, the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a> of a constant
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a>
+input has a component at <code class="highlighter-rouge">X(e^{j0})</code> only, with <code class="highlighter-rouge">X(e^{j2pi f})=c delta(f)</code>,
+where <code class="highlighter-rouge">delta(f)</code> is the
+<a href="https://en.wikipedia.org/wiki/Dirac_delta_function">Dirac delta function</a>.
+This would normally create aliasing components at frequencies <code class="highlighter-rouge">X(e^{j2pi m})</code>
+for all integers <code class="highlighter-rouge">m</code> as well.  However, we just insisted that for a constant
+input, the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a> of the
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+output function was to have a component at zero only.  Hence, we know that
+<code class="highlighter-rouge">X(e^{j2pi f})H(f)</code> must be nonzero for <code class="highlighter-rouge">f=0</code>, and so we now know that
+<code class="highlighter-rouge">H(0)=1</code>.  We also know that <code class="highlighter-rouge">H(m)</code> must be zero for all integers <code class="highlighter-rouge">m!=0</code>,
+<code class="highlighter-rouge">H(m)=0</code>–just like a <a href="https://en.wikipedia.org/wiki/Sinc_funtion">sinc
+function</a> although other
+functions can have this property as well.</p>
+
+<p>You can see this property shown in Fig 7 on the right.</p>
+
+<ol start="3">
+  <li><strong>Linear -&gt; Linear</strong>: <code class="highlighter-rouge">x[n] = n</code> implies <code class="highlighter-rouge">y(t)=t</code></li>
+</ol>
+
+<p>Let’s follow that last criteria a bit further.  Instead of just insisting
+that every constant produce a constant signal output, we can also insist
+that every linear input produce a linear output.  Hence, if <code class="highlighter-rouge">x[n]=n</code>,
+then <code class="highlighter-rouge">y(t)</code> should equal <code class="highlighter-rouge">t</code>.</p>
+
+<p>As with our last criteria, we’ll apply our input, <code class="highlighter-rouge">x[n]=n</code>, and then
+insist that the result contains no <code class="highlighter-rouge">t^2</code> terms.  (We already know it will
+contain no constant terms.)</p>
+
+<table align="center" style="float: right"><caption>Fig 8. Constraining performance under linear inputs constrains the slope of the frequency response</caption><tr><td><img src="/img/quadeqn-criteria-const-Hdot.png" alt="" width="386" /></td></tr></table>
+
+<p>This will give us another linear constraint on our coefficients.</p>
+
+<p><strong>DSP Guru Meditation</strong>:
+If you examine this criteria in
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency</a>, it basically
+forces the slope of <code class="highlighter-rouge">H(m)</code> to be zero for integers <code class="highlighter-rouge">m</code>.  To be effective,
+this criteria is dependent upon the constant criteria described above.</p>
+
+<p>This constraint therefore not only increases the width of our pass band,
+but it also increases the depth of the nulls.</p>
+
+<ol start="4">
+  <li><strong>Quadratic -&gt; Quadratic</strong>: <code class="highlighter-rouge">x[n] = n^2</code> implies <code class="highlighter-rouge">y(t)=t^2</code></li>
+</ol>
+
+<p>For our fourth criteria, we’ll insist that if <code class="highlighter-rouge">x[n]=n^2</code> then <code class="highlighter-rouge">y(t)</code> should
+equal <code class="highlighter-rouge">t^2</code>.  In many ways this is similar to the linear criteria above.
+As with the linear criteria, this also provides us with another equation
+to add to the system of equations we are building to solve for <code class="highlighter-rouge">h(t)</code>.</p>
+
+<p><strong>DSP Guru Meditation</strong>: This criteria constrains the second derivative of
+the <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+near both <code class="highlighter-rouge">f=m</code> for all integer frequencies <code class="highlighter-rouge">m</code>, thus also widening our
+passband, as well as the width of the nulls in the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>.
+As a result, this criteria only intensifies our last constraint.</p>
+
+<ol start="5">
+  <li><strong>Continuous</strong>: <img src="/img/quadeqn-criteria-continuous.png" width="233" /></li>
+</ol>
+
+<p>As a final set of criteria, we’ll insist that our
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a> be
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>.
+Hence, the <code class="highlighter-rouge">h(t)</code> function must be
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+at its seams: <code class="highlighter-rouge">t=-5/2</code>, <code class="highlighter-rouge">t=-3/2</code>, <code class="highlighter-rouge">t=-1/2</code>, <code class="highlighter-rouge">t=1/2</code>, <code class="highlighter-rouge">t=3/2</code>, and <code class="highlighter-rouge">t=5/2</code>.
+However, since we constrained our
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> to be
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a>
+in time, we really only need to deal with half of those <code class="highlighter-rouge">t</code> values.</p>
+
+<p>Because any linear combination of
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous functions</a>
+is also
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>,
+<code class="highlighter-rouge">y(t)</code> will be
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+any time <code class="highlighter-rouge">h(t)</code> is
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>.</p>
+
+<p>There’s an even more important consequence of this ad-hoc criteria: any
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous function</a>
+will have a <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency
+response</a>.
+with an asymptotic decay proportional to <code class="highlighter-rouge">1/f^2</code> or better.  This function
+is no different.  Hence, when you put all of our constraints together, we’ve
+now constrained the zero frequency, <code class="highlighter-rouge">f=0</code>, and the first and second
+derivatives of all integer frequencies.  By now insisting on a
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>,
+we’ve also constrained the asymptotic <a href="https://en.wikipedia.org/wiki/Frequency_response">frequency
+response</a> of this
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+filter as well.</p>
+
+<p>In other words, we’ve just created an
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+function with a very nice
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">low-pass</a>
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>–it
+just doesn’t have a very narrow
+<a href="https://en.wikipedia.org/wiki/Transition_band">transition band</a>.</p>
+
+<p><strong>DSP Guru Meditation</strong>: I will contend, based more upon frustration then
+proof, that it is actually impossible to create a finite quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> via this method that
+will be <a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a> in
+its first derivative.  Before you jump to disprove me, remember my definition
+of an
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>, which requires that it
+equal zero at all integer locations but zero.  Were we able to create such a
+function, it would have an out of band asymptotic decay rate of <code class="highlighter-rouge">1/f^3</code>–but
+we’ll leave the discussion of such functions for a later discussion of either
+higher order <a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>,
+or quadratic <a href="https://en.wikipedia.org/wiki/Spline_interpolation">splines</a>.</p>
+
+<p>As an aside, it is possible to formulate the
+<a href="https://en.wikipedia.org/wiki/Spline_interpolation">splines</a> problem in <a href="/dsp/2018/01/16/interpolation-is-convolution.html">this
+fashion</a>.
+Doing so produces a solution that no longer requires solving for the
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> to be
+coefficients at every step, while yielding a cleaner and (slightly) wider
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>.</p>
+
+<p>If you put all of the resulting equations together, for the constraints outlined
+above, you will get an over-determined system.  This over determined system
+will include several redundant equations which can be easily removed.  Once
+the redundant equations are removed, you will then get the system
+of linear equations below.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-eqns.png" alt="" width="441" /></td></tr></table>
+
+<p>In spite of starting with an over determined system in this process, we got
+lucky: the system above has a unique solution given by,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-criteria-soln.png" alt="" width="233" /></td></tr></table>
+
+<p>Wow, that was a lot of work to just get a bunch of numbers.  So what,
+right?  What’s the use of these five values?</p>
+
+<p>The value of this solution is seen in the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a> and
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+shown in Fig 9.</p>
+
+<table align="center" style="float: none"><caption>Fig 9. Impulse response (left) and Frequency Response (right) of this piecewise polynomial interpolator</caption><tr><td><img src="/img/interpolation-fig-betterq.png" alt="" width="728" /></td></tr></table>
+
+<p>As we required, the
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a> and
+is “flat” near <code class="highlighter-rouge">f=0</code>, and the nulls are deep.
+Unlike both the <a href="/dsp/2017/06/06/simple-interpolator.html">nearest neighbor
+interpolator</a>
+and the quadratic fit we
+discussed above, the asymptotic fall off of this filter is proportional to
+<code class="highlighter-rouge">1/f^2</code>.  Further, unlike the <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear interpolator we built
+earlier</a>
+which also has an asymptotic fall off of <code class="highlighter-rouge">1/f^2</code>, this
+asymptotic fall off has a smaller proportionality coefficient of <code class="highlighter-rouge">1/f^2</code>.
+For comparison, consider Fix 7 above showing the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+of the <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear
+interpolator</a>.</p>
+
+<p>In other words, this quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a> forms a <em>nice</em>
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>
+filter.</p>
+
+<p>Even better, with some careful coding (below) we can implement the coefficient
+multiplication with only adds and subtracts.  This will mean that we can
+evaluate this <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">quadratic in
+Verilog</a>
+using only two hardware multiplies–minimizing a precious resource found within
+any digital logic component.</p>
+
+<p>Sadly, the development above is only an ad-hoc formulation.  While it
+may be possible to truly generate <em>optimal</em>
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+via this method, I have not yet pursued such a study in depth.</p>
+
+<h2 id="three-interpolators-and-only-two-multiplies">Three Interpolators and only Two Multiplies</h2>
+
+<p>In the next section, we’ll start discussing how to build the
+<a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">Verilog code necessary to
+implement</a>
+this <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.
+Indeed, well even do one better than that: we’ll show
+the Verilog code necessary to implement three separate quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>–all with only
+<em>two multiplies</em>.</p>
+
+<ol>
+  <li>The first <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+will be the one that results from the quadratic fit approach I was so
+critical of above.  We’ll use this performance for reference below.  This
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is given by the equations we developed above:</li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-fit-coeffs.png" alt="" width="367" /></td></tr></table>
+
+<p>As we discussed above, we can expect this
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+to produce a discontinuous output waveform.</p>
+
+<ol start="2">
+  <li>The second <a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a>
+function may have the best <a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+performance among all quadratic
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsamplers</a>, however it’s not a true
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+since it doesn’t necessarily go through the original signal
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points.  We’ll call this the
+non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+for lack of a better term.  This
+non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is a very valuable
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a>
+function for the simple reason that its
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+tail falls off faster (<code class="highlighter-rouge">1/f^3</code>) than any other quadratic.  Indeed, it is
+so valuable, that we may come back and use it to beat the performance of a
+<a href="/dsp/2017/08/30/cordic.html">CORDIC</a>–but
+that will have to be the topic of a future article (it will still require
+two multiples, something the
+<a href="/dsp/2017/08/30/cordic.html">CORDIC</a> doesn’t need).</li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-cub-coeffs.png" alt="" width="383" /></td></tr></table>
+
+<table align="center" style="float: right"><caption>Fig 11.  The impulse response of a rectangle convolved with itself three times</caption><tr><td><img src="/img/interpolation-fig-rcubd-impulse.png" alt="" width="325" /></td></tr></table>
+<p>This non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+will not suffer from the discontinuities we discussed above.  Further, if you
+are up to a calculus challenge, this function can be derived by
+<a href="https://en.wikipedia.org/wiki/Convolution">convolving</a> a
+<a href="https://en.wikipedia.org/wiki/Rectangular_function">rectangle function</a>
+with itself three separate times, hence its
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+is shown in Fig 11.</p>
+
+<p>One unique feature of this
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampler</a>
+is its properties when doing peak finding.  Indeed, peaks found following
+this fit tend to be more accurately located than when using the
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+that is the topic of today’s development–but this again is a topic for
+another day.</p>
+
+<p>Since the non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+response is created by <a href="https://en.wikipedia.org/wiki/Convolution">convolving</a> a
+<a href="https://en.wikipedia.org/wiki/Rectangular_function">rectangle function</a>
+with itself three separate times, its
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+will be given by the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a> of a
+<a href="https://en.wikipedia.org/wiki/Rectangular_function">rectangle function</a>
+cubed, or in other words by a
+<a href="https://en.wikipedia.org/wiki/Sinc_funtion">sinc function</a> cubed.</p>
+
+<p>Further, if you compare the coefficients of this
+the non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+with those of the quadratic fit (above), you’ll see that all but the
+constant coefficients, <code class="highlighter-rouge">c_n</code>, are identical.</p>
+
+<p>In <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">our code</a>
+below, the parameter <code class="highlighter-rouge">OPT_IMPROVED_FIT</code> will control whether or not this
+non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampler</a>
+is generated or not.  If set, the traditional quadratic fit will be bypassed
+for this alternative implementation.</p>
+
+<p><strong>DSP Guru Meditation</strong>: My statement above that the
+<a href="https://en.wikipedia.org/wiki/Frequency_response">frequency response</a>
+tail of this filter asymptotically decays <em>faster than any other quadratic</em>
+isn’t quite true.  Quadratics filters composed of a linear combinations of
+this filter function will also fall off at the <code class="highlighter-rouge">1/f^3</code> rate … but we’ll
+leave the further discussion of this approach to a future discussion of
+quadratic (and/or cubic)
+<a href="https://en.wikipedia.org/wiki/Spline_interpolation">splines</a>, since that’s
+where it is most relevant.</p>
+
+<ol start="3">
+  <li>The third function we’ll implement is defined by the coefficient
+equations we just developed in the last section above.</li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-nfit-coeffs.png" alt="" width="675" /></td></tr></table>
+
+<p>This is the one we expect to see good results from–it is
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>,
+and passes constants, lines, and quadratics without distortion.  Not
+only that, the
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+generated by this function is guaranteed to go through the initial
+<code class="highlighter-rouge">x[n]</code>
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points given to it.</p>
+
+<p>The parameter <code class="highlighter-rouge">OPT_INTERPOLATOR</code> in
+<a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">our code below</a>
+will control whether or not this
+implementation is used.  If set, <code class="highlighter-rouge">OPT_INTERPOLATOR</code> will override the
+<code class="highlighter-rouge">OPT_IMPROVED_FIT</code> option parameter above, yielding an implementation of
+this quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.</p>
+
+<p>We’ll use some careful coding techniques in the next section in order to
+avoid using hardware multiplication elements when multiplying the quadratic
+coefficients generated by the incoming data by these factors,
+28, 16, 10, 3/4, etc.  The resulting algorithm will use only shifts and adds–up
+until the final quadratic evaluation.  We will need to be careful
+to make certain that we track the decimal point during this process though.</p>
+
+<p>When it comes to evaluating the
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+itself, if you’ve never implemented one numerically, then you should know
+that there is a right and a wrong way to apply the multiply–a “trick” if you
+will.  In particular, you don’t want to calculate your result by a
+straight forward evaluation,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-implementation-bad.png" alt="" width="243" /></td></tr></table>
+
+<p>This straight forward approach suffers from two problems.  The first problem is
+that it costs three multiplies.  (Ouch!) The second problem is that this method
+is susceptible to the loss of precision as the intermediate values are
+truncated prior to their final addition.</p>
+
+<p>Instead, we’ll calculate this
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>’s
+value based upon a different formulation:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/quadeqn-implementation.png" alt="" width="217" /></td></tr></table>
+
+<p>This will solve both of these problems, yielding a nice solution suitable for
+RTL implementation.</p>
+
+<h2 id="fixed-point">Fixed Point</h2>
+
+<p>Let’s pause for one more section before diving into
+<a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">the code</a>
+below, to discuss how we are going to handle the evaluation of the
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+function coefficients.</p>
+
+<p>Our first step will be to replace the
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>,
+coefficients with elements of a
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+based shift register.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_ce)
+	{ x[3], x[2], x[1], x[0] } &lt;= { x[2], x[1], x[0], in };</code></pre></figure>
+
+<p>This will eliminate the dependence of the algorithm on the integer <code class="highlighter-rouge">n</code>.</p>
+
+<p>We’ll use the input data as the first element in this registers,
+and use <code class="highlighter-rouge">x[0]</code> to refer to the prior input, <code class="highlighter-rouge">x[1]</code> to refer to the value
+before that, etc.  Hence, we’ll map the following values:</p>
+
+<table class="bordered-table">
+  <thead>
+    <tr>
+      <th>Old name</th>
+      <th>New Name</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>x[n+2]</td>
+      <td>in</td>
+    </tr>
+    <tr>
+      <td>x[n+1]</td>
+      <td>x[0]</td>
+    </tr>
+    <tr>
+      <td>x[n+0]</td>
+      <td>x[1]</td>
+    </tr>
+    <tr>
+      <td>x[n-1]</td>
+      <td>x[2]</td>
+    </tr>
+    <tr>
+      <td>x[n-2]</td>
+      <td>x[3]</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>This allows us to re-express the above filter coefficient equations as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">   16 av = 4(x[1]-8x[1])+16(x[0]+x[2])-2(in+x[3])
+   16 bv = 2[(x[0]-x[2])+4(x[0]-x[2])]+(in-x[3])
+   cv = x[1]</code></pre></figure>
+
+<p>You may also notice that all of the multiplies necessary to calculate
+the coefficients, <code class="highlighter-rouge">a_n</code>, <code class="highlighter-rouge">b_n</code>, and <code class="highlighter-rouge">c_n</code>,
+have now been replaced with adds and shifts.  Instead of multiplying by <code class="highlighter-rouge">-28</code>
+for example, we can subtract <code class="highlighter-rouge">8x[1]</code> from <code class="highlighter-rouge">x[1]</code> and then shift the result left by two bits.  In a similar fashion, we can multiply <code class="highlighter-rouge">x[0]-x[2]</code> by five
+by adding <code class="highlighter-rouge">x[0]-x[2]</code> to <code class="highlighter-rouge">4(x[0]-x[2])</code>.  The final multiplication by
+two, or rather left shift by one, just completes the desired multiply by ten.</p>
+
+<p>Even this is too hard, though, since it will take us a couple of clocks to
+calculate these values.  Hence we’ll go about calculating our coefficients
+in three steps each in a different clock cycle.</p>
+
+<p>We’ll start, therefore, by splitting this process into three sets of operations.
+Eventually these will take place on separate clock cycles, but for now we can
+draw them out as though they all happened at once.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">   pmidv = 8x[1] - x[1]; // = 7x[1]
+   psumn =  x[0] + x[2];
+   difn  =  x[0] - x[2];
+   //
+   diffn = difn + 4difn;	// = 5 * (x[0] - x[2])
+   sumw  =   in  + x[3];
+   diffw =   in  - x[3];
+   midvpsumn = 4(psumn) - (pmidv); // = 4(x[0]+x[2])-7x[1]
+   //
+   16 av = 4(midvpsumn)-2(sumw)
+   16 bv = 2(diffn)+(diffw)
+   cv = x[1]</code></pre></figure>
+
+<p>This can then be rewritten into pseudo-RTL logic over the space of three clock
+cycles.  Our notation for the shift register components from before, <code class="highlighter-rouge">in</code>
+through <code class="highlighter-rouge">x[3]</code>, will be valid on the second clock cycle.  Hence, for the
+first clock we’ll be referencing <code class="highlighter-rouge">in</code> through <code class="highlighter-rouge">x[2]</code> instead of <code class="highlighter-rouge">x[0]</code>
+through <code class="highlighter-rouge">x[3]</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_ce)
+begin
+   // First clock, pre-data
+   pmidv &lt;= 8x[0] - x[0]; // Was 8x[1] - x[1]
+   psumn &lt;=   in + x[1];  // Was x[0] + x[2]
+   difn  &lt;=   in - x[1];  // Was x[0] - x[2]</code></pre></figure>
+
+<p>This takes care of some of the inner operations from our equations above.
+The next step handles some more of the “multiplies”.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">   // Second clock
+   diffn &lt;= difn + 4difn;	// = 5 * (x[0] - x[2])
+   sumw  &lt;=   in  + x[3];
+   diffw &lt;=   in  - x[3];
+   midvpsumn &lt;= 4(psumn) - (pmidv); // = 4(x[0]+x[2])-7x[1]</code></pre></figure>
+
+<p>In the final clock cycle we’ll calculate the actual coefficients.  Because
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+math is primarily fixed point, we’ll leave the <code class="highlighter-rouge">16</code> on the left–indicating
+that we never divided by the necessary 16.  We’ll need to drop the extra four
+bits later, but for now we’ll leave them in
+place as long as possible to avoid loss of precision.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">   // Third clock, data delayed by one
+   av &lt;= 4(midvpsumn)-2(sumw); // * 2^4
+   bv &lt;= 2(diffn)+(diffw); // * 2^4
+   cv &lt;= x[2];
+end</code></pre></figure>
+
+<p>This gives us the coefficients of our
+<a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a>
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a> for a given
+set of five input samples.</p>
+
+<p>We still need to calculate the value of <code class="highlighter-rouge">t</code> that needs to be used when
+evaluating this <a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>.
+This logic will follow directly from the <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear interpolator
+development</a>,
+and is even copied from that development.</p>
+
+<p>The only big difference between this and the <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear
+interpolator</a>
+development is that, unlike the
+<a href="/dsp/2017/07/29/series-linear-interpolation.html">linear interpolator</a>,
+this <a href="https://en.wikipedia.org/wiki/Piecewise">piecewise</a> quadratic
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolates</a>
+from <em>around</em> the
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a> points
+(<code class="highlighter-rouge">|t|&lt;1/2</code>), rather than <em>between</em>
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a> points,
+(<code class="highlighter-rouge">0&lt;t&lt;1</code>).</p>
+
+<p>Perhaps this would make more sense with a figure.  Fig 12 therefore shows in
+color how the quadratic
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampler</a>
+will interpolate from <em>around</em> the
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points on the left, rather than <em>between</em> the
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points as shown on the right.</p>
+
+<table align="center" style="float: none"><caption>Fig 12. Piecewise quadratics interpolate around sample points (left), rather than between sample points (right)</caption><tr><td><img src="/img/quadeqn-intervals-compared.png" alt="" width="728" /></td></tr></table>
+
+<p>I’m not really sure why this is so, I just know that I haven’t managed to
+build a symmetric quadratic
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+<em>between</em>
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a> points
+(right side of Fig. 12 above) that ended up being very useful.  To handle this
+difference, we’ll keep track of the last coefficients.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_ce)
+begin
+	avold &lt;= av;
+	bvold &lt;= bv;
+	cvold &lt;= cv;
+end</code></pre></figure>
+
+<p>Then, if our local <code class="highlighter-rouge">t</code> value is less then zero (<code class="highlighter-rouge">MSB</code> is set), we’ll
+use the newer coefficients, <code class="highlighter-rouge">av</code>-<code class="highlighter-rouge">cv</code>, otherwise we’ll use the
+older, delayed by one <code class="highlighter-rouge">avold</code>-<code class="highlighter-rouge">cvold</code> coefficients.</p>
+
+<p>We’d also like to add a half to <code class="highlighter-rouge">t</code> at this point, so that it ranges between
+<code class="highlighter-rouge">0</code> and <code class="highlighter-rouge">1</code> instead of from <code class="highlighter-rouge">-0.5</code> to <code class="highlighter-rouge">0.5</code>.  It turns out that’s not needed.
+<code class="highlighter-rouge">t</code> naturally fits into place without change–all that’s required is to
+re-interpret the signed <code class="highlighter-rouge">t</code> value as an unsigned value and the conversion
+is done.</p>
+
+<p>That gives us our three coefficients, <code class="highlighter-rouge">r_av</code>, <code class="highlighter-rouge">r_bv</code>, and <code class="highlighter-rouge">r_cv</code>,
+together with our time offset, <code class="highlighter-rouge">r_offset</code>.</p>
+
+<p>Finally, as we go through the rest of the algorithm, we’ll use the prefixes
+<code class="highlighter-rouge">r_</code>, <code class="highlighter-rouge">qp_</code>, <code class="highlighter-rouge">ls_</code>, and <code class="highlighter-rouge">lp_</code> to indicate which stage of the quadratic
+algorithm we are in.</p>
+
+<ul>
+  <li>
+    <p>The <code class="highlighter-rouge">r_</code> prefix will hold the first copies of our variables in the “new”
+sample rate domain.  This will include not only the quadratic coefficients,
+<code class="highlighter-rouge">r_av</code>, <code class="highlighter-rouge">r_bv</code>, and <code class="highlighter-rouge">r_cv</code>, but also the value of <code class="highlighter-rouge">t</code> associated with
+these coefficients, held in <code class="highlighter-rouge">r_offset</code>.  Finally, <code class="highlighter-rouge">r_ce</code> will be true on
+any clock where these values are valid.</p>
+  </li>
+  <li>
+    <p>The <code class="highlighter-rouge">qp_</code> prefix will hold our variables immediately after taking
+the <em>quadratic product</em>, <code class="highlighter-rouge">a*t</code> or in terms of our registers,
+<code class="highlighter-rouge">r_av * r_offset</code>.</p>
+  </li>
+  <li>
+    <p>The <code class="highlighter-rouge">ls_</code> prefix will refer to the variables associated with the
+<em>linear sum</em>, the result of adding <code class="highlighter-rouge">a*t+b</code> or equivalently the output
+of the quadratic product plus <code class="highlighter-rouge">r_bv</code>.</p>
+  </li>
+  <li>
+    <p>The <code class="highlighter-rouge">lp_</code> prefix will denote values associated with multiplying this
+<em>last product</em> and linear sum by our <code class="highlighter-rouge">t</code> value one more time to get
+<code class="highlighter-rouge">(at+b)*t</code>.  As a result, when we add the constant to the result
+of this last multiply, we’ll have our final value which we shall
+call <code class="highlighter-rouge">r_done</code>.</p>
+  </li>
+</ul>
+
+<p>The algorithm below doesn’t do any rounding until the final step.  Instead,
+it accumulates a lot of extra bits along the way, so that there’s not that
+much precision lost along the way.</p>
+
+<h2 id="the-code">The Code</h2>
+
+<p>We’ve now made it far enough in our description that we can now walk through
+the algorithm.  Feel free to skip this section if you would like and go
+directly to the performance section below, and then return to this once you’ve
+become convinced that you really are interested in the algorithmic details.
+You can also just examine (or implement)
+<a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">the code</a>,
+yourself to see what your thoughts are of it.</p>
+
+<p>The algorithm starts by defining some interface parameters.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	parameter	INW   = 25,	// Input width
+			OWID  = INW,	// Output width
+			MP    = 25,	// Multiply precision
+			CTRBITS = 32;	// Bits in our counter</code></pre></figure>
+
+<p>These are the input width, the output width, and the number of bits of our
+time counter to use in the multiply.  The fourth value, <code class="highlighter-rouge">CTRBITS</code>, controls
+the total number of bits in the time counter.  In other words, how accurate
+the fractional
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a>
+ratio should be.  As with the <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear
+interpolator</a>
+development, this counter will step, on each input
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>,
+by a step size given by the input <code class="highlighter-rouge">i_step</code>,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">i_step = 2^(CTRBITS) (int)(old_sample_rate / new_sample_rate);</code></pre></figure>
+
+<p>The number of bits in <code class="highlighter-rouge">CTRBITS</code> will just control the accuracy and precision
+of the
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resampling</a>
+function.</p>
+
+<p>The next two parameters, <code class="highlighter-rouge">OPT_INTERPOLATOR</code> and <code class="highlighter-rouge">OPT_IMPROVE_FIT</code>, we
+discussed earlier.  These control which quadratic
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resampler</a>
+to implement among three defined in the code.  <code class="highlighter-rouge">OPT_INTERPOLATOR=1</code> will
+cause us to use the new
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.
+On the other hand, if <code class="highlighter-rouge">OPT_INTERPOLATOR=0</code> but
+<code class="highlighter-rouge">OPT_IMPROVED_FIT=1</code>, then we’ll use the
+non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+output.  Finally, if both are zero the algorithm will calculate the
+quadratic fit I’ve been so critical of.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	parameter  [0:0]	OPT_IMPROVED_FIT = 1'b1;
+	parameter  [0:0]	OPT_INTERPOLATOR = 1'b1;</code></pre></figure>
+
+<p>The last parameter, <code class="highlighter-rouge">GAIN_OFFSET</code>, controls how far we shift the final result
+to the right.  Ideally, this would be 4 if <code class="highlighter-rouge">OPT_INTERPOLATOR</code> would be set in
+order to divide by the factor of sixteen shown above.  Sadly, we can’t do that.
+In particular, a set of constant maximum negative values surrounding a maximum
+positive value, or vice versa, will yield filter results outside of that
+incoming range.  Hence, to avoid overflow, we’ll only shift by three bits
+(divide by eight), or two for the quadratic fit approaches.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	parameter		GAIN_OFFSET = (OPT_INTERPOLATOR)? 3:2;</code></pre></figure>
+
+<p>The next step is to calculate the bit widths of various portions of this
+algorithm.  These are held in local parameters, since they are calculated
+from the main parameters above.  The first are the bit widths of the
+coefficients,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			// Bit-Width's of the quadratic, linear, and constant
+			// coefficients
+	localparam	AW = (OPT_INTERPOLATOR)?INW+6:INW+2,
+			BW = (OPT_INTERPOLATOR)?INW+6:INW+1,
+			CW = (OPT_INTERPOLATOR)?INW  :((OPT_IMPROVED_FIT)?(INW+3):INW),</code></pre></figure>
+
+<p>followed by the number of bits we’ll have after the decimal place following each
+computation,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			ADEC=(OPT_INTERPOLATOR)? 4:1,
+			BDEC=(OPT_INTERPOLATOR)? 4:1,
+			CDEC=(OPT_INTERPOLATOR)? 0:((OPT_IMPROVED_FIT)? 3:0);</code></pre></figure>
+
+<p>Remember, any time you want to multiply integers and fractions such as <code class="highlighter-rouge">A.B</code>
+times <code class="highlighter-rouge">X.Y</code> (not the decimal place), you’ll need to first move the decimal
+place to the far right so as to get <code class="highlighter-rouge">2^N(AB.)</code> and <code class="highlighter-rouge">2^M(XY.)</code>.  Then, when
+you multiply these numbers, you can shift them back to get the result you
+were looking for back to where it belongs:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">A.B * X.Y = (AB. * XY.)*2^(-N-M)</code></pre></figure>
+
+<p>Of course, in practice this just means that we’ll track this resulting
+decimal point, as you’ll see through <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">the
+code</a>.</p>
+
+<p>The final local parameter is the width of the internal calculations.
+This is the number of bits that we will keep following each multiply.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	localparam	BMW = ((AW-ADEC&gt;BW-BDEC) ? (AW-ADEC+BDEC) : BW);
+	localparam	CMW = ((BMW+1-BDEC&gt;CW-CDEC) ? (BMW+1-BDEC+CDEC) : CW);</code></pre></figure>
+
+<p>With these preliminaries aside, we can finally dig in to the
+<a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">implementation</a>
+of our quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>,
+beginning with how we generate the
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>
+coefficients themselves.  Since this will change depending upon our
+choice of quadratic, we’ll use a generate block to select from among
+several logic sets.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	generate if (OPT_INTERPOLATOR)
+	begin</code></pre></figure>
+
+<p>As our first step, we’ll calculate the shift register of data inputs
+and a short history that we discussed above in the last section.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		always @(posedge i_clk)
+		if (i_ce)
+			{ mem[3], mem[2], mem[1], mem[0] }
+				&lt;= { mem[2], mem[1], mem[0], i_data };</code></pre></figure>
+
+<p>Let’s take a moment here to discuss <code class="highlighter-rouge">i_ce</code>.  This is the “global CE” signal
+from our <a href="/blog/2017/08/14/strategies-for-pipelining.html">previous discussion on pipeline
+strategies</a>.
+As you may recall from <a href="/blog/2017/08/14/strategies-for-pipelining.html">that
+discussion</a>,
+the “global CE strategy” is very appropriate for
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">signal processing</a>
+applications.  Further, you’ll want to remember the rules associated with the
+“global CE” signal: <em>Nothing</em> changes except on the clock that <code class="highlighter-rouge">i_ce</code> is true.
+Since this is a
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resampling</a>
+module, though, we’ll have to extend this rule.  Nothing on the incoming
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>,
+rate side changes unless <code class="highlighter-rouge">i_ce</code> is true.
+We’ll use another CE signal, <code class="highlighter-rouge">r_ce</code> for the output
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+side in a moment.</p>
+
+<p>The next several calculations also follow directly from the last section
+as well.  The only difference here is that this time we are applying the
+necessary shifts to accomplish the needed “multiplies” from before.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		always @(posedge i_clk)
+		if (i_ce)
+		begin
+			pmidv &lt;= { mem[0], 3'b000 }
+					- { {(3){mem[0][INW-1]}},mem[0]};// x7
+			psumn &lt;= { i_data[(INW-1)], i_data }
+					+ { mem[1][(INW-1)], mem[1] };
+			pdifn &lt;= { i_data[(INW-1)], i_data }
+					- { mem[1][(INW-1)], mem[1] };
+			//
+			sumw &lt;= { mem[3][(INW-1)], mem[3] }
+					+ { i_data[(INW-1)], i_data };
+			// sumn &lt;= psumn;
+			diffn&lt;= { pdifn[INW], pdifn, 2'b00 }
+					+ ,pdifn };// x5
+			diffw&lt;= { i_data[(INW-1)], i_data }
+					- { mem[3][(INW-1)], mem[3] };
+			// midv &lt;= pmidv;
+			midvpsumn &lt;= -{ pmidv[(INW+2)],pmidv }
+					+ { psumn[INW], psumn, 2'h0 };//x7 + x4
+		end</code></pre></figure>
+
+<p>That’s the first two clocks.  Then, on the third clock, we use these
+intermediate expressions to generate the actual quadratic coefficients.
+Remember, though, the <code class="highlighter-rouge">mem[x]</code> values by this clock have shifted forward by
+one extra
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>.
+As a result, <code class="highlighter-rouge">cv</code> is set to <code class="highlighter-rouge">mem[2]</code> instead of <code class="highlighter-rouge">mem[1]</code>.
+Likewise, the <code class="highlighter-rouge">av</code> and <code class="highlighter-rouge">bv</code> values here have been multiplied by sixteen
+compared to the coefficients we want.  This factor of sixteen will ultimately,
+and only partially, be corrected with the <code class="highlighter-rouge">GAIN_OFFSET</code> when we are done.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		initial	av = 0;
+		initial	bv = 0;
+		always @(posedge i_clk)
+		if (i_ce)
+		begin
+			// av = x28 + x16 + x2
+			// av = - { midv, 2'b00 } + { sumn, 4'h0 } - { sumw, 1'b0 };
+			av &lt;= { midvpsumn, 2'b00 }
+					- { {(4){sumw[INW]}}, sumw, 1'b0 };
+			bv &lt;= { diffn[INW+3],diffn, 1'b0 }
+				- { {(5){diffw[INW]}}, diffw };
+			cv &lt;= mem[2];
+		end
+
+	end else begin</code></pre></figure>
+
+<p>The next two sections in <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">the
+code</a>
+calculate the coefficients of the quadratic fit and
+our non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolating</a>
+quadratic.  We’ll skip these here for simplicity, so that we can focus on
+today’s quadratic <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>,
+however we’ll show the results of these
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a>
+filters further down.</p>
+
+<p>At this point, then, we have our three quadratic coefficients, <code class="highlighter-rouge">av</code>, <code class="highlighter-rouge">bv</code>,
+and <code class="highlighter-rouge">cv</code>–regardless of which algorithm generated them.</p>
+
+<p>We discussed in the last section the need for keeping the coefficients from
+the last interval around, so we’ll copy them here.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_ce)
+	begin
+		avold &lt;= av;
+		bvold &lt;= bv;
+		cvold &lt;= cv;
+	end</code></pre></figure>
+
+<p>We’ll
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resample</a>
+our data two clocks following any new incoming data, so let’s
+capture that new value here.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		pre_ce &lt;= i_ce;</code></pre></figure>
+
+<p>That brings us to calculating when to take our next
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>.
+This code should be familiar, as it was lifted from our discussion on
+<a href="/dsp/2017/07/29/series-linear-interpolation.html">linear interpolators</a>.</p>
+
+<p>First, we calculate the when of the next
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+point.  Our <code class="highlighter-rouge">t</code> value is given by this counter.  When the counter overflows,
+the next outgoing
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+will require a new incoming
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+so we’ll then stop moving forward and wait for that next
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a></p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// ...
+	initial	r_ovfl  = 1'b1;
+	always @(posedge i_clk)
+		if (i_ce)
+			{ r_ovfl, r_counter } &lt;= r_counter + i_step;
+		else if (!r_ovfl)
+			{ r_ovfl, r_counter } &lt;= r_counter + i_step;</code></pre></figure>
+
+<p>In the end, the
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+indicator is a combination of either following a new
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+value, or any other
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+up until the counter overflows.  In this fashion, we’ll
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsample</a>
+the incoming data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// ...
+	initial	r_ce = 1'b0;
+	always @(posedge i_clk)
+		r_ce &lt;= ((pre_ce)||(!r_ovfl));</code></pre></figure>
+
+<p>Please feel free to refer back to the <a href="/dsp/2017/07/29/series-linear-interpolation.html">linear
+interpolator</a>
+series if you find this logic difficult to understand.</p>
+
+<p>Two steps are left before evaluating the quadratic
+<a href="https://en.wikipedia.org/wiki/Polynomial">polynomial</a>: calculating <code class="highlighter-rouge">t</code>,
+and switching our coefficients so that the quadratic function we create
+<em>surrounds</em> our incoming data point. This accomplishes the transformation
+illustrated in Fig 12 above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (r_ce)
+		pre_offset &lt;= r_counter[(CTRBITS-1):(CTRBITS-MP)];
+
+	// ...
+	always @(posedge i_clk)
+		if (r_ce)
+		begin
+			r_offset &lt;= { pre_offset[MP-1], pre_offset[(MP-2):0] };
+			if (pre_offset[(MP-1)])
+			begin
+				r_av &lt;= av;
+				r_bv &lt;= bv;
+				r_cv &lt;= cv;
+			end else begin
+				r_av &lt;= avold;
+				r_bv &lt;= bvold;
+				r_cv &lt;= cvold;
+			end
+		end</code></pre></figure>
+
+<p>At this point we now have our quadratic coefficients, <code class="highlighter-rouge">r_av</code>, <code class="highlighter-rouge">r_bv</code>, and
+<code class="highlighter-rouge">r_cv</code>, together with our time offset, <code class="highlighter-rouge">r_offset</code>.  These are the coefficients
+of the quadratic we wish to evaluate.  Indeed, at this point all of the
+difficult stuff is done.  All that remains is to handle the quadratic
+evaluation itself.</p>
+
+<p>The first step is to multiply <code class="highlighter-rouge">a</code> by <code class="highlighter-rouge">t</code>.  To keep everything else aligned,
+we’ll forward all of our other coefficients to the next clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (r_ce)
+	begin
+		qp_quad  &lt;= r_av * r_offset;	// * 2^(-MP-ADEC)
+		qp_bv    &lt;= r_bv;		// * 2^(-BDEC)
+		qp_cv    &lt;= r_cv;		// * 2^(-CDEC)
+		qp_offset&lt;= r_offset;		// * 2^(-MP)
+	end</code></pre></figure>
+
+<p>Many FPGA’s have dedicated multiply accumulate capability in their
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a>
+hardware.  Such a capability would allow
+us to calculate <code class="highlighter-rouge">r_av * r_offset + r_bv</code>–with an appropriate bit select
+along the way.  For right or wrong, this has never been my coding practice.
+Perhaps I just want more control of the operation.  Either way, I will often
+split these two calculations into two separate clocks.  That’s why we aren’t
+adding the <code class="highlighter-rouge">bv</code> coefficient to this multiplication result in this clock.</p>
+
+<p>Before the next step, let’s consider what we have.  We have three numbers,
+with decimal points in varying locations.  <code class="highlighter-rouge">r_av</code> for example has <code class="highlighter-rouge">ADEC</code>
+bits following the decimal point, and we just multiplied it by a value, <code class="highlighter-rouge">t</code>,
+all of whose bits were to the right of the decimal point.  Hence, we now
+have <code class="highlighter-rouge">(MP+ADEC)</code> bits following our decimal point in a number that is
+<code class="highlighter-rouge">AW</code> bits wide.  Let’s keep track of this decimal point as well as the
+decimal point for <code class="highlighter-rouge">qb_bv</code> in our notes.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// qp_quad (AW-ADEC).(MP+ADEC)
+	// qb_bv   (BW-BDEC).(BDEC)</code></pre></figure>
+
+<p>We are now going to want to add the results of this multiply to our <code class="highlighter-rouge">b</code>
+coefficient in our next step.  To do this though, we’re going to first
+need to normalize
+both values so that they have the same number of decimal points.
+In spite of the ugly looking code below, we’re just dropping the extra
+bits off the bottom.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// lw_quad (BW-BDEC).(BDEC)
+	assign	lw_quad = { {(BMW-(AW+MP-(MP+ADEC-BDEC))){qp_quad[(AW+MP-1)]}},
+				qp_quad[(AW+MP-1):(MP+ADEC-BDEC)] };</code></pre></figure>
+
+<p>Hence, we just shifted <code class="highlighter-rouge">qp_quad</code> down by <code class="highlighter-rouge">(MP+ADEC-BDEC)</code> binary decimal points,
+so that it now has <code class="highlighter-rouge">BDEC</code> bits following the decimal instead of <code class="highlighter-rouge">MP+ADEC</code>.
+The result, <code class="highlighter-rouge">lw_quad</code>, now has the same number of decimal places as
+<code class="highlighter-rouge">qp_bv</code>, so we can now add these two numbers together.  As before, we’ll
+forward the constants we haven’t yet used to the next clock cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (r_ce)
+	begin
+		// ...
+		ls_bv    &lt;= { { (BMW+1-BW){qp_bv[BW-1] } }, qp_bv }
+				+ { lw_quad[BMW-1], lw_quad };
+		ls_cv    &lt;= qp_cv;
+		ls_offset&lt;= qp_offset;
+	end</code></pre></figure>
+
+<p>As a next step, we’ll calculate <code class="highlighter-rouge">(a*t+b)*t</code> and place the result into <code class="highlighter-rouge">lp_bv</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (r_ce)
+	begin
+		lp_bv    &lt;= ls_bv * ls_offset;	// * 2^(-MP-BDEC)
+		lp_cv    &lt;= ls_cv;		// * 2^(-   CDEC)
+	end</code></pre></figure>
+
+<p>As before, we keep track of our decimal points at this step.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// lp_bv (BMW+1-BDEC).(BDEC+MP)
+	// lp_cv    (CW-CDEC).(CDEC)</code></pre></figure>
+
+<p>This helps us to know how much to shift <code class="highlighter-rouge">lp_bv</code> by in order to align it with
+<code class="highlighter-rouge">lp_cv</code> so that the two can be added in the next step.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	wire	signed	[(CMW-1):0]	wp_bv;
+	assign	wp_bv = { lp_bv[(BMW+MP):(MP+BDEC-CDEC)] };</code></pre></figure>
+
+<p>This brings us to the last part of calculating the quadratic, adding the
+constant to the final result.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (r_ce)
+		r_done &lt;= { wp_bv[CMW-1], wp_bv }
+				 + , lp_cv};</code></pre></figure>
+
+<p>And we’re done!</p>
+
+<p>Okay, not quite.  We still need to drop a bunch of bits.
+As <a href="/dsp/2017/07/22/rounding.html">we discussed earlier</a>,
+there’s a right and a wrong way to do drop bits in a
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a>
+algorithm.  Hence, we’ll round towards the nearest even integer here
+and then throw the rest of the bits away.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	generate if (CMW+1-GAIN_OFFSET &gt; OWID)
+	begin
+
+		reg	[CMW-GAIN_OFFSET:0]	rounded;
+
+		initial rounded = 0;
+		always @(posedge i_clk)
+		if (r_ce)
+			rounded &lt;= r_done[(CMW-GAIN_OFFSET):0]
+				+ { {(OWID){1'b0}},
+					r_done[CMW-GAIN_OFFSET-OWID],
+				{(CMW-OWID-GAIN_OFFSET-1)
+					{!r_done[CMW-GAIN_OFFSET-OWID]}} };
+
+		assign	o_data = rounded[(CMW-GAIN_OFFSET)
+					:(CMW+1-GAIN_OFFSET-OWID)];</code></pre></figure>
+
+<p>The <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">code</a>
+contains two other non-rounding choices, which we shall skip here
+in our discussion.</p>
+
+<p>The final step is to note when this output is valid.  This involves
+forwarding our new <a href="/blog/2017/08/14/strategies-for-pipelining.html">global CE pipeline control
+signal</a>
+to the output.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// ...
+	end endgenerate
+
+	assign	o_ce = r_ce;
+
+	// ...
+endmodule</code></pre></figure>
+
+<p>At this, we are now done and our
+<a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">code</a>
+is complete.  But does it work?  Let’s see in the next section.</p>
+
+<h2 id="the-proof">The Proof</h2>
+
+<p>I’ve always counseled individuals not to use a tool they aren’t familiar with.
+Every tool in the shed has its purpose, its capabilities, and its limitations.
+This <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is no different from any other tool in that sense.  To see how well, or
+poorly, this quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+works, let’s test it.  In particular, we can sweep a
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+through the input and see what happens.  Further, let’s compare this 
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+with four different
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>
+methods:</p>
+
+<ol>
+  <li>
+    <p>Our first method will be the simple <a href="/dsp/2017/06/06/simple-interpolator.html">sample and hold
+circuit</a> we
+presented earlier.  Since the code within this module doesn’t really handle
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampling</a>, we’ll use the <a href="/blog/2017/08/14/strategies-for-pipelining.html">global
+CE</a>
+from the other
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+to know when to capture this output.</p>
+  </li>
+  <li>
+    <p>The second method will be a straight-forward
+<a href="/dsp/2017/07/29/series-linear-interpolation.html">linear interpolator</a>.</p>
+  </li>
+  <li>
+    <p>Our third choice will be the quadratic fit we developed above, allowing
+you to see just how good, or poor, this
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a> is in practice.</p>
+  </li>
+  <li>
+    <p>We’ll then use the nice quadratic
+<a href="https://en.wikipedia.org/wiki/Upsamplers">upsampler</a> from above,
+the one that we chose to call the
+non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.</p>
+  </li>
+  <li>
+    <p>The final test algorithm is today’s quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a> algorithm.</p>
+  </li>
+</ol>
+
+<p>While I won’t walk you through the test code (today), I will post it with the
+rest of the
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>’s
+<a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">code</a>
+in my <a href="https://github.com/ZipCPU/interpolation">interpolation repository</a>.
+If you are interested in this test code, check out the
+<a href="https://github.com/ZipCPU/interpolation/tree/master/bench">bench</a>
+subdirectories.  There you will find a <a href="https://github.com/ZipCPU/interpolation/blob/master/bench/rtl/icomparison.v">master Verilog
+module</a>
+that instantiates examples of all of the filters below, as well as a <a href="https://github.com/ZipCPU/interpolation/blob/master/bench/cpp/icompare.cpp">Verilator
+based C++</a>
+program that will exercise these filters and write the outputs to a data file.
+Finally, there’s a <a href="https://github.com/ZipCPU/interpolation/blob/master/bench/cpp/plotem.m">Octave
+script</a>
+that can be used to plot these results.</p>
+
+<p>Sadly, the resulting data is too voluminous to plot in its entirety here,
+so I’ll just pick some useful and revealing sections of this data for
+discussion.</p>
+
+<p>For four first example, let’s compare how these
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>
+functions perform for a low frequency
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 13. Low frequency interpolation</caption><tr><td><img src="/img/quadeqn-result-lo.png" alt="" width="581" /></td></tr></table>
+
+<p>By visual inspection alone, most of the quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+did pretty well.  Even the linear
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+seems to be tracking the
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>.
+quite nicely.</p>
+
+<p>If you look even closer, though, you may notice some minor discontinuities
+in the quadratic fit, or locations where the quadratic
+non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+doesn’t go through the given
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points.  These effects are minimal at this low frequency, but they are present.</p>
+
+<p>So, let’s increase the frequency.</p>
+
+<p>Fig 14 below shows the same
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>,
+but this time with a frequency between <code class="highlighter-rouge">0.25</code> and <code class="highlighter-rouge">0.3</code> cycles per sample.</p>
+
+<table align="center" style="float: none"><caption>Fig 14. Higher frequency interpolation</caption><tr><td><img src="/img/quadeqn-result-hi.png" alt="" width="582" /></td></tr></table>
+
+<p>Here the differences become very stark.  The quadratic fit’s discontinuities
+are much larger, and the
+non-<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is clearly missing the input
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+points.</p>
+
+<p>If you look closer, you may even see some kinks in the quadratic
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a> we just built.
+These are a result of the fact that, although this
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a> is
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>,
+it is not 
+<a href="https://en.wikipedia.org/wiki/Continuous_function">continuous</a>
+in its first derivative.  Achieving that result will take more work–something
+we’ll leave for another day.  Even still, though, this is probably good enough
+for most purposes at this frequency.</p>
+
+<p>What about a higher frequency?  Why not push both of these
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+until they completely break down near the
+<a href="https://en.wikipedia.org/wiki/Nyquist_frequency">Nyquist frequency</a>?</p>
+
+<p>That’s the purpose of the next figure, Fig 15.  In this figure, the incoming
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a> is
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a>
+right near the
+<a href="https://en.wikipedia.org/wiki/Nyquist_frequency">Nyquist cutoff frequency</a>
+of two samples per cycle.</p>
+
+<table align="center" style="float: none"><caption>Fig 15. Interpolation near Nyquist</caption><tr><td><img src="/img/quadeqn-result-aliased.png" alt="" width="584" /></td></tr></table>
+
+<p>Judging from the images above, it looks like the
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+are tracking the outline of a
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>
+multiplied by some kind of envelope.  The
+incoming signal, however, had no envelope function constraining it.  Indeed,
+the incoming signal was nothing but a straight
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>.  Instead, this
+apparent “envelope” is the result of undersampling a high frequency
+<a href="https://en.wikipedia.org/wiki/Sine_wave">sine wave</a>.</p>
+
+<p>Which <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is better in this environment?  I might argue that none of them work well
+this close to the <a href="https://en.wikipedia.org/wiki/Nyquist_frequency">Nyquist
+frequency</a>,
+and that instead this final example frequency is really beyond their
+capability.  This isn’t to say that better
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a>
+do not exist, or that they cannot be developed.  Rather, it is simply a
+statement of the reality that any
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+will break down as it approaches the
+<a href="https://en.wikipedia.org/wiki/Nyquist_frequency">Nyquist frequency</a>.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>For just the cost of a couple multiplies, several additions and bit selects,
+and quite a few flip-flops, we’ve managed to implement a better
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>.
+This <a href="https://en.wikipedia.org/wiki/Interpolation">interpolator</a>
+is better than a <a href="/dsp/2017/06/06/simple-interpolator.html">sample and
+hold</a>,
+better than a
+<a href="/dsp/2017/07/29/series-linear-interpolation.html">linear interpolator</a>,
+and even better than the straight forward quadratic fit we started with.
+Further, unlike the more traditional
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>
+filter development, the output of the
+<a href="https://en.wikipedia.org/wiki/Sample-rate_conversion">resampler</a>
+created by <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">this interpolator</a>
+is actually constrained to go through the input samples.</p>
+
+<p>Does this mean that this is the best approach to
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolation</a>?
+By no means.  While <a href="https://github.com/ZipCPU/interpolation/blob/master/rtl/quadratic/quadinterp.v">this
+solution</a>
+has some nice properties associated with it, it has no optimality properties.
+In that sense, it’s just another ad-hoc development in a similar vein to
+<a href="http://ieeexplore.ieee.org/document/15483/">Farrow</a>’s.</p>
+
+<p>As with everything, though, you get want you pay for.  Better 
+<a href="https://en.wikipedia.org/wiki/Interpolation">interpolators</a> of this
+variety exist, but they do cost more.  For example, there’s another filter like
+this one documented in my <a href="https://github.com/ZipCPU/interpolation/raw/master/tutorial.pdf">interpolation
+tutorial</a>,
+although the coefficient multiplies are too difficult to do with just adds
+and subtracts.  Indeed, they require a divide by 80!  Another approach is to use
+<a href="https://en.wikipedia.org/wiki/Spline_interpolation">spline</a> interpolation.
+You may remember my earlier suggestion that
+<a href="https://en.wikipedia.org/wiki/Spline_interpolation">spline</a> interpolation could
+be done without calculating a new matrix solution for every data point.</p>
+
+<!-- Mention: Asynchronous Sample Rate Conversion? -->
+
+<p>This, though, will need to be a discussion for another day.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>And he spake also a parable unto them; No man putteth a piece of a new garment upon an old; if otherwise, then both the new maketh a rent, and the piece that was taken out of the new agreeth not with the old. (Luke 5:36)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="social-media-list">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
