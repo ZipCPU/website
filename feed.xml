@@ -6,14 +6,375 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 12 Apr 2018 12:44:32 -0400</pubDate>
-    <lastBuildDate>Thu, 12 Apr 2018 12:44:32 -0400</lastBuildDate>
+    <pubDate>Tue, 17 Apr 2018 10:31:56 -0400</pubDate>
+    <lastBuildDate>Tue, 17 Apr 2018 10:31:56 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>http://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Formally Verifying an Asynchronous Reset</title>
+        <description>&lt;p&gt;&lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;Clock Domain Crossings&lt;/a&gt;
+can be difficult to get right.  This applies not only
+to crossing data and logic from one clock domain to another, but also to
+crossing resets from one clock domain to another.  The general rule is that all
+logic &lt;a href=&quot;https://en.wikipedia.org/wiki/Flip-flop_(electronics)#Timing_considerations&quot;&gt;must have a guaranteed settling time before the next rising edge of
+the next clock&lt;/a&gt;.
+If this rule is violated then logic may enter a state that
+is neither &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt; nor &lt;code class=&quot;highlighter-rouge&quot;&gt;0&lt;/code&gt;, neither true nor false.&lt;/p&gt;
+
+&lt;p&gt;This is
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastability&lt;/a&gt;.
+Avoid it at all costs.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. Synchronizing an Asynchronous Reset&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/areset-regions.svg&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;p&gt;In the case of an asynchronous reset, it usually doesn’t matter all that much
+during which clock interval the design enters into the reset state.  As long
+as the reset remains active long enough to fully propagate through the design,
+everything will eventually enter into this state.  What matters is whether or
+not the whole design leaves the reset state at the same time: on a clock edge.&lt;/p&gt;
+
+&lt;p&gt;Fig 1. shows an example of such an asynchronous reset.  The negative logic
+reset comes into the design with no guarantee of being synchronous with
+the clock.
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Flip-flop_(electronics)&quot;&gt;Flip-flops&lt;/a&gt;
+dependent upon that reset may then enter into a metastable state, shown by
+the pink background in the figure.  Logic within the design needs to
+recognize this reset, and synchronize its release.  This is shown by the
+green region, where the adjusted reset clears and returns to zero at
+the sime time as the rising edge of the system clock.&lt;/p&gt;
+
+&lt;p&gt;You may also notice from Fig 1 that the incoming asynchronous reset
+signal is based upon negative logic.  In other words, to activate the reset
+the logic needs to be pulled low.  This is a common practice in
+&lt;a href=&quot;/blog/2017/10/13/fpga-v-asic.html&quot;&gt;ASIC designs&lt;/a&gt;,
+since it allows a design to start entering into its reset state before
+sufficient power is available to assert a positive going reset across the
+entire design–although this isn’t usually required with FPGA designs.&lt;/p&gt;
+
+&lt;p&gt;Since the logic necessary to do this is pretty simple, let’s take a look at it
+in the next section.&lt;/p&gt;
+
+&lt;h2 id=&quot;verilog&quot;&gt;Verilog&lt;/h2&gt;
+
+&lt;p&gt;For our &lt;a href=&quot;/examples/areset.v&quot;&gt;simple Verilog example&lt;/a&gt;,
+let’s create a synchronous positive logic
+reset signal from a negative logic asynchronous reset.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left&quot;&gt;&lt;caption&gt;Fig 2. Three Flip-flop Asynchronous Reset Synchronizer&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/areset-fifos.svg&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;p&gt;The &lt;a href=&quot;/examples/areset.v&quot;&gt;basic code&lt;/a&gt;
+just sets the outgoing reset and the three
+&lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;flip-flop synchronizers&lt;/a&gt;
+to &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt; anytime the asynchronous reset is true, and then waits for three clock
+edges to release.  You can see this basic logic pictorially in Fig 2 on the
+left.&lt;/p&gt;
+
+&lt;p&gt;Since &lt;a href=&quot;/examples/areset.v&quot;&gt;the code&lt;/a&gt;
+itself is so short, I’ll spend a moment touching on some
+details I usually avoid along the way.  For example, I (now) always start
+any Verilog design by setting the &lt;code class=&quot;highlighter-rouge&quot;&gt;default_nettype&lt;/code&gt; to
+&lt;code class=&quot;highlighter-rouge&quot;&gt;none&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;`default_nettype	none&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This one statement is really a blessing when it comes to finding
+errors within your code.  Verilog specifies that the default synthesizer
+behavior upon finding any undeclared identifier
+is to assume that the identifier was supposed to reference a &lt;code class=&quot;highlighter-rouge&quot;&gt;wire&lt;/code&gt;, and so
+the synthesizer will then quietly declare a &lt;code class=&quot;highlighter-rouge&quot;&gt;wire&lt;/code&gt; for you when you would have
+rather had the synthesizer report an error due to your misspelling.  By
+telling the synthesis tool not to do this, it becomes much easier to catch
+errors you might have in your code.&lt;/p&gt;
+
+&lt;p&gt;Our module will accept two inputs, and produce one output.  The two inputs will
+be the clock, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clk&lt;/code&gt; and the negative going asynchronous reset, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_areset_n&lt;/code&gt;.
+The underscores here have specific meanings.  &lt;code class=&quot;highlighter-rouge&quot;&gt;i_&lt;/code&gt; references an input,
+&lt;code class=&quot;highlighter-rouge&quot;&gt;o_&lt;/code&gt; in a moment will reference an output, and in the case of this reset the
+&lt;code class=&quot;highlighter-rouge&quot;&gt;_n&lt;/code&gt; suffix references negative logic.  The last item in our portlist is
+our synchronized output signal, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;module areset(i_clk, i_areset_n, o_reset);
+	input	wire	i_clk, i_areset_n;
+	output	reg	o_reset;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;To handle the synchronization, we’ll use a &lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;three clock
+synchronizer&lt;/a&gt;.  This requires
+two internal state bits that we’ll call &lt;code class=&quot;highlighter-rouge&quot;&gt;sync_fifo&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	reg	[1:0]	sync_fifo;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll also assume the design begins in a reset state, and so initialize our
+&lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;synchronization FIFO&lt;/a&gt;
+and our output to start in a reset condition.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	sync_fifo = 2&#39;h3;
+	initial	o_reset = 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Enough of the preliminaries.  What does it take to synchronize a reset?
+Just the following four lines of code.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk or negedge i_areset_n)
+	if (!i_areset_n)
+		{ o_reset, sync_fifo } &amp;lt;= 3&#39;h7;
+	else
+		{ o_reset, sync_fifo } &amp;lt;= { sync_fifo, 1&#39;b0 };&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;So how does this work?  As shown in Fig 1 above, anytime &lt;code class=&quot;highlighter-rouge&quot;&gt;i_areset_n&lt;/code&gt; goes low
+(active), then we set the synchonizer and the output reset registers to all
+ones.  Otherwise, if &lt;code class=&quot;highlighter-rouge&quot;&gt;i_areset_n&lt;/code&gt; is high (inactive), then on the positive
+edge of the clock we’ll shift a zero into and through the the &lt;code class=&quot;highlighter-rouge&quot;&gt;sync_fifo&lt;/code&gt;
+shift register until it clears the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt; output.&lt;/p&gt;
+
+&lt;p&gt;That’s it.  There’s really not that much more to it.&lt;/p&gt;
+
+&lt;p&gt;That is, there’s nothing more involved unless you want to
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verify&lt;/a&gt;
+that this operation works as advertised.  Hence, let’s look at
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verifying&lt;/a&gt;
+this reset logic in the next section.&lt;/p&gt;
+
+&lt;h2 id=&quot;formal-properties&quot;&gt;Formal Properties&lt;/h2&gt;
+
+&lt;p&gt;When it comes to
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal properties&lt;/a&gt;,
+I’ve &lt;a href=&quot;/blog/2018/03/21/dblfetch.html&quot;&gt;recently started including
+“contracts”&lt;/a&gt; into the
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal properties&lt;/a&gt;
+I write.  I’ve found it valuable to clearly indicate what the minimum
+you want something to do is.  Let’s do that here.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;`ifdef	FORMAL
+	////////////////////////////////////////////////////
+	//
+	// Our &quot;contract&quot;
+	//
+	////////////////////////////////////////////////////
+	//&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In this case, I can think of four basic properties that are relevant.&lt;/p&gt;
+
+&lt;p&gt;The first is our one assumption that we always start in a reset state.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	assume(!i_areset_n);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Our next property is that any time &lt;code class=&quot;highlighter-rouge&quot;&gt;i_areset_n&lt;/code&gt; is low (active) our outgoing
+reset value &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt; must be high (active).&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+	if (!i_areset_n)
+		assert(o_reset);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;At this point I can hear someone asking, doesn’t that make this an
+asynchronous reset as well?&lt;/p&gt;
+
+&lt;p&gt;Yes, technically it does.  However, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt; is guaranteed to also be high
+for at least one clock before it is released, so we can (usually) just treat
+it as a regular synchronous logic reset as well.  There is a risk
+that this reset will send some
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Flip-flop_(electronics)&quot;&gt;flip-flops&lt;/a&gt;
+into a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Metastability_in_electronics&quot;&gt;metastable&lt;/a&gt; state
+for one clock cycle.
+While this is a possibility when using &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt;, those
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Flip-flop_(electronics)&quot;&gt;flip-flops&lt;/a&gt;
+will be reset in the next clock interval.  If this is not acceptable
+for your logic, then just treat &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt; as an asynchronous reset.&lt;/p&gt;
+
+&lt;p&gt;The third part of our contract is that we only ever leave the reset state
+on the positive edge of any clock.  This property is a little less intuitive
+to express as an &lt;code class=&quot;highlighter-rouge&quot;&gt;assert&lt;/code&gt;ion.  Specifically, we want to assert that any
+time &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt; transitions from &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt; to &lt;code class=&quot;highlighter-rouge&quot;&gt;0&lt;/code&gt;, i.e. any time it &lt;em&gt;falls&lt;/em&gt;,
+that the clock is also transitioning from &lt;code class=&quot;highlighter-rouge&quot;&gt;0&lt;/code&gt; to &lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt; (&lt;em&gt;rising&lt;/em&gt;).&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	if ($fell(o_reset))
+		assert($rose(i_clk));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As one last part of our
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal proof&lt;/a&gt;,
+let’s &lt;code class=&quot;highlighter-rouge&quot;&gt;cover()&lt;/code&gt; the release from reset to make certain this design will
+release from reset like we expect it to.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+		cover(!o_reset);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;At this point, if we only wanted to pass a bounded model check we’d be done.
+If you instead want to &lt;em&gt;prove&lt;/em&gt; that this asynchronous reset works, then you’ll
+&lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;need to create some more
+formal properties&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	////////////////////////////////////////////////////
+	//
+	// Extras for passing induction
+	//
+	////////////////////////////////////////////////////&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;These extra properties are primarily used to make certain that the &lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;induction
+engine doesn’t find the design in an unreachable
+state&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;For the first of these properties, we’ll assert that any time the design
+is not in a reset condition, then the &lt;code class=&quot;highlighter-rouge&quot;&gt;sync_fifo&lt;/code&gt; shift register bits should
+be zero as well.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+	if (!o_reset)
+		assert(sync_fifo == 2&#39;b00);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In a similar fashion, the &lt;code class=&quot;highlighter-rouge&quot;&gt;sync_fifo&lt;/code&gt; should &lt;em&gt;never&lt;/em&gt; be able to get into
+a state where the bits are &lt;code class=&quot;highlighter-rouge&quot;&gt;2&#39;b01&lt;/code&gt;.  This property is necessary
+to keep the &lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;induction stage from starting in this unreachable
+state&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+		assert(sync_fifo != 2&#39;b01);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Likewise, any time &lt;code class=&quot;highlighter-rouge&quot;&gt;sync_fifo[1]&lt;/code&gt; is &lt;em&gt;true&lt;/em&gt;, then &lt;code class=&quot;highlighter-rouge&quot;&gt;o_reset&lt;/code&gt; should be active.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+	if (sync_fifo[1])
+		assert(o_reset);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Finally, any time &lt;code class=&quot;highlighter-rouge&quot;&gt;i_areset_n&lt;/code&gt; is active (low), we’ll want to make certain
+that &lt;code class=&quot;highlighter-rouge&quot;&gt;sync_fifo&lt;/code&gt; is in its full reset state as &lt;code class=&quot;highlighter-rouge&quot;&gt;2&#39;b11&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+	if (!i_areset_n)
+		assert(sync_fifo == 2&#39;b11);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;All four of these criteria are necessary to make certain that the design
+passes induction.&lt;/p&gt;
+
+&lt;p&gt;That also ends the
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal properties&lt;/a&gt;
+of our asynchronous reset module.&lt;/p&gt;
+
+&lt;h2 id=&quot;symbiyosys&quot;&gt;SymbiYosys&lt;/h2&gt;
+
+&lt;p&gt;If you want to prove this design using
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;,
+you’ll need to put a
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+script together to do so.  Let’s take a quick moment to build this
+&lt;a href=&quot;/examples/areset.sby&quot;&gt;script&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;We’ve discussed
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+scripts a little on the blog, although we haven’t discussed
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+&lt;em&gt;tasks&lt;/em&gt; much.  For this design, we’ll use a
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+task so that we can have
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+handle both &lt;em&gt;prove&lt;/em&gt;ing that our design works, as well as the &lt;em&gt;cover&lt;/em&gt; property
+above.&lt;/p&gt;
+
+&lt;p&gt;A &lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+&lt;a href=&quot;/examples/areset.sby&quot;&gt;script&lt;/a&gt;
+with tasks in it starts with a &lt;code class=&quot;highlighter-rouge&quot;&gt;[tasks]&lt;/code&gt; section declaring the names
+of the various tasks.  In our case, we’ll declare a &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; and a &lt;code class=&quot;highlighter-rouge&quot;&gt;prove&lt;/code&gt;
+task.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;[tasks]
+prove
+cover&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The second section of the
+&lt;a href=&quot;/examples/areset.sby&quot;&gt;SymbiYosys script&lt;/a&gt;
+describes the options to be given to the formal solver.  The &lt;code class=&quot;highlighter-rouge&quot;&gt;mode&lt;/code&gt; option
+selects what mode we wish to run the solvers in.  For the &lt;code class=&quot;highlighter-rouge&quot;&gt;prove&lt;/code&gt; task, we’ll
+run in &lt;code class=&quot;highlighter-rouge&quot;&gt;prove&lt;/code&gt; mode.  This will apply both a bounded model check as well as
+the &lt;em&gt;k&lt;/em&gt;-induction pass.  Passing this task will &lt;em&gt;prove&lt;/em&gt; that the safety
+properties hold.  This applies to all of the &lt;code class=&quot;highlighter-rouge&quot;&gt;assume&lt;/code&gt;s and &lt;code class=&quot;highlighter-rouge&quot;&gt;assert&lt;/code&gt;s above.
+The second mode, used by our
+second task, is the &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; mode.  We’ll use this to make certain our
+&lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; statement is reached.  The final option, &lt;code class=&quot;highlighter-rouge&quot;&gt;multiclock on&lt;/code&gt;, applies
+to both tasks.  This option tells
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+that we’ll be using the asynchronous or multiple clock capabilities of the
+formal solvers.&lt;/p&gt;
+
+&lt;p&gt;For those who have been following
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+development, this option replaces the &lt;code class=&quot;highlighter-rouge&quot;&gt;clk2fflogic&lt;/code&gt;
+&lt;a href=&quot;http://www.clifford.at/yosys/&quot;&gt;yosys&lt;/a&gt;
+option.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;[options]
+prove: mode prove
+cover: mode cover
+multiclock on&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The third section is the &lt;code class=&quot;highlighter-rouge&quot;&gt;[engines]&lt;/code&gt; section.  This particular design doesn’t
+really need any particular engine.  We’ll pick
+&lt;a href=&quot;http://yices.csl.sri.com&quot;&gt;yices&lt;/a&gt;
+therefore, since it is a good general purpose engine.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;[engines]
+smtbmc yices&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Alternatively, we might have just stated &lt;code class=&quot;highlighter-rouge&quot;&gt;smtbmc&lt;/code&gt; without naming the
+&lt;a href=&quot;http://yices.csl.sri.com&quot;&gt;yices&lt;/a&gt;
+engine, since
+&lt;a href=&quot;http://yices.csl.sri.com&quot;&gt;yices&lt;/a&gt; is the default engine anyway.&lt;/p&gt;
+
+&lt;p&gt;That leaves two sections left.  The fourth section lists the commands that
+&lt;a href=&quot;http://www.clifford.at/yosys/&quot;&gt;yosys&lt;/a&gt;
+itself will use to prepare our design for the
+&lt;a href=&quot;http://yices.csl.sri.com&quot;&gt;formal solver&lt;/a&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;[script]
+read_verilog -formal areset.v
+prep -top areset&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The final section lists all the files in our design–in this case, just
+&lt;code class=&quot;highlighter-rouge&quot;&gt;areset.v&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;[files]
+areset.v&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’re now ready to run
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;!&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;gp&quot;&gt;&amp;gt; &lt;/span&gt;sby -f areset.sby&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;There’s really not much more to it.  That’s all that’s required to
+formally verify
+a simple
+&lt;a href=&quot;/examples/areset.v&quot;&gt;asynchronous reset&lt;/a&gt;
+design.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;Proving that this &lt;a href=&quot;/examples/areset.v&quot;&gt;asynchronous reset to synchronous release
+module&lt;/a&gt;
+works may seem trivial, but it does demonstrate a lot of the capabilities of the
+open source formal tools.  For example, did you notice that this proof applies
+to &lt;em&gt;any&lt;/em&gt; clock structure?&lt;/p&gt;
+
+&lt;p&gt;There are several other simple designs that can be proven just like this one.
+Examples include a clock gate, clock switch, input or output DDR components
+or even SERDES implementations.
+I discuss each these projects in my Formal Verification course, before
+offering them as student exercises.  &lt;a href=&quot;https://www.blueletterbible.org/kjv/jas/4/15&quot;&gt;If the Lord is
+willing&lt;/a&gt;,
+we’ll continue with these techniques to create and then &lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally
+verify&lt;/a&gt; an
+&lt;a href=&quot;https://www.sunburst-design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf&quot;&gt;asynchronous FIFO&lt;/a&gt;
+as a future post.&lt;/p&gt;
+
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Come now, and let us reason together, saith the LORD: though your sins be as scarlet, they shall be as white as snow; though they be red like crimson, they shall be as wool.  (Is 1:18)&lt;/em&gt;</description>
+        <pubDate>Thu, 12 Apr 2018 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/formal/2018/04/12/areset.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/formal/2018/04/12/areset.html</guid>
+        
+        
+        <category>formal</category>
+        
+      </item>
     
       <item>
         <title>What would you like to see on the ZipCPU blog?</title>
@@ -402,7 +763,32 @@ CPU, but rather a bug in my pipeline logic rewrite.&lt;/p&gt;
 stall when it ran out of internal memory to keep track of where the
 write back results would be written to.&lt;/p&gt;
   &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;On an early branch or an illegal instruction, the valid memory instruction
+flag was still being set, eventually violating the contract with the memory
+device.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The switch to interrupt flag wasn’t waiting for any ongoing memory
+operations to complete first&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;On a divide error, the memory unit would still issue an instruction.
+This creates a problem because a memory operation to a peripheral device
+cannot be withdrawn, as the CPU tries to switch to its exception handling
+code.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Under certain circumstances, the CPU would continue issuing instructions
+following a bus error or division by zero error.&lt;/p&gt;
+  &lt;/li&gt;
 &lt;/ol&gt;
+
+&lt;p&gt;At this point, I’m going to stop counting.  It’s not because there are so
+many errors remaining, but rather because its no longer clear which of the
+remaining errors were originally
+in the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
+and which ones were added while trying to fix the earlier bugs.&lt;/p&gt;
 
 &lt;h2 id=&quot;bugs-in-the-formal-properties&quot;&gt;Bugs in the Formal Properties&lt;/h2&gt;
 
@@ -435,13 +821,20 @@ properties for describing this fault were &lt;code class=&quot;highlighter-rouge
 
 &lt;h2 id=&quot;current-status&quot;&gt;Current status&lt;/h2&gt;
 
-&lt;p&gt;I’m currently fully verifying the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
-capability using an abstract prefetch, abstract divide, and an &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/dev/bench/formal/abs_mpy.v&quot;&gt;abstract
+&lt;p&gt;I’m currently fully verifying the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
+capability using an &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/formal/bench/formal/abs_prefetch.v&quot;&gt;abstract
+prefetch&lt;/a&gt;,
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/formal/bench/formal/abs_div.v&quot;&gt;abstract
+divide&lt;/a&gt;,
+and an &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/dev/bench/formal/abs_mpy.v&quot;&gt;abstract
 multiply&lt;/a&gt;.
 Thanks to SymbiYosys and “abc pdr”, the pipeline properties I’ve now verified
-constitutes a full formal proof (BMC + induction) of the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.  Other properties have since
-been added, and so the proof remains ongoing.&lt;/p&gt;
+constitutes a full formal proof (BMC + induction) of the first set of
+formal properties for the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;. 
+A second stage of properties have since been added, dependent upon the
+synthesizer define &lt;code class=&quot;highlighter-rouge&quot;&gt;PHASE_ONE&lt;/code&gt;. The proof of this second set of properties
+remains ongoing.&lt;/p&gt;
 
 &lt;p&gt;First, the formal properties:&lt;/p&gt;
 
@@ -515,12 +908,16 @@ work in progress.&lt;/p&gt;
   &lt;/li&gt;
 &lt;/ol&gt;
 
-&lt;p&gt;I intend to update this page as I find more bugs, so that we can have a
-full accounting of how many “bugs” formal methods might find in a “working”
-CPU.  Once finished, the updated
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; code
-will be pushed to its
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;github repository&lt;/a&gt;.&lt;/p&gt;
+&lt;p&gt;You can find and further follow my work through the
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/formal&quot;&gt;formal branch&lt;/a&gt;
+of the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;github repository&lt;/a&gt;
+for the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.  Specifically,
+you can find the properties that I’m working with at the bottom of the core
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/formal/rtl/core/zipcpu.v&quot;&gt;zipcpu.v&lt;/a&gt;
+Verilog file.  I’m using a &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/formal/bench/formal/Makefile&quot;&gt;“make”
+file&lt;/a&gt; within
+the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/tree/bench/formal&quot;&gt;bench/forma&lt;/a&gt;
+directory to control the process.&lt;/p&gt;
 &lt;hr /&gt;&lt;p&gt;&lt;em&gt;Again, when the wicked man turneth away from his wickedness that he hath committed, and doeth that which is lawful and right, he shall save his soul alive.  (Ezek 18:27)&lt;/em&gt;</description>
         <pubDate>Mon, 02 Apr 2018 00:00:00 -0400</pubDate>
         <link>http://zipcpu.com/blog/2018/04/02/formal-cpu-bugs.html</link>
@@ -7162,794 +7559,6 @@ is in general.&lt;/p&gt;
         
         
         <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>ZipCPU toolchain and initial test</title>
-        <description>&lt;p&gt;Please accept my apologies for taking so long to put this article together.
-I’ve made a lot of changes to the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-in order to &lt;a href=&quot;/zipcpu/2018/01/22/formal-progress.html&quot;&gt;formally
-prove&lt;/a&gt;
-the components.  I’ve also cleaned out all of the issues in the issue-tracker
-on &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;Github&lt;/a&gt;.  These changes have now been
-integrated into &lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;the baseline&lt;/a&gt;.
-They have been confirmed to build within
-&lt;a href=&quot;http://www.clifford.at/yosys/&quot;&gt;yosys&lt;/a&gt;,
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/ise-design-suite.html&quot;&gt;ISE&lt;/a&gt;,
-&lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado.html&quot;&gt;Vivado&lt;/a&gt;,
-and
-&lt;a href=&quot;https://veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;.
-Further, the new changes have been proven on the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt; distribution–just not within an
-actual &lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-(yet).  Further, when measuring the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Logic_block&quot;&gt;LUT&lt;/a&gt;
-usage impact of the changes that
-have been made, they appear to require no more than four extra
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Logic_block&quot;&gt;LUT&lt;/a&gt;s–suggesting the 
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-remains on target to be a low-logic
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Integration with
-&lt;a href=&quot;https://github.com/olofk/fusesoc&quot;&gt;FuseSoC&lt;/a&gt;
-is still now, perhaps more firmly than ever, on my to-do list.&lt;/p&gt;
-
-&lt;p&gt;With that aside, let’s look into how you might get started.&lt;/p&gt;
-
-&lt;h2 id=&quot;introduction&quot;&gt;Introduction&lt;/h2&gt;
-
-&lt;p&gt;Let’s spend a couple of posts discussing how to fire up the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-and run it.  Our goal will be to show how the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-can be used to control a signal processing application.  That, however,
-will take a couple of posts to get to.  For this first post, let’s
-just discuss how to get the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-tool chain up and running, and then how to test and know that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-itself works.&lt;/p&gt;
-
-&lt;p&gt;If you look at the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/README.md&quot;&gt;README file&lt;/a&gt;, you’ll
-read that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-is only one component of a (potentially) much larger system.  For example,
-consider the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt;
-system in the figure below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1. ZBasic Components and Peripherals&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/zbasic-blok.svg&quot; alt=&quot;&quot; width=&quot;730&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;This system&lt;/a&gt;
-was designed to be a generic system that could demonstrate the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
-capabilities.  If you notice, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-is only a small part of this full system.  Likewise, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipsystem.v&quot;&gt;ZipSystem&lt;/a&gt;,
-a container for the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-with some peripherals connected close to the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;,
-is still only a small portion of any full design.  To make a full design from
-just a &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;, the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt;
-project also contains a
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;serial port&lt;/a&gt;, a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/memdev.v&quot;&gt;block
-RAM&lt;/a&gt;, a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbqspiflash.v&quot;&gt;flash (ROM)
-controller&lt;/a&gt;,
-an (optional)
-&lt;a href=&quot;https://github.com/ZipCPU/sdspi&quot;&gt;SPI-mode SD-Card controller&lt;/a&gt;, and
-(currently) a
-&lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;scope&lt;/a&gt; for the
-&lt;a href=&quot;https://github.com/ZipCPU/sdspi&quot;&gt;SD-card controller&lt;/a&gt;
-as well.  There are also some smaller components, such as a
-&lt;a href=&quot;https://github.com/ZipCPU/rtcclock&quot;&gt;real-time clock&lt;/a&gt;, a
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/auto-data/pwrcount.txt&quot;&gt;counter-since-power
-up&lt;/a&gt;,
-a second &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v&quot;&gt;interrupt
-controller&lt;/a&gt;,
-the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/auto-data/version.txt&quot;&gt;date of the last time the system was
-built&lt;/a&gt;
- and so forth.&lt;/p&gt;
-
-&lt;p&gt;As with all of my designs, the &lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic design&lt;/a&gt;
-also has a &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging bus
-controller&lt;/a&gt;
-that can be used to control the bus within the core from an external
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;serial port&lt;/a&gt;.  This version of the
-debugging bus controller, however, multiplexes two 7-bit
-channels onto an 8-bit serial port channel–unlike the &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;one we discussed
-earlier&lt;/a&gt;.
-This creates a
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbconsole.v&quot;&gt;console port&lt;/a&gt;
-for the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;, in addition to the
-&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging bus controller&lt;/a&gt;.
-This makes it possible to experiment with the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt;
-module on any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-board having only a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Serial_Peripheral_Interface_Bus&quot;&gt;QSPI&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt; and a
-&lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;serial port&lt;/a&gt;.  The
-&lt;a href=&quot;https://github.com/ZipCPU/sdspi&quot;&gt;SDCard&lt;/a&gt; port is optional, and by using
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;, the block RAM can easily be
-resized.&lt;/p&gt;
-
-&lt;p&gt;Our eventual goal in this series of articles will be to show how to run
-this &lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic design&lt;/a&gt;,
-while simulating all of the components, from within
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;.  As
-part of this goal, we’ll also add a
-&lt;a href=&quot;https://github.com/ZipCPU/wbpmic&quot;&gt;MEMs based audio A/D&lt;/a&gt;
-and may possibly even add an &lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbsdram.v&quot;&gt;SDRAM
-controller&lt;/a&gt;.
-We’ll even use the &lt;a href=&quot;https://sourceware.org/newlib&quot;&gt;C-library&lt;/a&gt; to demonstrate a
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/board/hello.c&quot;&gt;Hello World
-example&lt;/a&gt;,
-and possibly even to play &lt;a href=&quot;https://github.com/ZipCPU/tttt&quot;&gt;4x4x4 Tic-Tac-Toe&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;That will be the goal of this series.&lt;/p&gt;
-
-&lt;p&gt;Today’s goal, however, will just be to examine the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-by itself.  To do so, we’ll trace a piece
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; history,
-and run the very first piece of software ever written for the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-initial-zipcpu-test-software&quot;&gt;The Initial ZipCPU Test Software&lt;/h2&gt;
-
-&lt;p&gt;The very first  piece of software I wrote for the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-just demonstrated each of the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;’s
-instructions, and its ability to execute them.&lt;/p&gt;
-
-&lt;p&gt;The initial version of this test was created by a test generator piece of
-software that at one time wrote a couple of machine code instructions
-into a binary file which would then describe the block RAM memory image
-for the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;.
-I was so excited to get this simple code to work!  Little did I know how
-much more work would be involved in finding all the corner cases within any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;.
-This piece of code, however, is now only relic-ware.  Indeed, it is not only
-a couple of &lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;instruction set
-architecture&lt;/a&gt;
-versions out of date, but since it was causing build errors for users it has
-since been removed from the repository entirely.&lt;/p&gt;
-
-&lt;p&gt;With the introduction of the first
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sw/zasm&quot;&gt;assembler&lt;/a&gt;,
-the program that generated machine code was replaced with an &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;assembly
-file&lt;/a&gt;.
-Even though that
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sw/zasm&quot;&gt;initial assembler&lt;/a&gt;
-has now also become relic-ware, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;assembly
-file&lt;/a&gt;
-test has been maintained to the point that it can still
-be assembled using the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/sw/gas-zippatch.patch&quot;&gt;version of
-binutils&lt;/a&gt;.
-Unlike the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sw/zasm&quot;&gt;original assembler&lt;/a&gt;,
-&lt;a href=&quot;https://www.gnu.org/software/binutils&quot;&gt;binutils&lt;/a&gt;
-provides several valuable capabilities–such as the ability to link multiple
-files together, the ability to follow a script describing where memory and/or
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-are located, the ability to place an initial RAM image in
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;,
-and even the ability to integrate with &lt;a href=&quot;https://gcc.gnu.org&quot;&gt;GCC&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;This &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;remaining piece of
-software/testware&lt;/a&gt;
-starts with a branch-always followed by break test–just to make certain the
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;
-works.  It then continues by testing some basic register setting commands.
-It was meant to be run within a &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;monitor
-program&lt;/a&gt;.
-Using this program, you can step through this software one clock cycle at a
-time–just like &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;we discussed
-earlier&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Let’s build and run
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;this program&lt;/a&gt;
-today, to give us some confidence that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-itself continues to work.&lt;/p&gt;
-
-&lt;h2 id=&quot;building-the-tools&quot;&gt;Building the tools&lt;/h2&gt;
-
-&lt;p&gt;The first step in converting any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Assembly_language&quot;&gt;assembly file&lt;/a&gt; into &lt;a href=&quot;https://en.wikipedia.org/wiki/Machine_code&quot;&gt;machine
-code&lt;/a&gt;
-is to acquire (or build) an &lt;a href=&quot;https://www.gnu.org/software/binutils&quot;&gt;assembler and
-linker&lt;/a&gt;.  The
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-has backend support for &lt;a href=&quot;https://www.gnu.org/software/binutils&quot;&gt;binutils (assembler and
-linker)&lt;/a&gt;, the
-&lt;a href=&quot;https://gcc.gnu.org&quot;&gt;GCC C-compiler&lt;/a&gt;, and
-&lt;a href=&quot;https://sourcewaire.org/newlib&quot;&gt;newlib&lt;/a&gt;.  Although only
-&lt;a href=&quot;https://www.gnu.org/software/binutils&quot;&gt;binutils&lt;/a&gt;
-is required for this &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;testing
-program&lt;/a&gt;,
-all of the tools are built from the same command, so let’s build them together.&lt;/p&gt;
-
-&lt;p&gt;To build the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-tool-suite, first make sure you have the prerequisites
-for &lt;a href=&quot;https://gcc.gnu.org&quot;&gt;GCC&lt;/a&gt;.  For debian based systems, this will look like:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;sudo apt install flex bison libbison-dev libgmp-dev libmpfr-dev libmpc-dev bc&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You’ll notice several &lt;code class=&quot;highlighter-rouge&quot;&gt;*-dev&lt;/code&gt; components.  These are different from their non
-&lt;code class=&quot;highlighter-rouge&quot;&gt;-dev&lt;/code&gt; counterparts, in that they allow you to build components using these
-libraries rather than just using binary components already built.  In other
-words, installing &lt;code class=&quot;highlighter-rouge&quot;&gt;gmp&lt;/code&gt; isn’t good enough, you’ll need to install &lt;code class=&quot;highlighter-rouge&quot;&gt;libgmp-dev&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;You are also going to need &lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;
-to translate
-the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s Verilog source code into
-the C++ necessary to simulate it,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;sudo apt install verilator&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation&lt;/a&gt;
-driver needs
-&lt;a href=&quot;http://www.mr511.de/software/english.html&quot;&gt;libelf&lt;/a&gt; in order to know
-where to load programs and program components into memory,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;sudo apt install libelf-dev&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Please note that, as with the earlier components, this package is the
-development version of
-&lt;a href=&quot;http://www.mr511.de/software/english.html&quot;&gt;libelf&lt;/a&gt;.  We’ll need that version
-to build a program that uses it that can read and process an ELF file.&lt;/p&gt;
-
-&lt;p&gt;Many of my distributions depend upon &lt;a href=&quot;http://ctags.sourceforge.net&quot;&gt;ctags&lt;/a&gt;,
-and the &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation control
-program&lt;/a&gt;
-is written using
-&lt;a href=&quot;https://www.gnu.org/software/ncurses&quot;&gt;ncurses&lt;/a&gt;, so let’s get those as well:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;sudo apt install ncurses-dev ctags&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If you are using Windows,
-&lt;a href=&quot;/blog/2017/07/28/cygwin-fpga.html&quot;&gt;these instructions&lt;/a&gt;
-should get you started using these tools via &lt;a href=&quot;https://cygwin.com&quot;&gt;cygwin&lt;/a&gt;.
-Since I’m not using Windows regularly, please let me know if you have any
-problems building with &lt;a href=&quot;https://cygwin.com&quot;&gt;cygwin&lt;/a&gt;–I’ll probably never notice
-the problem otherwise.&lt;/p&gt;
-
-&lt;p&gt;One you have these prerequisites, it is now time to actually clone
-the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-repository,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;git clone --depth 1 https://github.com/ZipCPU/zipcpu
-&lt;span class=&quot;nb&quot;&gt;cd &lt;/span&gt;zipcpu&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;While you may have cloned repositories without the &lt;code class=&quot;highlighter-rouge&quot;&gt;depth&lt;/code&gt; command, doing so
-with the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;repository&lt;/a&gt; will also download a history
-containing several versions of &lt;a href=&quot;https://gcc.gnu.org&quot;&gt;GCC&lt;/a&gt;.  In other words,
-you’ll be spending a lot of bandwidth downloading more of the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;repository&lt;/a&gt; than you need.&lt;/p&gt;
-
-&lt;p&gt;At this point, you &lt;em&gt;should&lt;/em&gt; be able to just type “make”.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;make&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This will orchestrate a
-&lt;a href=&quot;https://www.veripool.org/wiki/verilator&quot;&gt;Verilator&lt;/a&gt;-based
-make of the “&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/rtl&quot;&gt;rtl/&lt;/a&gt;”
-directory, and a build of the simulation
-directory, “&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sim/verilator&quot;&gt;sim/verilator&lt;/a&gt;”.  It will also trigger a build of the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-tool-suite that we’ll need to turn the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;simulation test
-file&lt;/a&gt;
-from &lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;assembly&lt;/a&gt; into
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Machine_code&quot;&gt;object code&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The current version of the tools will be built and placed into a “sw/install”
-directory within the cloned repository of the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.
-Before going further, you will need to make certain that this directory
-is a part of your path.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;nb&quot;&gt;export &lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;PATH&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;nv&quot;&gt;$PATH&lt;/span&gt;:&amp;lt;your-path-to-zipcpu&amp;gt;/sw/install/cross-tools/bin&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;I am very interested in any struggles you may have during this process.
-Please create an issue on
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu&quot;&gt;GitHub&lt;/a&gt; if you have any errors up to this
-point.&lt;/p&gt;
-
-&lt;h2 id=&quot;running-the-test-file&quot;&gt;Running the test file&lt;/h2&gt;
-
-&lt;p&gt;Now that you have the tool suite, and now that your &lt;code class=&quot;highlighter-rouge&quot;&gt;PATH&lt;/code&gt; environment
-variable has been modified so that &lt;code class=&quot;highlighter-rouge&quot;&gt;zip-as&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;zip-cpp&lt;/code&gt; are in
-your path, then it is now time to build the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;simulation test
-file&lt;/a&gt;.
-For this, we’ll change into the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm&quot;&gt;bench/asm&lt;/a&gt;,
-and run &lt;code class=&quot;highlighter-rouge&quot;&gt;make simtest&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;nb&quot;&gt;cd &lt;/span&gt;bench/asm
-make simtest&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You can also build a disassembly file of the result, in case you are ever
-interested in what the original instructions actually build into, by&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;make simtest.txt&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Once built, we can change into the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sim/verilator/&quot;&gt;Verilator based simulation
-directory&lt;/a&gt;,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;nb&quot;&gt;cd&lt;/span&gt; ../..
-&lt;span class=&quot;nb&quot;&gt;cd &lt;/span&gt;sim/verilator&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;From here, you can run the automated tests.  There are two such tests,
-both based off of the same &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;simulated test&lt;/a&gt; instructions.&lt;/p&gt;
-
-&lt;p&gt;The first automated test just runs the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;test&lt;/a&gt;
-file, using the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
-&lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;debug interface&lt;/a&gt;
-and particularly the &lt;em&gt;step&lt;/em&gt; instruction provided by that interface–the
-same &lt;em&gt;step&lt;/em&gt; control that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-would use were it placed on actual hardware.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;./zipsys_tb -s ../../bench/asm/simtest&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;To know when the test is complete, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;test file&lt;/a&gt;
-has been designed to “end” in one of two states.  It will either end with
-1) a halt instruction (successful exit), or 2) a BUSY instruction (error exit).
-The &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;
-will detect this interface, and return an appropriate value to the shell.&lt;/p&gt;
-
-&lt;p&gt;The second automated test simulates how the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; would run if it were actually
-running on the device without the
-&lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;debugging interface&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;./zipsys_tb -a ../../bench/asm/simtest&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;These two tests are so valuable to me, that I have a make target set up
-just to run both of them,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;make &lt;span class=&quot;nb&quot;&gt;test&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;There’s a third way to run the test as well–the interactive test.  Although
-starting the run is just as simple,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;make itest&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;there are more details involved in commanding it, which we’ll get into in the
-next section.&lt;/p&gt;
-
-&lt;p&gt;Further, no matter how you run this
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;,
-it will (currently) always create a
-&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD trace file&lt;/a&gt;.  You are
-welcome to open this file in a waveform viewer to see the internal signals
-within the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; if you would like.
-This isn’t true of the 
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;
-within the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt; repository–since the trace files
-for &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/automaster_tb.cpp&quot;&gt;that simulator&lt;/a&gt;
-can easily grow to many Gigabytes in length, that one is turned off by default.
-In this case, though, the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;simtest
-file&lt;/a&gt;
-is short enough that the
-&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD trace file&lt;/a&gt;
-should remain within a reasonable size.&lt;/p&gt;
-
-&lt;h2 id=&quot;interactive-commands&quot;&gt;Interactive Commands&lt;/h2&gt;
-
-&lt;p&gt;Now that you know how to start the &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation based
-debugger&lt;/a&gt;
-let’s spend some time describing how to work operate it.  As you’ll recall
-from the last section, starting the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation based
-debugger&lt;/a&gt; is easy.
-Just run&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;make itest&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;from the “&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sim/verilated&quot;&gt;sim/verilated&lt;/a&gt;”
-subdirectory.&lt;/p&gt;
-
-&lt;p&gt;This will apply the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation&lt;/a&gt;
-to the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/bench/asm/simtest.s&quot;&gt;simtest
-file&lt;/a&gt;.
-To start it with another file you can run,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;./zipsys_tb &amp;lt;your-executable-file&amp;gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Knowing what to do next isn’t quite as simple.  Sure, either hitting the
-escape key or ‘q’ will exit, but you can do a lot more.  Here’s a cheat sheet
-so you’ll know what to do.  Specifically, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;
-understands the following command keys:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;‘h’ Halts the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;&lt;/li&gt;
-  &lt;li&gt;‘g’ tells the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-to &lt;em&gt;go&lt;/em&gt; until given another command.&lt;/li&gt;
-  &lt;li&gt;‘G’ does the same thing, but only updates the screen any time a user types
-a character.  It’s useful for moving quickly through a long simulation if
-necessary.&lt;/li&gt;
-  &lt;li&gt;‘r’ gives the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; the reset command,
-sending it back to supervisor mode and the reset address&lt;/li&gt;
-  &lt;li&gt;’s’ &lt;em&gt;steps&lt;/em&gt; the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; using the
-&lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;debugging interface&lt;/a&gt;
-that will exist within the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-implementation&lt;/li&gt;
-  &lt;li&gt;‘t’ &lt;em&gt;ticks&lt;/em&gt; the clock.  It steps the
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation&lt;/a&gt;
-by one clock tick, but done in such a fashion that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;’s
-Verilog logic doesn’t know it’s being stepped.&lt;/li&gt;
-  &lt;li&gt;‘T’ releases the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-from the &lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;hardware debugging
-mode&lt;/a&gt;.  This is
-useful if you’ve been giving it the &lt;em&gt;step&lt;/em&gt; command (separate from ticking
-the clock), and you want the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; to continue without being given
-explicit &lt;em&gt;step&lt;/em&gt; instructions.&lt;/li&gt;
-  &lt;li&gt;‘q’ quits the simulation&lt;/li&gt;
-  &lt;li&gt;Ctrl-L redraws the screen.  This used to be really important when running
-a &lt;a href=&quot;https://www.gnu.org/software/ncurses&quot;&gt;curses&lt;/a&gt;
-program over a modem connection–any time someone else in the house
-would pick up the phone, you’d get a bunch of garbage on the screen and your
-computer would need to re-sync.  While it’s not as necessary today, I did
-find it necessary to add this capability in–specifically for the case
-where I have
-&lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt;
-running in the background spewing warnings over my screen anytime I
-update the display.&lt;/li&gt;
-  &lt;li&gt;‘u’ switches the performance times to show user mode performance&lt;/li&gt;
-  &lt;li&gt;‘m’ switches the performance times to show global machine performance&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;If this is your first experience with the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;,
-just remember three
-characters: ‘t’ steps it forward, ‘r’ restarts it, and ‘q’ exits.  You might
-just wish to press ‘t’ several times and watch what happens.  If that gets
-boring, try typing ‘g’–you can stop the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-anytime by typing ‘t’ later to return to single-clock-tick mode.&lt;/p&gt;
-
-&lt;p&gt;The &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;
-also has the ability to adjust and change registers.  You
-can move around the display using the arrow keys.  When you get to a register
-you wish to adjust, press the enter key, type the new number, and then press
-enter (to set the value) or escape (to leave the mode).&lt;/p&gt;
-
-&lt;h2 id=&quot;understanding-the-interactive-display&quot;&gt;Understanding the Interactive Display&lt;/h2&gt;
-
-&lt;p&gt;So let’s look at what this interface tells us.&lt;/p&gt;
-
-&lt;p&gt;When you initially start the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;,
-you’ll see a screen looking like Fig 2 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2, Initial Simulator Screen&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/zipsim-initial.png&quot; alt=&quot;&quot; width=&quot;562&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Let’s break down the components of this view, so that you can understand what’s
-going on.  Fig 3. therefore shows the basic sections of the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation&lt;/a&gt;
-screen.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3. Components of the simulation screen&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/zipsim-overview.svg&quot; alt=&quot;&quot; width=&quot;562&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Starting at the top are two lines describing the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipsystem.v&quot;&gt;ZipSystem&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/peripherals&quot;&gt;peripherals&lt;/a&gt;.  These
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/peripherals&quot;&gt;peripherals&lt;/a&gt;
-are shown in the blue box of Fig 1 above, they consist of an &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v&quot;&gt;interrupt
-controller (PIC)&lt;/a&gt;, a
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/ziptimer.v&quot;&gt;watchdog timer (WDT)&lt;/a&gt;, a
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbwatchdog.v&quot;&gt;bus watchdog (WBUS)&lt;/a&gt;, and the second
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v&quot;&gt;interrupt control register (PIC2)&lt;/a&gt;.  Judging from these
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/peripherals&quot;&gt;peripherals&lt;/a&gt;,
-you can tell if (for example) interrupts are enabled, or an interrupt is
-pending.  On the next line are the three
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/ziptimer.v&quot;&gt;count-down timers (TMRA-TMRC)&lt;/a&gt;, and
-a &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/zipjiffies.v&quot;&gt;Jiffies&lt;/a&gt;
-peripheral for controlling absolute rather than relative programmable
-interrupt timing.  (This would be useful for real-time task scheduling.)&lt;/p&gt;
-
-&lt;p&gt;The next line, starting with &lt;code class=&quot;highlighter-rouge&quot;&gt;MTSK&lt;/code&gt;, shows the values of four
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/peripherals/zipcounter.v&quot;&gt;performance counters&lt;/a&gt;.  The first counts the number clock ticks, and the last counts
-the number of instructions retired.  The two in the middle count how often the
-operands stage of the
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt; is stalled,
-and how often the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-is stalled.  These are global counters.  They count whether the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-is in &lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;supervisor mode or user
-mode&lt;/a&gt;.  There’s a
-second set of identical
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/peripherals/zipcounter.v&quot;&gt;counters&lt;/a&gt;,
-revealed by typing &lt;code class=&quot;highlighter-rouge&quot;&gt;u&lt;/code&gt; within the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation&lt;/a&gt;,
-showing the same basic values–but this second set only increments
-while in user mode.  This makes it possible to measure per user-task statistics.&lt;/p&gt;
-
-&lt;p&gt;Further information regarding these
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/peripherals&quot;&gt;peripherals&lt;/a&gt;,
-and the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/peripherals/zipcounter.v&quot;&gt;performance
-counters&lt;/a&gt;
-may be found within the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/raw/master/doc/spec.pdf&quot;&gt;reference manual&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The third section of the display in Fig 3 is the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-register section.  As you may
-&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;recall&lt;/a&gt;, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-has two sets of sixteen 32-bit registers.  These are shown in this section.
-The registers range from R0 to R12, and then the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Stack_register&quot;&gt;stack pointer (SP)&lt;/a&gt;,
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Status_register&quot;&gt;condition codes register (CC)&lt;/a&gt;,
-and &lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;program counter (PC)&lt;/a&gt;.
-The supervisor set is shown on top, the user set underneath.  The set that
-is highlighted indicates which mode the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-is currently in–in this case, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-is in supervisor mode.&lt;/p&gt;
-
-&lt;p&gt;The fourth section, coming down from the top, tells you about the bus.
-The &lt;code class=&quot;highlighter-rouge&quot;&gt;PF BUS&lt;/code&gt; line gives you information about the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-unit, and the &lt;code class=&quot;highlighter-rouge&quot;&gt;MEMBUS&lt;/code&gt; line tells you about the memory module.  The third line
-shows the result of the output of the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/ex/wbdblpriarb.v&quot;&gt;arbiter&lt;/a&gt;,
-and which of these units actually has access to the bus.&lt;/p&gt;
-
-&lt;p&gt;The final section shows the &lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;instruction
-pipeline&lt;/a&gt;.  As you may
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;remember&lt;/a&gt;, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-has a basic five stage &lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;.  The bottom of the display shows only four
-lines.  These are the output of the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt; (&lt;code class=&quot;highlighter-rouge&quot;&gt;I&lt;/code&gt;), the
-output of the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/idecode.v&quot;&gt;instruction
-decoder&lt;/a&gt;
-(&lt;code class=&quot;highlighter-rouge&quot;&gt;Dc)&lt;/code&gt;, the output of the read operands section (&lt;code class=&quot;highlighter-rouge&quot;&gt;Op&lt;/code&gt;) and the result of the
-&lt;a href=&quot;/zipcpu/2017/08/11/simple-alu.html&quot;&gt;ALU&lt;/a&gt; (&lt;code class=&quot;highlighter-rouge&quot;&gt;Al&lt;/code&gt;).&lt;/p&gt;
-
-&lt;p&gt;Indeed, this section is &lt;em&gt;so&lt;/em&gt; important for understanding how the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; works, that we should take a deeper
-look at it.  If you hold and press the ‘t’ key for a while, you’ll come across
-the state shown in Fig 4 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4, Instruction Pipeline&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/zipsim-insns.png&quot; alt=&quot;&quot; width=&quot;662&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The first two columns on the left will show &lt;code class=&quot;highlighter-rouge&quot;&gt;Ck&lt;/code&gt; to indicate that the &lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;
-stage’s &lt;code class=&quot;highlighter-rouge&quot;&gt;CE&lt;/code&gt; line is high, or &lt;code class=&quot;highlighter-rouge&quot;&gt;Stl&lt;/code&gt;, to show that the particular stage is
-&lt;em&gt;stalled&lt;/em&gt;.  Most instructions will be followed by a &lt;code class=&quot;highlighter-rouge&quot;&gt;:&lt;/code&gt;, although the first
-half of any compressed instruction will be followed by a &lt;code class=&quot;highlighter-rouge&quot;&gt;/&lt;/code&gt;.  Following
-the decode stage, either an &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; (ALU), &lt;code class=&quot;highlighter-rouge&quot;&gt;M&lt;/code&gt; (memory), or &lt;code class=&quot;highlighter-rouge&quot;&gt;I&lt;/code&gt; (illegal)
-character may follow the &lt;code class=&quot;highlighter-rouge&quot;&gt;;&lt;/code&gt; (or &lt;code class=&quot;highlighter-rouge&quot;&gt;/&lt;/code&gt;).  Immediately after this (optional)
-character, is the address the instruction was read from.&lt;br /&gt;
-If an instruction follows, as with all of the stages in Fig 4
-above, then the particular
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;
-stage has valid values within it.
-If the instruction is highlighted, its being run in supervisor mode.
-These instructions, therefore, are being run from user mode.&lt;/p&gt;
-
-&lt;p&gt;Is this making any sense?  Perhaps you might then be interested in the homework
-section that follows.&lt;/p&gt;
-
-&lt;h2 id=&quot;interactive-homework&quot;&gt;Interactive Homework&lt;/h2&gt;
-
-&lt;p&gt;One of the really fun parts of
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;this simulation&lt;/a&gt;.
-is watching how the performance
-of the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-is impacted by how well the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-mechanism works.  This is primarily controlled by some &lt;code class=&quot;highlighter-rouge&quot;&gt;define&lt;/code&gt;s within the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/cpudefs.v&quot;&gt;cpudefs.v&lt;/a&gt; file.&lt;/p&gt;
-
-&lt;p&gt;Since you’ve already looked at how the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-operates in its default configuration with a
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;prefetch and cache&lt;/a&gt;
-enabled,
-let’s see how it does with some other
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-module’s enabled.  Hence, for a second test, let’s uncomment the
-&lt;code class=&quot;highlighter-rouge&quot;&gt;OPT_DOUBLE_FETCH&lt;/code&gt; define within
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/cpudefs.v&quot;&gt;cpudefs.v&lt;/a&gt;,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilator&quot; data-lang=&quot;verilator&quot;&gt;define OPT_DOUBLE_FETCH&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You will then need to re-run make in the
-“&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/rtl&quot;&gt;rtl/&lt;/a&gt;” directory,
-as well as the
-“&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sim/verilated&quot;&gt;sim/verilated&lt;/a&gt;”
-directory.&lt;/p&gt;
-
-&lt;p&gt;This will switch the CPU from using the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt; and
-&lt;a href=&quot;https://en.wikipedia.org/wiki/CPU_cache&quot;&gt;I-cache&lt;/a&gt;
-of the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;pfcache&lt;/a&gt;
-module, to using a module that fetches two instructions at a time:
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;dblfetch&lt;/a&gt;.
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;dblfetch&lt;/a&gt;
-was designed to be a simpler
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-than the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;pfcache&lt;/a&gt;
-module, but also to have better performance than the single instruction at a
-time &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v&quot;&gt;module&lt;/a&gt;–especially
-when reading instructions from
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Speaking of the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;single prefetch&lt;/a&gt;
-module, why don’t we give that one a try?
-To see how the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-performs with a
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-module that only retrieves one instruction at a time, go ahead and uncomment
-the &lt;code class=&quot;highlighter-rouge&quot;&gt;OPT_SINGLE_FETCH&lt;/code&gt; line from within
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/cpudefs.v&quot;&gt;cpudefs.v&lt;/a&gt;,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilator&quot; data-lang=&quot;verilator&quot;&gt;define OPT_SINGLE_FETCH&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;and then rerun make in the
-“&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/rtl&quot;&gt;rtl/&lt;/a&gt;” directory,
-and
-“&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/tree/master/sim/verilated&quot;&gt;sim/verilated&lt;/a&gt;”
-directories again.&lt;/p&gt;
-
-&lt;p&gt;See the difference?&lt;/p&gt;
-
-&lt;p&gt;With the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;prefetch + cache&lt;/a&gt;, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-has to pause any time the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/CPU_cache&quot;&gt;cache&lt;/a&gt;
-line needs to be re-filled.  This is particularly pronounced at the beginning
-of the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulation&lt;/a&gt;
-where you have to wait many clocks for the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-to fill the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/CPU_cache&quot;&gt;cache&lt;/a&gt;.
-You may also notice the effects of
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;this prefetch&lt;/a&gt;
-any time the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-hits a
-branch instruction, whether a
-&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;branch always &lt;code class=&quot;highlighter-rouge&quot;&gt;BRA&lt;/code&gt;&lt;/a&gt;
-or a conditional branch
-(&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;nominally a conditional ADD
-instruction&lt;/a&gt;)–the
-two will have different effects within the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;.
-The
-&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;branch always&lt;/a&gt;
-instruction will suffer a single stall, and then (appear to) replace the
-branch instruction moving through the
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt; with the
-instruction prior to the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Branch_(computer_science)&quot;&gt;branch&lt;/a&gt;
-target.  This is primarily an effect within the
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator viewer&lt;/a&gt;,
-the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-doesn’t actually execute this other instruction, but it does send the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Branch_(computer_science)&quot;&gt;branch&lt;/a&gt;’s
-target address through the
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;–leading to
-the misleading view.  The
-&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;conditional branch&lt;/a&gt;,
-on the other hand, will clear the
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;
-anytime it is taken.  If the result is in the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/CPU_cache&quot;&gt;cache&lt;/a&gt;,
-then the new instructions will start filling the (now empty)
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;
-following the branch.&lt;/p&gt;
-
-&lt;p&gt;On the other hand, with the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;single prefetch&lt;/a&gt;
-module, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-is unable to fill its
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;.
-It seems to be forever fetching the next instruction, while spending
-very little time actually executing instructions.&lt;/p&gt;
-
-&lt;p&gt;When I first saw this difference, I suddenly learned a lot about how
-important the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/CPU_cache&quot;&gt;cache&lt;/a&gt;
-is to
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
-performance.  It was for this purpose that I wanted to share
-this demonstration with you–I just found it very valuable.&lt;/p&gt;
-
-&lt;h2 id=&quot;next-time&quot;&gt;Next Time&lt;/h2&gt;
-
-&lt;p&gt;Our next step, now that you’ve built the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-toolchain, will be to run the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/board/cputest.c&quot;&gt;test program&lt;/a&gt;
-program from within the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt;
-repository.  This goes beyond testing just the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;–it involves testing a
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/verilated/qspiflashsim.cpp&quot;&gt;simulated flash&lt;/a&gt;
-and a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/verilated/dbluartsim.cpp&quot;&gt;simulated serial
-port&lt;/a&gt;–together
-with their controllers.  If time permits, I’ll even add the instructions
-to play &lt;a href=&quot;https://github.com/ZipCPU/tttt&quot;&gt;4x4x4 tic-tac-toe&lt;/a&gt;
-within that demonstration–it’s a fun game and a nice way to relieve the
-stress of getting something new working.&lt;/p&gt;
-
-&lt;p&gt;Beyond that, I’ve still got a couple of blogging articles planned along
-this line.  The next article I have planned will show how to add a
-&lt;a href=&quot;https://github.com/ZipCPU/wbpmic&quot;&gt;microphone controller&lt;/a&gt;
-component to
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone bus&lt;/a&gt;
-within the
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic&quot;&gt;ZBasic&lt;/a&gt;
-implementation using
-&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt;.  I’d also like to show
-how you can profile a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
-running
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;Dhrystone&lt;/a&gt;
-within a
-&lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;simulator&lt;/a&gt;,
-using a capability similar to the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/sim/verilated/pdump.cpp&quot;&gt;pdump&lt;/a&gt;
-program.  This was also very instructive to me, since it helped me
-understand where and when the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-ended up stalling, and what it would stall for under a reasonable load.&lt;/p&gt;
-
-&lt;p&gt;So, stick around, there’s more coming!&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Shall the axe boast itself against him that heweth therewith? or shall the saw magnify itself against him that shaketh it? as if the rod should shake itself against them that lift it up, or as if the staff should lift up itself, as if it were no wood. (Isaiah 10:15)&lt;/em&gt;</description>
-        <pubDate>Wed, 31 Jan 2018 00:00:00 -0500</pubDate>
-        <link>http://zipcpu.com/zipcpu/2018/01/31/cpu-build.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/zipcpu/2018/01/31/cpu-build.html</guid>
-        
-        
-        <category>zipcpu</category>
         
       </item>
     
