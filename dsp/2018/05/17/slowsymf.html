@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>A Slow but Symmetric FIR Filter Implementation</title>
+  <meta name="description" content="It’s been some time since we’ve discussed digital filtering on theZipCPU blog.When we last left the topic, we had several filters left to present.  Today,let...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="http://zipcpu.com/dsp/2018/05/17/slowsymf.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="http://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="http://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">A Slow but Symmetric FIR Filter Implementation</h1>
+    <p class="post-meta"><time datetime="2018-05-17T00:00:00-04:00" itemprop="datePublished">May 17, 2018</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>It’s been some time since we’ve discussed digital filtering on the
+ZipCPU blog.
+When we last left the topic, we had several filters left to present.  Today,
+let’s pick up the
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric or linear phase</a>
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>,
+and demonstrate a block RAM
+based implementation of it.  I’ll call this a <em>slow filter</em>, similar to our
+last <a href="/dsp/2017/12/30/slowfil.html">slow filter</a>,
+simply because
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this filter</a>
+won’t be able to handle a new sample every clock
+tick.  Instead, what makes
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this filter</a>
+special is that it only requires one dedicated hardware multiply.  Better
+yet, as with the <a href="/dsp/2017/12/30/slowfil.html">last
+slow filter</a>
+implementation, making
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this filter</a>
+adjustable won’t require a lot of resources.  Unlike the
+<a href="/dsp/2017/12/30/slowfil.html">last filter</a>,
+though,
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this one</a>
+will offer nearly twice the performance for nearly the same amount of
+resources.</p>
+
+<p>Interested yet?</p>
+
+<p>But we’ll come back to this in a moment to catch up some of our readers who
+may be starting in the middle of this discussion.  Basically, we’ve been
+slowly working through hardware implementations of all of the basic
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+filtering types.  We’ve already laid a lot of ground work, ground work you
+might wish to review should you find yourself coming in the middle of this
+discussion.</p>
+
+<ul>
+  <li>
+    <p>Our <a href="/dsp/2017/09/15/fastfir.html">first post</a> on the
+topic outlined what a digital filter was, and how a filter could be built that
+operated at the full clock rate of an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.
+This initial post was quickly followed by an <a href="/dsp/2017/09/29/cheaper-fast-fir.html">updated
+implementation</a> that
+used fewer
+<a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>
+while achieving the same performance.</p>
+  </li>
+  <li>
+    <p>This <a href="/dsp/2017/09/15/fastfir.html">initial filtering
+article</a>
+was followed by a <a href="/dsp/2017/11/04/genfil-tb.html">proposed
+abstraction</a>
+that could be applied to every
+filtering implementation.
+As long as any filter we built, therefore, had the I/O interface of this
+<a href="/dsp/2017/11/04/genfil-tb.html">generic filter</a>,
+we could re-use a
+<a href="/dsp/2017/11/04/genfil-tb.html">test harness</a>,
+to test multiple different filters.</p>
+
+    <p>A <a href="/dsp/2017/11/22/fltr-response.html">following article</a>
+discussed how we could use this <a href="/dsp/2017/11/04/genfil-tb.html">generic filter
+testing</a>
+approach to verify that a given filter had the
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+it was designed to have.</p>
+
+    <p>We then demonstrated how these methods could be applied to test our
+<a href="/dsp/2017/09/15/fastfir.html">generic FIR filter</a>.</p>
+  </li>
+  <li>
+    <p>Along the way, we’ve presented several different types of filters.  We
+started by discussing <a href="/dsp/2017/08/19/simple-filter.html">two of the absolute simplest
+filters</a> I know of:
+a pairwise averager and a <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/iiravg.v">recursive
+averager</a>.</p>
+  </li>
+  <li>
+    <p>We then came back later to make the pairwise averager into a more generic
+<a href="/dsp/2017/10/16/boxcar.html">moving (block) average
+filter</a>.</p>
+  </li>
+  <li>
+    <p>The last post on this topic broke the mold of a filter that accepted one
+input and produced one output on every clock tick.  Instead, that <a href="/dsp/2017/12/30/slowfil.html">post
+presented a filter</a>
+that would accept one input every <code class="highlighter-rouge">N</code> clocks, allowing the
+filter to accomplish all of its multiplies using a single hardware multiply
+alone.</p>
+
+    <p>Further, since this <a href="/dsp/2017/12/30/slowfil.html">filtering
+implementation</a>
+used block RAM to store and retrieve its coefficients, it cost much less to
+reconfigure the filter than our prior <a href="/dsp/2017/09/15/fastfir.html">generic filtering
+implementation</a>.</p>
+  </li>
+  <li>
+    <p>Since this last post, I’ve focused on interpolation for a while, by first
+proving that <a href="/dsp/2018/01/16/interpolation-is-convolution.html">interpolation <em>is</em> a
+convolution</a>,
+and then showing how that knowledge could be used to create a very useful
+<a href="/dsp/2018/03/30/quadratic.html">quadratic interpolation</a>
+method with some amazing out-of-band performance.</p>
+  </li>
+</ul>
+
+<p>In other words, it’s been some time since we’ve discussed
+filtering,
+and there remain many types of
+filters
+and filtering implementations for us still to discuss.  For example, we
+haven’t discussed
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a>
+or <a href="https://en.wikipedia.org/wiki/Half-band_filter">half-band filters</a>.
+Neither have we discussed how to implement a
+<a href="https://en.wikipedia.org/wiki/Hilbert_transform">Hilbert transform</a>.  Another
+fun filtering topic we could discuss would be how to string multiple
+filters
+together to handle the case where there may be <code class="highlighter-rouge">N</code> clocks between
+samples, but the filter has more than <code class="highlighter-rouge">N</code> coefficients.  There’s also the
+ultimate
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filter</a>:
+the one that
+filters
+an incoming sample stream to
+(just about) any arbitrary low-bandwidth for only about
+<code class="highlighter-rouge">24</code> taps–independent of the actual
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass</a>
+bandwidth.
+Then there’s the adaptive filters that are commonly used in the equalizers
+within digital communications receivers.  Finally, there’s the grandaddy filter
+of them all: the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+based
+filter.
+When implemented properly,
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+based filter is not only quite configurable, but it’s also very easy to
+reconfigure.  Seems like I could keep going for quite some time.</p>
+
+<p>All of these filtering topics would be fun to present here on
+<a href="http://zipcpu.com/">this blog</a>.
+For today, though, let’s just examine how to build a
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filter</a>
+implementation.</p>
+
+<p>To start off the discussion, consider that I recently counseled someone
+who was studying aircraft engine noise and trying build a
+filter
+that would grab only 180Hz to 6300Hz of an audio signal sampled at 44.1kHz.
+He was disappointed that his
+<a href="https://en.wikipedia.org/wiki/Butterfly_filter">Butterworth filter</a>
+design wasn’t quite meeting his need.  Given that his design only had a 3dB
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+rejection, I’m sure you can understand why not.  But let’s just consider
+this specification for a moment.</p>
+
+<p>Suppose you wanted to design a 180Hz to 6300Hz bandpass filter.  How many
+taps would you need?  Let’s say you wanted a 40Hz
+<a href="https://en.wikipedia.org/wiki/Transition_band">transition band</a>.
+You would then need 4095 taps to achieve a 65dB
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>.
+f you used the
+<a href="/dsp/2017/09/15/fastfir.html">generic filtering</a> approach,
+you would need to find an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+with 4095 multiplies on board.  While I don’t know about
+your budget, I certainly couldn’t afford an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+with that many multiplies.  On the other hand, if you used the
+<a href="/dsp/2017/12/30/slowfil.html">slow filter</a> from our
+last discussion, you would only be able to implement a
+filter
+2267 taps long.  This would leave you with the choice of either loosening your
+<a href="https://en.wikipedia.org/wiki/Transition_band">transition</a>
+bandwidth or your
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+criteria.</p>
+
+<p>On the other hand, if you could exploit the
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetry</a>
+inherent in
+<a href="https://en.wikipedia.org/wiki/Parks-McClellan_filter_design_algorithm">most</a>
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+filter designs, you’d have more than enough logic to implement your filter
+design on a cheap
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>
+board using only one hardware multiply.</p>
+
+<h2 id="background">Background</h2>
+
+<p>So, what is this
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetry</a>,
+and how shall we exploit it?  To understand that, let’s go back to the
+beginning and understand how
+<a href="/dsp/2017/09/15/fastfir.html">digital filters</a>,
+are designed.</p>
+
+<p>To design a
+filter,
+the engineer must first determine a range of frequencies
+he wants the filter to “pass” (i.e. the
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>),
+and another range of frequencies he wants the
+filter
+to “<a href="https://en.wikipedia.org/wiki/Stopband">stop</a>”.
+These two ranges tend to be disjoint, with a
+“<a href="https://en.wikipedia.org/wiki/Transition_band">transition band</a>”
+between them.  Within the
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>,
+the engineer must determine the “depth”, also known as how much attenuation
+the filter is to provide in this region.  This can also be used as a
+criteria on how much (or little) distortion is allowed within the
+<a href="https://en.wikipedia.org/wiki/Passband">passband</a>).</p>
+
+<p>All of these criteria are easily illustrated in Fig 1 below.</p>
+
+<table align="center" style="float: right"><caption>Fig 1: FIR Filter Design Criteria</caption><tr><td><img src="/img/fir-lpf-design.png" alt="Filter design regions: passband, transition band, and stop band" width="776" /></td></tr></table>
+
+<p>Given this criteria, the
+<a href="https://en.wikipedia.org/wiki/Parks-McClellan_filter_design_algorithm">Parks and McClellan algorithm</a>
+is well known for generating “optimal” filters.  <a href="https://en.wikipedia.org/wiki/Parks-McClellan_filter_design_algorithm">This filter design
+method</a>
+produces filters that come closest to the filter design specification, as
+measured by the maximum deviation from the specification.  There are two
+other realities with using this method.  First, the filters designed by it all
+have an odd number of coefficients.  Second, as designed they are all
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a> and
+<a href="https://en.wikipedia.org/wiki/Causal_filter">non-causal</a>.</p>
+
+<p>These two characteristics follow the fact that the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+is specified with <em><a href="https://en.wikipedia.org/wiki/Real_number">real</a></em>, as
+opposed to
+<a href="https://en.wikipedia.org/wiki/Complex_number">complex</a> or
+<a href="https://en.wikipedia.org/wiki/Imaginary_number">imaginary</a>, criteria.  That
+is, the desired <a href="/dsp/2017/09/15/fastfir.html">filter</a>’s
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+is expressed as a <em><a href="https://en.wikipedia.org/wiki/Real_number">real</a></em>
+function of frequency.</p>
+
+<p>Let’s think about this for a moment.  We already know that if you have a
+sampled sequence, <code class="highlighter-rouge">x[n]</code>, and apply a
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+with
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a> <code class="highlighter-rouge">h[k]</code>,
+then you will get the output y[n].</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-convolution-raw.png" alt="y[n]=SUM h[k] x[n-k]" width="254" /></td></tr></table>
+
+<table align="center" style="float: right"><caption>Fig 2: Convolution Operation</caption><tr><td><img src="/img/fir-form.svg" alt="" width="360" /></td></tr></table>
+<p>This operation is called a
+discrete <a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>, and it
+defines the operation of any
+<a href="/dsp/2017/09/15/fastfir.html">discrete-time filter</a>.
+Fig 2 shows this operation pictorially, illustrating how the <code class="highlighter-rouge">x[n]</code> elements
+can be placed into a tapped delay line, multiplied by their respective <code class="highlighter-rouge">h[k]</code>
+coefficient, and then summed together to create the output <code class="highlighter-rouge">y[n]</code>.</p>
+
+<p>Further, if you apply this operation to a complex exponential,
+such as when</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-input-sinusoid.png" alt="x[n]=e^{j 2pi fn+jtheta}" width="181" /></td></tr></table>
+
+<p>then the output of the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+<a href="/dsp/2017/11/22/fltr-response.html">is the same exponential</a>,
+having only been multiplied by a
+<a href="https://en.wikipedia.org/wiki/Complex_number">complex</a>
+value that is independent of time,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-output-sinusoid.png" alt="y[n] = e^{jtheta}e^{j2pi fn} SUM h[k] e^{-j2pi fk}" width="499" /></td></tr></table>
+
+<p>This complex multiplier is called the <em><a href="/dsp/2017/11/22/fltr-response.html">frequency
+response</a></em>
+of the filter.  It is defined by,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-fltr-response.png" alt="H(e^{j2pi f}) = SUM h[k] e^{-j2pi fk}" width="301" /></td></tr></table>
+
+<p>This is also the function we were specifying earlier in Fig 1 above.
+This should be familiar to you so far, as we have
+already <a href="/dsp/2017/11/22/fltr-response.html">discussed the importance of a filter’s frequency
+response</a>.</p>
+
+<p>Now consider what happens if we insist that this
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a> is a
+<em><a href="https://en.wikipedia.org/wiki/Real_number">real</a></em>
+function of frequency, just like we specified it above.  We’ll use <code class="highlighter-rouge">Hs</code> and <code class="highlighter-rouge">hs</code>
+to describe this constrained filter.  If this filter has a
+<em><a href="https://en.wikipedia.org/wiki/Real_number">real</a></em>,
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>,
+then the
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+function must be equal to its conjugate.  We’ll start our proof there.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-real-H.png" alt="H = H^" width="319" /></td></tr></table>
+
+<p>We can then replace <code class="highlighter-rouge">Hs</code> with its definition from above and shown in Fig 1,
+and then work the conjugate through the summation.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-conjugate-sum.png" alt="SUM h[k] e^{-j2pi fk} = SUM h[k] e^{j2pi fk}" width="367" /></td></tr></table>
+
+<p>Here, we note two things.  First, <code class="highlighter-rouge">hs[k]</code> is real and so <code class="highlighter-rouge">hs[k]</code> is also equal
+to its own conjugate.  Second, if we reverse the summation on the right via a
+variable substitution <code class="highlighter-rouge">p=-k</code>, then we have</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-psum.png" alt="SUM h[k] e^{-j2pi fk} = SUM h[-p] e^{-j2pi fp}" width="396" /></td></tr></table>
+
+<p>We’ll switch back to a summation over <code class="highlighter-rouge">k</code> for convenience of notation, although
+this “new” <code class="highlighter-rouge">k</code> value is just a dummy variable bearing no reference to the
+<code class="highlighter-rouge">k</code> three equations above.  (Yes, I did get marked off for doing this by
+<a href="https://www.afit.edu/BIOS/bio.cfm?facID=223">my instructor</a> years ago.)</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-ksum.png" alt="SUM h[k] e^{-j2pi fk} = SUM h[-k] e^{-j2pi fk}" width="397" /></td></tr></table>
+
+<p>Now reflect on the fact that this relationship must be true for all
+frequencies, <code class="highlighter-rouge">f</code>.  That can only happen if</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-real-coeff.png" alt="h[k] = h[-k]" width="169" /></td></tr></table>
+
+<p>for all <code class="highlighter-rouge">k</code>.  In other words, any filter with a
+<em><a href="https://en.wikipedia.org/wiki/Real_number">real</a></em>
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>,
+such as those designed from a
+<em><a href="https://en.wikipedia.org/wiki/Real_number">real</a></em>
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+criteria, will always be <a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a>
+about the time axis, <code class="highlighter-rouge">k</code>.</p>
+
+<p>Of course, this isn’t very useful to us, since any
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+having non-zero values of <code class="highlighter-rouge">h[k]</code> for <code class="highlighter-rouge">k&lt;0</code> is
+<a href="https://en.wikipedia.org/wiki/Causal_filter">non-causal</a> and as such
+cannot be implemented: it depends upon the knowledge of <em>future</em> values of
+<code class="highlighter-rouge">x[n]</code>.  The easy way to deal with this problem is to take the
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a>
+filter we just designed, and shift it so that it’s first non-zero coefficient
+is <code class="highlighter-rouge">h[0]</code>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-shiftfil.png" alt="h[k] = hs[k-(N-1)/2]" width="204" /></td></tr></table>
+
+<p>Hence, we now have a filter with <code class="highlighter-rouge">N</code> non-zero coefficients, and where</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-new-symmetry.png" alt="h[k] = h[N-1-k]" width="219" /></td></tr></table>
+
+<p>This does nothing more than delay the operation of <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">our
+filter</a>
+in time–something the designer may not care about.</p>
+
+<p>If you evaluate the
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+of this adjusted
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>,
+you’ll find its
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+to be related to our earlier
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>,
+by a <a href="https://en.wikipedia.org/wiki/Linear_phase">linear phase</a> term.</p>
+
+<!-- H(e^{j2pi f}) = SUM h[k-N-1/2]e^{-j 2pi fk}
+H(e^{j2pi f}) = SUM h[k]e^{-j 2pi f(k+(N-1)/2)} -->
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-linear-phase.png" alt="H(e^{j2pi f}) = e^{-j pi fN }SUM h[k]e^{-j 2pi fk}" width="378" /></td></tr></table>
+
+<p>The difference between the
+<a href="/dsp/2017/11/22/fltr-response.html">frequency response</a>
+of the two
+<a href="/dsp/2017/09/15/fastfir.html">filters</a>,
+the one symmetric about zero and the
+offset but now <a href="https://en.wikipedia.org/wiki/Causal_filter">causal</a>
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>,
+is a phase term that is linear in frequency.  For this reason,
+<a href="/dsp/2017/09/15/fastfir.html">filters</a>
+of this type are often called
+<em><a href="https://en.wikipedia.org/wiki/Linear_phase">linear phase</a></em>
+<a href="/dsp/2017/09/15/fastfir.html">filters</a>.</p>
+
+<p>But let’s go back a step, did you catch how this affects how we might
+implement <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this
+filter</a>?  If
+the <a href="/dsp/2017/09/15/fastfir.html">filter</a>
+remains <a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a> such that,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-new-symmetry.png" alt="h[k] = h[N-1-k]" width="219" /></td></tr></table>
+
+<p>then we can rewrite our <a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+so it uses fewer multiplies.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-symfil-implementation.png" alt="y[n] = SUM h[k] ( x[n-k] + x[n+k-(N-1)] ) + h[M]x[n-M]" width="683" /></td></tr></table>
+
+<table align="center" style="float: right"><caption>Fig 3: Convolution Operation Exploiting Coefficient Symmetry</caption><tr><td><img src="/img/fir-symfil-form.svg" alt="" width="360" /></td></tr></table>
+<p>This is a big deal!  It’s a big deal because we now have half as many
+multiplies as we had before!  We can even scale <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">our
+filter</a>
+such that the middle point of
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">the filter</a>,
+<code class="highlighter-rouge">h[M]</code>, has some sort of “simple”
+value like <code class="highlighter-rouge">(2^K)-1</code> for a <code class="highlighter-rouge">K+1</code> bit word size, for one fewer multiply.
+Put together, we’ve just about doubled the capability of any
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+we might wish to implement for only a minimal cost in additional logic.</p>
+
+<p>You can see how this affects our operation in Fig 3.  Notice how the tapped
+delay line containing the incoming signal is now folded in half.  Further,
+before the multiply, there’s an addition where we add the pairs of signal data
+points together before multiplying by the common filter coefficient.  You
+might also notice the single value on the right.  This represents
+the coefficient in the middle–the one we’ll multiply by a constant value.</p>
+
+<p>Now compare Fig 3 to Fig 2 and count the multiplies.  See the difference?
+Instead of <code class="highlighter-rouge">N</code> multiplies, there are now <code class="highlighter-rouge">(N-1)/2</code>, or nearly half as many
+as we had before.  See the difference?</p>
+
+<p>Now let’s take a look at how we might optimize our filter’s implementation
+to take advantage of this property.</p>
+
+<h2 id="c-implementation">C++ Implementation</h2>
+
+<p>Although this is an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a> focused
+blog, sometimes it helps to consider an algorithm in a higher level language
+to understand it.  So let’s spend a moment and review the C++ code describing
+our <a href="/dsp/2017/12/30/slowfil.html">last implementation</a>, and
+then show how this would change to exploit the
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetry</a>
+inherent in most
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+filters.</p>
+
+<p>As we <a href="/dsp/2017/12/30/slowfil.html">presented it before</a>,
+the <a href="/dsp/2017/12/30/slowfil.html">slow filter</a>
+C++ code worked by first adding a new data sample to a circular buffer.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="kt">double</span>	<span class="n">FIR</span><span class="o">::</span><span class="n">apply</span><span class="p">(</span><span class="kt">double</span> <span class="n">dat</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">int</span>		<span class="n">i</span><span class="p">,</span> <span class="n">ln</span><span class="p">;</span>
+	<span class="kt">double</span>	<span class="n">acc</span><span class="p">,</span> <span class="o">*</span><span class="n">d</span><span class="p">,</span> <span class="o">*</span><span class="n">t</span><span class="p">;</span>
+
+	<span class="n">m_data</span><span class="p">[</span><span class="n">m_loc</span><span class="o">++</span><span class="p">]</span> <span class="o">=</span> <span class="n">dat</span><span class="p">;</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">m_loc</span> <span class="o">&gt;=</span> <span class="n">m_len</span><span class="p">)</span>
+		<span class="n">m_loc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Then the filtering algorithm stepped through each
+filter
+coefficient, multiplying it by a corresponding data sample.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">acc</span> <span class="o">=</span> <span class="mf">0.0</span><span class="p">;</span>
+	<span class="n">d</span>   <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="n">m_loc</span><span class="p">];</span>
+	<span class="n">t</span>   <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_taps</span><span class="p">[</span><span class="n">m_len</span><span class="o">-</span><span class="mi">1</span><span class="p">];</span>
+	<span class="n">ln</span>  <span class="o">=</span> <span class="n">m_len</span> <span class="o">-</span> <span class="n">m_loc</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">acc</span> <span class="o">+=</span> <span class="o">*</span><span class="n">t</span><span class="o">--</span> <span class="o">*</span> <span class="o">*</span><span class="n">d</span><span class="o">++</span><span class="p">;</span></code></pre></figure>
+
+<p>The algorithm was made just a touch confusing by the fact that the data
+is kept in a circular buffer.  As a result, the relevant data might cross
+the boundary of the circular buffer, from the right half to the left.
+If you split the loop into two parts, you can avoid checking for the
+buffer split within the loop itself.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">d</span>   <span class="o">=</span> <span class="n">m_data</span><span class="p">;</span>
+	<span class="n">ln</span>  <span class="o">=</span> <span class="n">m_loc</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">acc</span> <span class="o">+=</span> <span class="o">*</span><span class="n">t</span><span class="o">--</span> <span class="o">*</span> <span class="o">*</span><span class="n">d</span><span class="o">++</span><span class="p">;</span></code></pre></figure>
+
+<p>Finally, the algorithm ended by returning the accumulated sum of products.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>That’s the basic filtering algorithm that you can apply to implement any
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>.  (Remember, for
+<a href="/dsp/2017/09/15/fastfir.html">filters</a>
+longer than about 64-taps or so,
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+methods are faster/better/cheaper in software than the direct form presented
+above.)</p>
+
+<p>Now, how would we modify this algorithm to create an implementation that
+would exploit the <a href="https://en.wikipedia.org/wiki/Linear_phase">symmetry</a>
+within our <a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+coefficients?</p>
+
+<p>We’d start out exactly as before, by adding the new data sample to our
+input sample memory.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="kt">double</span>	<span class="n">SYMFIR</span><span class="o">::</span><span class="n">apply</span><span class="p">(</span><span class="kt">double</span> <span class="n">dat</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">int</span>		<span class="n">i</span><span class="p">,</span> <span class="n">ln</span><span class="p">;</span>
+	<span class="kt">double</span>	<span class="n">acc</span><span class="p">,</span> <span class="o">*</span><span class="n">d</span><span class="p">,</span> <span class="o">*</span><span class="n">t</span><span class="p">;</span>
+
+	<span class="n">m_data</span><span class="p">[</span><span class="n">m_loc</span><span class="o">++</span><span class="p">]</span> <span class="o">=</span> <span class="n">dat</span><span class="p">;</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">m_loc</span> <span class="o">&gt;=</span> <span class="n">m_len</span><span class="p">)</span>
+		<span class="n">m_loc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>However, that’s about as far as we can go in common with the <a href="/dsp/2017/12/30/slowfil.html">previous
+algorithm</a>.</p>
+
+<p>The next step is to calculate two pointers into the data–something we didn’t
+need to do before.  The first, <code class="highlighter-rouge">dpnew</code>,
+will be a pointer to the most recent data that we just added into our buffer,
+while the second, <code class="highlighter-rouge">dpold</code>, will point to the oldest data in our buffer.  Since
+the buffer has only as many samples within it as we have coefficients in our
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>,
+we only need to check for wrap around once.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">dpnew</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="n">m_loc</span><span class="o">-</span><span class="mi">1</span><span class="p">];</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">m_loc</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+		<span class="n">dpnew</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="n">m_len</span><span class="o">-</span><span class="mi">1</span><span class="p">];</span>
+	<span class="n">dpold</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="n">m_loc</span><span class="p">];</span></code></pre></figure>
+
+<p>We’ll also set a pointer to our coefficient memory.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">t</span> <span class="o">=</span> <span class="n">m_taps</span><span class="p">;</span></code></pre></figure>
+
+<p>At each point through the summation, we’ll read two values from our
+data memory, one older <code class="highlighter-rouge">*dpold</code> and one newer <code class="highlighter-rouge">*dpnew</code>.  We’ll then add these
+two values together, and multiply the result by the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="k">do</span> <span class="p">{</span>
+		<span class="kt">double</span>	<span class="n">presum</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="n">dpold</span><span class="o">++</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="o">*</span><span class="n">dpnew</span><span class="o">--</span><span class="p">);</span>
+		<span class="n">acc</span> <span class="o">+=</span> <span class="o">*</span><span class="n">t</span><span class="o">--</span> <span class="o">*</span> <span class="n">presum</span><span class="p">;</span></code></pre></figure>
+
+<p>So far this is all very straight forward.</p>
+
+<p>Where this C++ version gets difficult is when we try to handle pointer
+wrapping in our circular buffer.  Unlike before, when we only had one pointer
+to check, we now
+have two pointers that might wrap as we work our way through memory.  Rather
+than work through the math of separating this loop into three parts,
+I’ll just add a wrap check inside the loop.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="k">if</span> <span class="p">(</span><span class="n">dpold</span> <span class="o">&gt;</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="n">m_len</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+			<span class="n">dpold</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">dpnew</span> <span class="o">&lt;</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+			<span class="n">dpold</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">m_data</span><span class="p">[</span><span class="n">m_len</span><span class="o">-</span><span class="mi">1</span><span class="p">];</span>
+	<span class="p">}</span> <span class="k">while</span><span class="p">(</span><span class="n">dpold</span> <span class="o">!=</span> <span class="n">dpnew</span><span class="p">);</span></code></pre></figure>
+
+<p>This loop will end before we get to the multiply in the middle of the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>.
+So, let’s handle it now and then return our result.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">acc</span> <span class="o">+=</span> <span class="p">(</span><span class="o">*</span><span class="n">t</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="o">*</span><span class="n">dpold</span><span class="p">)</span>
+	<span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>For those who might ask, yes, I do like redundant parentheses.
+That’s really beside the point, however.</p>
+
+<p>The point here is that for an <code class="highlighter-rouge">N</code> point
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>,
+where <code class="highlighter-rouge">N</code> is odd, we’ve just calculated the result using only
+<code class="highlighter-rouge">1+(N-1)/2</code> multiplies, instead of the <code class="highlighter-rouge">N</code> multiplies it would have cost us
+before.</p>
+
+<p>This is the basic algorithm we’ll code up in Verilog in the next section.
+However, in Verilog we’ll use a memory in a circular addressing configuration.
+That way we don’t have to worry (much) about wrapping the pointers around.
+We will, however, need to worry about timing and pipeline scheduling.</p>
+
+<h2 id="verilog-outline">Verilog Outline</h2>
+
+<p>When we first built our
+<a href="/dsp/2017/12/30/slowfil.html">slow filter implementation</a>,
+we used Fig 4 to illustrate how
+<a href="/dsp/2017/12/30/slowfil.html">this filter</a> worked.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. A Time Multiplexed filter implementation</caption><tr><td><img src="/img/fir-slow-form.svg" alt="" width="480" /></td></tr></table>
+
+<p>This diagram shows data coming in from the left, and going through two tapped
+delay lines.  A selector then walks through each of the samples in the
+tapped delay line picking a data value.  At the same time, a separate selector
+picks a value from the
+<a href="/dsp/2017/12/30/slowfil.html">filter</a>’s
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+coefficients.  These two values are shown multiplied together, accumulated,
+and then output.</p>
+
+<p>To build this
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filter</a>,
+we’re going to first break the tapped
+delay line structure into three parts, as shown in Fig 3.</p>
+
+<table align="center" style="float: none"><caption>Fig 5. Breaking the data tapped delay line into three pieces</caption><tr><td><img src="/img/slowsymf-data.svg" alt="" width="480" /></td></tr></table>
+
+<p>The parts on the left and right will be implemented by block RAMs, and
+data will appear to “move” through the RAMs by just adjusting the indices
+used.  The data point in the middle is point of symmetry for the filter.
+This point will not reside within either of the block RAMs.  Instead, we’ll
+make this the last item read from the left block RAM, and place this item
+into the second block RAM on any new sample.</p>
+
+<p>When a sample is provided, all the data will shift right by one.  That will
+be our first step.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_ce)
+		dwidx &lt;= dwidx + 1'b1;</code></pre></figure>
+
+<p>Using this index we’ll write the new sample to the left data memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_ce)
+		dmem1[dwidx] &lt;= i_sample;</code></pre></figure>
+
+<p>We’ll read the mid-point sample from the last value read from this memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_reset)
+		mid_sample &lt;= 0;
+	else if (i_ce)
+		mid_sample &lt;= dleft;</code></pre></figure>
+
+<p>Finally, we’ll write that mid-point sample to the right half of memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_ce)
+		dmem2[dwidx] &lt;= mid_sample;</code></pre></figure>
+
+<p>Notice that we are using the same write index for both halves of memory.
+We’ll have to deal with this a bit in our next step, since we are writing
+to the newest memory on the left, and half way through the memory on the right.</p>
+
+<p>That will handle data movement, what about reading the data?</p>
+
+<p>To read the data, we’ll set two data pointers–one to each block RAM–when any
+new sample comes in.  These will initially
+point to the extreme locations in the memory, both the oldest and the most
+recent.  These pointers will then walk, in unison, towards the center data
+point, as shown in Fig 5 above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_ce)
+	begin
+		lidx &lt;= dwidx; // Newest value
+		ridx &lt;= dwidx-(HALFTAPS[LGNMEM-1:0])+1;
+	end else if (not_done_yet)
+	begin
+		lidx &lt;= lidx - 1'b1;
+		ridx &lt;= ridx + 1'b1;
+	end</code></pre></figure>
+
+<p>The next steps with the data are fairly straight forward.  There’s not much
+magic in them.  First we’ll read the data,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+begin
+	dleft  &lt;= dmem1[lidx];	// Left memory
+	dright &lt;= dmem2[ridx];	// Right memory</code></pre></figure>
+
+<p>then add the two values together,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	dsum &lt;= dleft + dright;</code></pre></figure>
+
+<p>then multiply them by the filter coefficient,
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	product &lt;= dsum * tap;</code></pre></figure>
+
+<p>and add the result to an accumulator.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	acc &lt;= acc + product;
+end</code></pre></figure>
+
+<p>You may notice that we didn’t clear the accumulator, <code class="highlighter-rouge">acc</code>.  We’ll have to
+come back to that.  You may also notice we skipped some steps along the way,
+although this is the basic algorithm.  So, let’s go back a bit.</p>
+
+<p>We’re going to need to read the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient before we use it.  This will involve resetting the index
+to the beginning of the coefficient memory,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_ce)
+begin
+	tidx &lt;= 0;	// Filter coefficient index</code></pre></figure>
+
+<p>and then reading the next
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient on every clock subsequent clock until we’re done.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">end else begin
+	tidx &lt;= tidx + 1'b1;
+	tap &lt;= cmem[tidx];	// Filter coefficient index
+end</code></pre></figure>
+
+<p>At this point, our algorithm roughly looks like Fig 6 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 6. The symmetric slow filter's block diagram</caption><tr><td><img src="/img/slowsymf-blockd.svg" alt="" width="480" /></td></tr></table>
+
+<p>We read from each data block in opposite directions and added the two
+values together.  We also read from our coefficient memory, and then multiplied
+the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient by the data sum.  Finally, we accumulated the products
+together to create an output.</p>
+
+<p>We’re still missing a couple items, though.  For example, we need to
+multiply our mid-point by some value.  Let’s
+fix that value to be <code class="highlighter-rouge">2^(M-1)-1</code>, also known as the maximum positive integer
+that can be represented in <code class="highlighter-rouge">M</code> signed bits.  This works because this sample
+value is usually (always?) the largest value in the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">always @(posedge i_clk)
+if (i_reset)
+	midprod &lt;= 0;
+else if (m_ce)
+	midprod &lt;= (mid_sample &lt;&lt; (TW-1)) - mid_sample;</code></pre></figure>
+
+<p>At least, that’s the basic idea of how we <em>want</em> the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a> to work.
+Sadly, this simplistic approach to the algorithm is going to give us some
+headaches when we actually attempt to implement it in the next section.
+Why?  Although we have a conceptual idea of what we wish to accomplish,
+the devil in this case lies in the details of how we handle the
+pipeline scheduling.</p>
+
+<h2 id="verilog-implementation">Verilog Implementation</h2>
+
+<p>When I first set out to implement
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this filter</a>,
+I thought I might just quickly modify the <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">generic slow
+filter</a>
+I had <a href="/dsp/2017/12/30/slowfil.html">presented earlier</a>.
+This is basically what I just presented above in the last section.
+I’m mean, all that’s required is two memory reads, a sum and then
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">the filter</a>
+is identical to what it was
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">before</a>.
+It’s that simple, right?</p>
+
+<p>No.  It isn’t.</p>
+
+<p>As a measure of difficulty, consider this:
+I’ve gotten to the point where implementing a basic
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a>
+component like this has become fairly easy and routine.  I therefore gave
+myself two days to do the task, and even then I didn’t work on it full time
+for both days.  Much to my surprise, I almost didn’t finish the task within
+the two days I’d given to myself.</p>
+
+<p>Why not?</p>
+
+<p>It wasn’t that the filter was really all that hard to implement,
+but rather the problem was scheduling the pipeline.
+To understand this, let’s work from the fixed points in the schedule.</p>
+
+<p>The first fixed points are the memory reads.  In order to make
+certain the design tools place the data and
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficients into block RAM,
+they can only be accessed in the simplest of ways.  Specifically, each
+RAM must takes one clock cycle to read where you do nothing else with the
+value read.  Yet moving the time the data were valid from the clock in the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">slow filter</a>,
+to the next (i.e. following the summation) made for all kinds of havoc within
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">my design</a>.</p>
+
+<p>In a humble admission, I’ll admit that I almost pulled out the
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+to <a href="/blog/2017/10/19/formal-intro.html">formally verify</a>
+the design after I struggled so hard getting this to work within the
+<a href="/dsp/2017/11/04/genfil-tb.html">test bench</a>.  It seems
+I’ve gotten hooked on how easy it is to get a design to work using
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>.
+(Yes, it is possible to <a href="/blog/2017/10/19/formal-intro.html">formally
+verify</a>
+a digital <a href="/dsp/2017/09/15/fastfir.html">filter</a> using
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>.  The
+problem is that the multiply makes the application of
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+difficult.  I’ll leave this concept for another day, though, specifically
+for some time after I discuss the concept of abstraction.)</p>
+
+<p>In the end, in order to get the <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">following
+design</a>
+to work I had to work through the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">design</a>
+and its <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowsymf_tb.cpp">test
+bench</a>
+one clock at a time, verifying every value along the way until all of a
+sudden
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">the design</a>
+passed.  While I was successful, I do have to admit that my success took more
+work than I expected.  Shall we just say my performance at the task just
+wasn’t as graceful as I might have liked?</p>
+
+<p>The key to the success of
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this design</a>
+lies in the pipeline schedule.  So,
+as I was building this algorithm, I scribbled out the pipeline schedule
+diagram shown in Fig 7.</p>
+
+<table align="center" style="float: none"><caption>Fig 7. Initial Pipeline Schedule</caption><tr><td><img src="/img/slowsymf-schedule.svg" alt="" width="720" /></td></tr></table>
+
+<p>If you remember from our prior discussions of these charts, values are
+shown in the column in which they are valid.  Hence <code class="highlighter-rouge">i_ce</code> is true on the
+first clock of our cycle.  At that same time, the sample value, <code class="highlighter-rouge">i_sample</code>,
+the data write index (<code class="highlighter-rouge">dwidx</code>), mid-point sample from the last time through
+(<code class="highlighter-rouge">mid_sample</code>), and the final data value from the left block RAM (<code class="highlighter-rouge">dleft</code>)
+are also valid.  On the next clock to the right, the data values may now
+be read from memory, hence <code class="highlighter-rouge">dmem1[dwidx]</code> is valid and so forth.  On this
+clock also I’ll raise an <code class="highlighter-rouge">m_ce</code> signaling flag so I know where I am in
+this portion of the pipeline.</p>
+
+<p>I’ve taken the time to show particular anchor points to this diagram in
+red.  These are the points we worked out above in the last section.  They are
+immovable in the pipeline.  Hence, following the <code class="highlighter-rouge">m_ce</code> (memory valid) cycle
+there’s a data valid cycle where <code class="highlighter-rouge">d_ce</code> is high.  This will be the first of
+many such cycles.  This is followed by a summation cycle, <code class="highlighter-rouge">s_ce</code>, when the
+first data sum is true.  This is then followed by a product cycle, <code class="highlighter-rouge">p_ce</code>,
+when the first data product is true and so on.</p>
+
+<p>Shown in black are the lines I struggled to get right.  In particular, the
+first <a href="/dsp/2017/09/15/fastfir.html">filter</a> coefficient
+value doesn’t have to be valid until <code class="highlighter-rouge">s_ce</code> clock.
+That means its index must be valid the clock prior and <em>not</em> the clock
+prior to that.  This one little difference marked the root of my problems.</p>
+
+<p>But let’s get to these difficulties in order.</p>
+
+<p>The first order of business is to allow the user to update the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>’s
+coefficients.  This is almost the same exact code as we
+<a href="/dsp/2017/12/30/slowfil.html">discussed earlier</a>,
+so it really doesn’t need much comment.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	generate if (FIXED_TAPS)
+	begin : SET_FIXED_TAPS
+
+		initial $readmemh(INITIAL_COEFFS, tapmem);
+
+	end else begin : DYNAMIC_TAP_ADJUSTMENT
+		// Coef memory write index
+		reg	[(LGNMEM-1):0]	tapwidx;
+
+		initial	tapwidx = 0;
+		always @(posedge i_clk)
+			if(i_reset)
+				tapwidx &lt;= 0;
+			else if (i_tap_wr)
+				tapwidx &lt;= tapwidx + 1'b1;
+
+		if (INITIAL_COEFFS != 0)
+			initial $readmemh(INITIAL_COEFFS, tapmem);
+		always @(posedge i_clk)
+			if (i_tap_wr)
+				tapmem[tapwidx] &lt;= i_tap;
+	end endgenerate</code></pre></figure>
+
+<p>The next order of business is to move our data pipeline.  This happens any
+time a new sample is sent to
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">the filter</a>,
+as indicated by <code class="highlighter-rouge">i_ce</code> being high.</p>
+
+<p>As you may recall, the <a href="/blog/2017/08/14/strategies-for-pipelining.html">global pipeline
+strategy</a>
+works quite well for digital
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>.
+Within this design, however, we’ll be using a <a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling
+CE</a>
+approach as you saw in Fig 7 above.</p>
+
+<p>As part of this new sample routine, we’ll increment a data write index
+on every new sample.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	dwidx = 0;
+	always @(posedge i_clk)
+	if (i_ce)
+		dwidx &lt;= dwidx + 1'b1;</code></pre></figure>
+
+<p>There is no reset on this index, despite the initial value.  This lack of a
+reset allows
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">the filter</a>
+to be cleared and flushed by holding the <code class="highlighter-rouge">i_reset</code>
+and <code class="highlighter-rouge">i_ce</code> lines high, while also forcing <code class="highlighter-rouge">i_sample</code> to be zero for as
+many clock cycles as
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">the filter</a>
+has taps.</p>
+
+<p>We’ll also write our new sample to the first memory bank,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_ce)
+		dmem1[dwidx] &lt;= i_sample;</code></pre></figure>
+
+<p>our midpoint sample to the second memory bank,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_ce)
+		dmem2[dwidx] &lt;= mid_sample;</code></pre></figure>
+
+<p>and we’ll set our midpoint sample to be the last sample read from the first
+memory bank, or <code class="highlighter-rouge">dleft</code> as I’m going to call it with reference to either
+of Figs 5 or 6 above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_reset)
+		mid_sample &lt;= 0;
+	else if (i_ce)
+		mid_sample &lt;= dleft;</code></pre></figure>
+
+<p>Since <code class="highlighter-rouge">mid_sample</code> doesn’t need to be constrained to ultra-simple memory
+logic, it can be sensitive to the reset.  This will halve the number of
+clock cycles it will take to clear
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this filter</a>
+during a reset, since these zeros will then feed the second half of memory.</p>
+
+<p>The next signal, <code class="highlighter-rouge">pre_acc_ce</code>, is the one we are going to use to control
+whether or not to accumulate a new product into our accumulator.  This is
+the control value that will also keep us from accumulating past the last
+valid coefficient in
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">our filter</a>.
+For this reason, we start out by counting how many coefficients are remaining.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	taps_left = (NTAPS[LGNTAPS-1:1]-tidx);
+	assign	last_tap_index = (taps_left &lt;= 1);</code></pre></figure>
+
+<p>We’ll also calculate a flag to tell us whether or not we are at the last
+data index.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	last_data_index= (NTAPS[LGNTAPS-1:1]-tidx &lt;= 2);</code></pre></figure>
+
+<p>Both of these values are referenced to the pipeline cycle where the index
+is valid.  What that means, though, is that this measurement needs to be
+propagated to through the pipeline.  This is the purpose of <code class="highlighter-rouge">pre_acc_ce</code>,
+the “pre” calculation of whether the accumulator should be updated.
+On any new data, <code class="highlighter-rouge">pre_acc_ce[0]</code> gets set to <code class="highlighter-rouge">1'b1</code>.  This starts the beginning
+of the accumulator pipeline.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	pre_acc_ce = 4'h0;
+	always @(posedge i_clk)
+	if (i_reset)
+		pre_acc_ce[0] &lt;= 1'b0;
+	else if (i_ce)
+		pre_acc_ce[0] &lt;= 1'b1;</code></pre></figure>
+
+<p>It then stays at one until the index for the last coefficient.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	else if ((pre_acc_ce[0])&amp;&amp;(!last_tap_index))
+		pre_acc_ce[0] &lt;= 1'b1;</code></pre></figure>
+
+<p>Here we get to one of the surprises of the algorithm.  Because the coefficient
+index and the data index are off by one cycle, this <code class="highlighter-rouge">last_tap_index</code> value
+isn’t a sufficient indicator of when to turn the <code class="highlighter-rouge">pre_acc_ce</code> value off.
+Instead, we’ll turn it off as long as we aren’t starting around again on
+the next incoming sample.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	else if (!m_ce)
+		pre_acc_ce[0] &lt;= 1'b0;</code></pre></figure>
+
+<p>This <code class="highlighter-rouge">pre_acc_ce</code> value now needs to be propagated through our pipeline.
+We’ll use a simple shift register structure for this purpose.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if (i_reset)
+		pre_acc_ce[3:1] &lt;= 3'b0;
+	else
+		pre_acc_ce[3:1] &lt;= { pre_acc_ce[2:1],
+			((m_ce)||((pre_acc_ce[0])&amp;&amp;(!last_tap_index))) };
+	// Where ...
+	// pre_acc_ce[0] means the data index is valid
+	// pre_acc_ce[1] means the data values are valid, tap index is valid
+	// pre_acc_ce[2] means the data sum and tap value are valid
+	// pre_acc_ce[3] means that the product is valid</code></pre></figure>
+
+<p>We can now interpret <code class="highlighter-rouge">pre_acc_ce</code> as follows.  If <code class="highlighter-rouge">pre_acc_ce[0]</code> is true,
+the data <em>index</em> is valid.  If <code class="highlighter-rouge">pre_acc_ce[1]</code> is true, the data <em>values</em> are
+valid.  If <code class="highlighter-rouge">pre_acc_ce[2]</code> is true, the sum is valid and if <code class="highlighter-rouge">pre_acc_ce[3]</code>
+is true then the product is valid and may be accumulated.</p>
+
+<p>You’ll see how this works more in a moment.</p>
+
+<p>We’ll next focus on the data read indices.  These will continue to follow the
+left and right convention from Figs 5 and 6 above.  Hence we’ll have a left
+index, <code class="highlighter-rouge">lidx</code>, and a right index <code class="highlighter-rouge">ridx</code>.  On any reset, these are set to zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	lidx = 0;
+	initial	ridx = 0;
+	always @(posedge i_clk)
+	if (i_reset)
+	begin
+		lidx &lt;= 0;
+		ridx &lt;= 0;</code></pre></figure>
+
+<p>Then, on any new sample, the left data index, <code class="highlighter-rouge">lidx</code> is set to point to the
+newest value just written to memory.  The right half data index is a touch
+more complicated–and took me many trials to get right.  This index is
+given by back tracking from the newest value by half our
+<a href="/dsp/2017/09/15/fastfir.html">filter</a> length.  This
+would’ve been the entire size of the second memory, save that we are forcing the
+memory to have a power of two size, while the <code class="highlighter-rouge">NTAPS</code> can be any arbitrary
+odd number.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	end else if (i_ce)
+	begin
+		lidx &lt;= dwidx; // Newest value
+		ridx &lt;= dwidx-(HALFTAPS[LGNMEM-1:0])+1;</code></pre></figure>
+
+<p>As a last step, we’ll step the indices as long as this isn’t the last
+data index.  The left index steps backwards from the newest value to older
+values, while the right index steps forwards from the oldest index to the
+newer index.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	end else if ((m_ce)||(!last_data_index))
+	begin
+		lidx &lt;= lidx - 1'b1;
+		ridx &lt;= ridx + 1'b1;
+	end</code></pre></figure>
+
+<p>Keep in mind, the <code class="highlighter-rouge">last_data_index</code> criteria here is <em>key</em>.  In particular,
+we are about to read the left data value, <code class="highlighter-rouge">dleft</code>, from the left memory
+based upon this index.  This will turn into the mid point value on the
+next sample.  For this reason, the indices cannot be allowed to just free
+run.</p>
+
+<p>The second remarkable piece of this logic is the <code class="highlighter-rouge">m_ce</code> criteria.  Our
+<code class="highlighter-rouge">last_data_index</code> flag depends upon the cofficient index, not the data index.
+This coefficient index isn’t (yet) valid on the <code class="highlighter-rouge">m_ce</code> cycle.  Hence, we need
+to continue to walk the index forward even before the first tap index is
+valid.  (Yes, this was one of the details that surprised me as I built this.)</p>
+
+<p>A very similar piece of logic is used to determine the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient index.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	tidx = 0;
+	always @(posedge i_clk)
+	if (i_reset)
+		tidx &lt;= 0;
+	else if (m_ce)
+		tidx &lt;= 0;
+	else if (!last_tap_index)
+		tidx &lt;= tidx + 1'b1;</code></pre></figure>
+
+<p>While it might look like we might just let this value run as well, keep
+in mind that we are using the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient index as an indicator of when to stop accumulating.  For this
+reason, this index also stops at the end of the coefficient memory.</p>
+
+<p>That’s the data and coefficient index calculation.  Let’s move on to the
+memory read cycle(s).  We’ll mark this cycle with an <code class="highlighter-rouge">m_ce</code> flag, as shown
+in our pipeline schedule in Fig 7 above, indicating that this is the first
+cycle the memory data is valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	m_ce = 1'b0;
+	always @(posedge i_clk)
+		m_ce &lt;= (i_ce)&amp;&amp;(!i_reset);</code></pre></figure>
+
+<p>On this cycle we’ll read from the two block RAMs of data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	dleft  = 0;
+	initial	dright = 0;
+	always @(posedge i_clk)
+	begin
+		dleft  &lt;= dmem1[lidx];
+		dright &lt;= dmem2[ridx];
+	end</code></pre></figure>
+
+<p>Following the outline in Fig 7, the next pipeline cycle and flag is the
+data valid cycle, <code class="highlighter-rouge">d_ce</code>.  This follows the <code class="highlighter-rouge">m_ce</code>
+flag, and like it this is only valid for one clock cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	d_ce = 0;
+	always @(posedge i_clk)
+		d_ce &lt;= (m_ce)&amp;&amp;(!i_reset);</code></pre></figure>
+
+<p>Now we can read the coefficient index,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	tap = 0;
+	always @(posedge i_clk)
+		tap &lt;= tapmem[tidx[(LGNTAPS-2):0]];</code></pre></figure>
+
+<p>and add the data values together.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	dsum = 0;
+	always @(posedge i_clk)
+	if (i_reset)
+		dsum &lt;= 0;
+	else
+		dsum   &lt;= dleft + dright;</code></pre></figure>
+
+<p>We’ll use the <code class="highlighter-rouge">s_ce</code> signal to mark that the data summation is valid.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	s_ce = 0;
+	always @(posedge i_clk)
+		s_ce &lt;= (d_ce)&amp;&amp;(!i_reset);</code></pre></figure>
+
+<p>The data sum times the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+coefficient is our product value.  If this looks
+familiar, it should–this matches the <a href="/dsp/2017/12/30/slowfil.html">slow
+filter</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">code</a>, and
+was drawn from it.  This should also matches our discusion in the last section.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	product = 0;
+	always @(posedge i_clk)
+		product &lt;= tap * dsum;</code></pre></figure>
+
+<p>The <code class="highlighter-rouge">midprod</code> value is different.  <code class="highlighter-rouge">midprod</code> is the product of the mid-point
+sample, <code class="highlighter-rouge">mid_sample</code> times the maximum positive integer value that fits
+in <code class="highlighter-rouge">TW</code> bits, or <code class="highlighter-rouge">2^(TW-1)-1</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	midprod = 0;
+	always @(posedge i_clk)
+	if (i_reset)
+		midprod &lt;= 0;
+	else if (m_ce)
+		midprod &lt;= { {(OW-IW-TW+1){mid_sample[IW-1]}},
+					mid_sample, {(TW-1){1'b0}}}
+				- , mid_sample};</code></pre></figure>
+
+<p>That then leads us right into the accumulator.  There are three parts to
+this.  First, we’ll set it to zero on any reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	r_acc = 0;
+	always @(posedge i_clk)
+	if (i_reset)
+		r_acc &lt;= 0;</code></pre></figure>
+
+<p>Second, on the <code class="highlighter-rouge">s_ce</code> cycle (see Fig 7 above), we’ll initialize this
+accumulator to be our midpoint product.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	else if (s_ce)
+		r_acc &lt;= midprod;</code></pre></figure>
+
+<p>Third, on every subsequent sample with a valid product, we’ll add the
+product to our accumulator.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	else if (pre_acc_ce[3])
+		r_acc &lt;= r_acc + { {(OW-(IW+TW)){product[(IW+TW-1)]}},
+						product };</code></pre></figure>
+
+<p>Finally, on the same sample that we initialize our accumulator with the
+mid-point product, we’ll
+set our result to be the last value that had been in the accumulator.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	o_result = 0;
+	always @(posedge i_clk)
+	if (s_ce)
+		o_result &lt;= r_acc;</code></pre></figure>
+
+<p>In a similar fashion, we’ll set our output clock enable strobe, so that
+the rest of the signal processing pipeline can continue to follow the
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">global CE strategy</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	o_ce = 1'b0;
+	always @(posedge i_clk)
+		o_ce &lt;= (s_ce)&amp;&amp;(!i_reset);
+
+endmodule</code></pre></figure>
+
+<p>That’s all it takes to build a
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric filter</a>
+running <code class="highlighter-rouge">N</code> times slower than the system clock.</p>
+
+<p>Perhaps the biggest lesson learned to draw from this discussion is how
+dependent I was on the
+<a href="/blog/2017/06/21/looking-at-verilator.html">simulator</a>
+to get particular values right.
+For example, did you notice the strange logic on <code class="highlighter-rouge">pre_acc_ce</code>?  Or how about
+the fact that the <code class="highlighter-rouge">last_data_index</code> compared against two instead of zero or
+one?  Or perhaps that the <code class="highlighter-rouge">taps_left</code> calculation didn’t depend upon the
+total number of taps, but rather <code class="highlighter-rouge">(N-1)/2</code>?  (Remember, <code class="highlighter-rouge">N</code>, the number of
+coefficients, <em>must</em> be an odd number.)</p>
+
+<h2 id="test-bench-performance">Test Bench Performance</h2>
+
+<p>When it comes to building the test bench for this system, there wasn’t a lot of
+work to be done–thanks to the work we did building a generic filtering
+<a href="/dsp/2017/11/04/genfil-tb.html">test bench</a>
+some time earlier.  Even better, if you
+<a href="http://meldmerge.org">meld</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowsymf_tb.cpp">this test bench driver</a>
+against the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowfil_tb.cpp">test bench driver</a>
+for the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">slow filter</a>,</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash">meld slowfil_tb.cpp slowsymf_tb.cpp</code></pre></figure>
+
+<p>you’ll see only a very small, limited number of (key) differences.  While most
+of these are concerned with adjusting
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>
+length related parameters, there is one particular difference worth commenting
+on.  That difference is in the <code class="highlighter-rouge">testload()</code> function.</p>
+
+<p>As you may recall from our discussion of the
+<a href="/dsp/2017/11/04/genfil-tb.html">generic filtering test
+harness</a>, the <code class="highlighter-rouge">testload</code>
+method allows us to load coefficients into the
+<a href="/dsp/2017/09/15/fastfir.html">filter</a>,
+and then test the
+<a href="https://en.wikipedia.org/wiki/Impulse_response">impulse response</a>
+of the filter to insure those coefficients were loaded correctly.  In our
+case, this also gives us a chance to verify that the filter’s response is
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetric</a>
+as we had intended.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">        <span class="kt">void</span>    <span class="nf">testload</span><span class="p">(</span><span class="kt">int</span> <span class="n">nlen</span><span class="p">,</span> <span class="kt">long</span> <span class="o">*</span><span class="n">data</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// Load the given coefficients into the filter
+</span>		<span class="n">load</span><span class="p">(</span><span class="n">nlen</span><span class="p">,</span> <span class="n">data</span><span class="p">);</span>
+
+		<span class="c1">// Loop through and test each coefficient
+</span>		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="mi">2</span><span class="o">*</span><span class="n">NTAPS</span><span class="p">();</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+			<span class="kt">int</span>	<span class="n">m</span> <span class="o">=</span> <span class="p">(</span><span class="o">*</span><span class="k">this</span><span class="p">)[</span><span class="n">k</span><span class="p">];</span></code></pre></figure>
+
+<p>If the coefficient comes before the midpoint, it should match the data
+given to this function and passed to <code class="highlighter-rouge">load</code> above.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">			<span class="k">if</span> <span class="p">((</span><span class="kt">unsigned</span><span class="p">)</span><span class="n">k</span> <span class="o">&lt;</span> <span class="n">MIDP</span><span class="p">)</span>
+				<span class="n">assert</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">==</span> <span class="n">m</span><span class="p">);</span></code></pre></figure>
+
+<p>Likewise if this is the midpoint, then the coefficient should be equal to
+the fixed value, <code class="highlighter-rouge">(1&lt;&lt;(TW-1))-1</code>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">			<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">k</span> <span class="o">==</span> <span class="n">MIDP</span><span class="p">)</span>
+				<span class="n">assert</span><span class="p">(</span><span class="n">m</span> <span class="o">==</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">TW</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span></code></pre></figure>
+
+<p>On the other side of the midpoint, the coefficients should read back in
+reverse order.  In other words, here is where we check the
+<a href="https://en.wikipedia.org/wiki/Linear_phase">symmetry</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">			<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">k</span> <span class="o">&lt;</span> <span class="n">NTAPS</span><span class="p">())</span>
+				<span class="n">assert</span><span class="p">(</span><span class="n">m</span> <span class="o">==</span> <span class="n">data</span><span class="p">[</span><span class="n">NTAPS</span><span class="p">()</span><span class="o">-</span><span class="mi">1</span><span class="o">-</span><span class="n">k</span><span class="p">]);</span></code></pre></figure>
+
+<p>Finally, anything beyond the number of taps in the filter should return zero.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">			<span class="k">else</span>
+				<span class="n">assert</span><span class="p">(</span><span class="n">m</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+		<span class="p">}</span>
+        <span class="p">}</span></code></pre></figure>
+
+<p>Once this is accomplished, we can now use our <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/slowsymf_tb.cpp">test bench</a>
+<a href="/dsp/2017/11/04/genfil-tb.html">structure</a>
+to measure
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">the filter</a>’s
+performance against the
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">lowpass filter</a>
+configuration we’ve been testing against.  The result is a
+<a href="https://en.wikipedia.org/wiki/Stopband">stopband</a>
+rejection roughly between -55 and -54 dB, which is just what we were expecting.</p>
+
+<p>That’s not that bad, especially if you consider that we only used half as many
+clock cycles as the last <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">slow filter
+we studied</a>.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>This filter implementation marks one of those times where a little bit of
+engineering up front will spare you a lot of design resources later.  That’s
+why we added a touch more mathematics above to <a href="/dsp/2017/09/15/fastfir.html">what we had done
+before</a>.  Sure, our
+implementation is a touch more complicated than <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowfil.v">the last
+one</a>.  But look
+at what we gained: twice the performance!  That’s what makes <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/slowsymf.v">this filtering
+implementation</a>
+valuable.  How applicable is it?  This approach applies to all filters
+designed via the <em>optimal</em> <a href="https://en.wikipedia.org/wiki/Parks-McClellan_filter_design_algorithm">Parks and McClellan filter design
+algorithm</a>.
+In other words, this is almost a universally applicable optimization among
+<a href="https://en.wikipedia.org/wiki/Finite_impulse_response">FIR</a>
+<a href="/dsp/2017/09/15/fastfir.html">filter</a> implementations.</p>
+
+<p>As I mentioned above, we have yet to discuss many other types of filtering
+implementations.  Perhaps this simplest filter to build next would be a
+<a href="https://en.wikipedia.org/wiki/Half-band_filter">half band filter</a>.  For
+certain <a href="/dsp/2017/09/15/fastfir.html">filters</a>, a
+<a href="https://en.wikipedia.org/wiki/Half-band_filter">half band filter</a>
+implementation can be built for half again as many resources as we just used.</p>
+
+<p>We’ll have to come back again on another day, though, in order to demonstrate
+and discuss some of these other
+<a href="/dsp/2017/09/15/fastfir.html">filters</a>.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>There is one glory of the sun, and another glory of the moon, and another glory of the stars: for one star differeth from another star in glory.  (1Cor 15:41)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
