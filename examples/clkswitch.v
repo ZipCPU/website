@@ -273,15 +273,6 @@ module clkswitch(i_clk_a, i_clk_b, i_areset_n, i_sel, o_clk);
 			&&(f_a_step > (f_b_step<<1)));
 	end endgenerate
 
-	always @($global_clock)
-	if ((f_past_valid)&&($past(i_sel))&&(!a_sel))
-		assume(i_sel);
-
-	always @($global_clock)
-	if ((f_past_valid)&&(!$past(i_sel))&&(!b_sel))
-		assume(!i_sel);
-
-
 	////////////////////////////////////////////////////////////////
 	//
 	// THE CRITICAL ASSUMPTION!
@@ -292,6 +283,15 @@ module clkswitch(i_clk_a, i_clk_b, i_areset_n, i_sel, o_clk);
 	always @($global_clock)
 	if ((a_sel != aff)||(b_sel != bff))
 		assume($stable(i_sel));
+
+	always @($global_clock)
+	if ((f_past_valid)&&($past(i_sel))&&(!a_sel))
+		assume(i_sel);
+
+	always @($global_clock)
+	if ((f_past_valid)&&(!$past(i_sel))&&(!b_sel))
+		assume(!i_sel);
+
 
 	////////////////////////////////////////////////////////////////
 	//

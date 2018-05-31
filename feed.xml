@@ -6,14 +6,753 @@
 </description>
     <link>http://zipcpu.com/</link>
     <atom:link href="http://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 28 May 2018 05:30:16 -0400</pubDate>
-    <lastBuildDate>Mon, 28 May 2018 05:30:16 -0400</lastBuildDate>
+    <pubDate>Thu, 31 May 2018 11:17:01 -0400</pubDate>
+    <lastBuildDate>Thu, 31 May 2018 11:17:01 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>http://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Formally Verifying Asynchronous Components</title>
+        <description>&lt;p&gt;To date, our formal verification efforts have primarily centered around
+&lt;em&gt;synchronous&lt;/em&gt; designs using
+&lt;a href=&quot;https://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;,
+that is those designs where all logic transitions on the same clock edge,
+rather than looking at
+&lt;em&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;&lt;/em&gt;
+designs.
+The one exception so far has been the description of how to get an
+&lt;a href=&quot;/formal/2018/04/12/areset.html&quot;&gt;asynchronous reset&lt;/a&gt;
+to pass induction.  I’d like to move beyond this simple example towards
+verifying a full &lt;a href=&quot;http://www.sunburst-design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf&quot;&gt;asynchronous FIFO
+design&lt;/a&gt;,
+but that’s going to require a bit more background in how to
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verify&lt;/a&gt; an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+design in general.  Today, therefore, let’s examine how to
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verify&lt;/a&gt; an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+component that
+&lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;crosses between clock domains&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;If you aren’t familiar with
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;,
+you might wish to go back and review our
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;introductory article&lt;/a&gt;
+on the topic.  You might also find the
+&lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;induction exercise&lt;/a&gt;
+to be valuable as well.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. A Clock Switch Component&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ckswitch-blkdiag.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Today, let’s demonstrate how these same
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;
+concepts apply an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+design with two clocks within it.  In this
+case, we’ll examine a clock switch.  Such a switch takes two clock inputs
+and one line to select between them.  In our case, the two separate clocks
+makes a perfect example of how
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal methods&lt;/a&gt;
+can be applied to an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+design.&lt;/p&gt;
+
+&lt;h1 id=&quot;two-clocks&quot;&gt;Two Clocks&lt;/h1&gt;
+
+&lt;p&gt;The first and most important step is to somehow describe both clocks via
+formal properties to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Satisfiability_modulo_theories&quot;&gt;SMT solver&lt;/a&gt;.
+This step is really independent
+of anything you might wish to verify, and it applies to any
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+design.  Once you learn the simple trick involved, you’ll then notice that
+other &lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+verification proofs follow the exact same approach.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left&quot;&gt;&lt;caption&gt;Fig 2. The Master rule of Formal Verification&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/fv-master-rule.svg&quot; alt=&quot;&quot; width=&quot;240&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;p&gt;Specifically, we need to provide some assumptions to describe the two clocks
+which will be the inputs to our clock switch design.  Why assumptions?
+Because these clocks will be inputs, and the basic rule is that you should
+always make assumptions about your inputs, and assertions about your local
+state and any outputs.&lt;/p&gt;
+
+&lt;p&gt;Perhaps you may remember our earlier discussion of how to create a &lt;a href=&quot;/blog/2017/06/02/generating-timing.html&quot;&gt;fractional
+clock divider&lt;/a&gt;?
+In &lt;a href=&quot;/blog/2017/06/02/generating-timing.html&quot;&gt;that article&lt;/a&gt;,
+we used the top bit of a counter as a divided clock.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
+		counter &amp;lt;= counter + increment;
+
+	assign divided_clock = counter[MSB];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Clocks like this one that are generated from logic are often called
+&lt;em&gt;logic&lt;/em&gt; &lt;em&gt;clocks&lt;/em&gt;.  Logic clocks are distinguished from regular clocks in that
+are generated from logic within the design, rather than external hardware or
+internal
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Phase-locked_loop&quot;&gt;PLL&lt;/a&gt;s,
+and are then distributed across the design and used
+like a clock.  In general, you don’t want to transition on the positive or
+negative edge of any logic clock.  Doing so will make it
+harder to achieve timing closure, and it will add additional
+&lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;clock domain crossing&lt;/a&gt;
+requirements to your design.
+Further, if this divided clock isn’t placed on the clock network, then
+it might be seen to rise (or fall) at inconsistent times across the design.&lt;/p&gt;
+
+&lt;p&gt;All of these are “bad” hardware consequences.&lt;/p&gt;
+
+&lt;p&gt;None of these problems, however, will keep us from using the transitions of
+this divided clock as a &lt;em&gt;&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal
+constraint&lt;/a&gt;&lt;/em&gt;
+on our clock input, so that’s exactly what we are about to do.&lt;/p&gt;
+
+&lt;p&gt;We’ll start out by creating counters, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_*_count&lt;/code&gt;, and increments,
+&lt;code class=&quot;highlighter-rouge&quot;&gt;f_*_step&lt;/code&gt;, for each input clock.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	wire	[F_CKSTEP-1:0]	f_a_step,  f_b_step;
+	reg	[F_CKSTEP-1:0]	f_a_count, f_b_count;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In order to handle properties associated with any particular speed, we’ll allow
+these increments to be completely arbitrary.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	assign	f_a_step = $anyconst;
+	assign	f_b_step = $anyconst;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt; description is specific to
+&lt;a href=&quot;https://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;.
+It means that these values will have a constant value given to
+them–any value.  It’s roughly the same as having an extra unconstrained
+input to the design and then forcing it to be &lt;code class=&quot;highlighter-rouge&quot;&gt;$stable&lt;/code&gt;.  Alternatively,
+you can think of it as a register with no initial statement that doesn’t
+produce a
+&lt;a href=&quot;https://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;
+warning on synthesis.&lt;/p&gt;
+
+&lt;p&gt;However, these arbitrary constant values aren’t quite what we want yet.
+For example, any increment having a zero value would indicate a clock
+that doesn’t tick. 
+This is bad, so we’ll force the increments to be greater than zero.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+		assume(f_a_step &amp;gt; 0);
+
+	always @(*)
+		assume(f_b_step &amp;gt; 0);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In a similar fashion, we can also constrain the clocks so that the fastest
+one, whichever that one might be, takes four simulation time steps per cycle.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+		assume((f_a_step[F_CKSTEP-1:F_CKSTEP-2] == 2&#39;b01)
+			||(f_b_step[F_CKSTEP-1:F_CKSTEP-2] == 2&#39;b01));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This will help make certain that there is always a positive edge to the clock
+at least once per cycle.&lt;/p&gt;
+
+&lt;p&gt;Now that we have an increment, we just add this increment to our counters on
+every formal step–one counter per incoming clock.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	begin
+		f_a_count &amp;lt;= f_a_count + f_a_step;
+		f_b_count &amp;lt;= f_b_count + f_b_step;
+	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Let me draw your attention to the &lt;code class=&quot;highlighter-rouge&quot;&gt;$global_clock&lt;/code&gt; statement within the always
+header.  In
+&lt;a href=&quot;https://en.wikipedia.org/wiki/SystemVerilog&quot;&gt;SystemVerilog&lt;/a&gt;,
+this value needs to be declared earlier in the file
+as a positive or negative edge trigger based upon some pre-existing clock.
+&lt;a href=&quot;https://www.clifford.at/yosys&quot;&gt;Yosys&lt;/a&gt;,
+however, extends this behavior by making &lt;code class=&quot;highlighter-rouge&quot;&gt;$global_clock&lt;/code&gt; the
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;
+time step.  Every time step is now examined by the formal engine,
+not just those times described by an edge of a clock but intermediate times
+as well.  It’s for this reason that we can use &lt;code class=&quot;highlighter-rouge&quot;&gt;$global_clock&lt;/code&gt; in this
+circumstance.  Indeed, &lt;code class=&quot;highlighter-rouge&quot;&gt;$global_clock&lt;/code&gt; is one of the keys to this whole
+operation.&lt;/p&gt;
+
+&lt;p&gt;Our last formal property will be to assume that our incoming clock signals
+are identical to the most significant bits of our counters.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+		assume(i_clk_a = f_a_count[F_CKSTEP-1]);
+
+	always @(*)
+		assume(i_clk_b = f_b_count[F_CKSTEP-1]);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Simple enough?  We’ve just assumed the presence of two dissimilar clocks
+coming into our design.  We’ve also allowed them to have arbitrary phases
+and frequencies with respect to each other.&lt;/p&gt;
+
+&lt;p&gt;There is one more required piece of
+&lt;a href=&quot;https://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;,
+magic, you’ll need to add &lt;code class=&quot;highlighter-rouge&quot;&gt;clk2fflogic&lt;/code&gt; to your
+&lt;a href=&quot;https://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;
+script file.  Alternatively, if you are using
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;,
+you can instead add &lt;code class=&quot;highlighter-rouge&quot;&gt;multiclock on&lt;/code&gt; to the options section.  You can
+see an example of this
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt; &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.sby&quot;&gt;script
+here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;No more setup work is required–we’ve just formally assumed the existence of
+two separate and dissimilar clock inputs.  In the next section, we’ll examine a
+&lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock switch
+design&lt;/a&gt;
+and discuss how we might
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verify&lt;/a&gt;
+that it is glitch free.&lt;/p&gt;
+
+&lt;h1 id=&quot;a-clock-switch&quot;&gt;A Clock Switch&lt;/h1&gt;
+
+&lt;p&gt;At this point in our article, I usually present a working design that would
+use the principle under discussion and
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verify&lt;/a&gt; it.
+Sadly, I only have a couple of
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+designs to share.  I just haven’t had the need to build
+that many.  That said, neither my formal proof of
+&lt;a href=&quot;http://www.sunburst-design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf&quot;&gt;Cliff Cumming’s asynchronous
+FIFO&lt;/a&gt;
+design, nor the &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/dev/rtl/rxuartlite.v&quot;&gt;proof of my
+UART receiver&lt;/a&gt;
+would be appropriate for a beginning blog post on
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;
+despite the fact that both proofs use the techniques discussed here.&lt;/p&gt;
+
+&lt;p&gt;So let’s try something simpler.  Let’s instead examine a &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;A &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+is a design component that takes two clock inputs and a switch
+input, and produces one of the two clocks as its output dependent upon how
+the switch is set.
+It’s not something an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+designer normally needs to build, since most
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+vendor libraries provide similar components which will be known
+to work on their parts.  As an example, Xilinx offers a 
+&lt;a href=&quot;https://www.xilinx.com/support/documentation/user_guides/ug472_7Series_Clocking.pdf&quot;&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;BUFGMUX&lt;/code&gt; design element&lt;/a&gt;
+with similar capabilities.  However, for today’s purpose, 
+a &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+design makes a perfect example of an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+design which can be
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verified&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;Clock
+switches&lt;/a&gt;
+are very important parts of a failsafe designs.  A failsafe
+design can start with one clock and then switch to the second clock once it
+stabilizes.  In a similar fashion, if the second clock becomes unstable or
+otherwise unusable, then the
+&lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+should return the design to the original clock.  A third use for a &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+would be in a
+power sensitive design.  In such a power sensitive design, the clock
+might be switched between a fast and a slow clock in order to control how
+much power the design is using at any given time.&lt;/p&gt;
+
+&lt;p&gt;So, how would you build a
+&lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;?&lt;/p&gt;
+
+&lt;p&gt;A straight forward &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+design might look like,&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(*)
+	if (i_sel)
+		o_clk = i_clk_a;
+	else
+		o_clk = i_clk_b;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Sadly, this doesn’t work.  The problem is that the switch input &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sel&lt;/code&gt;
+is &lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+to at least one of the two clock domains if not both.
+The output clock period might therefore be something other than the
+period of either clock if &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sel&lt;/code&gt; changes mid clock.  Worse, the period
+could easily be shorter then the minimum pulse width of this design.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3. A Clock switching circuit&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/clock-switch.svg&quot; alt=&quot;&quot; width=&quot;560&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;A little googling turns up
+&lt;a href=&quot;https://www.eetimes.com/document.asp?doc_id=1202359&quot;&gt;a fascinating article&lt;/a&gt;
+on &lt;a href=&quot;https://www.eetimes.com&quot;&gt;EE Times&lt;/a&gt; discussing, “&lt;a href=&quot;https://www.eetimes.com/document.asp?doc_id=1202359&quot;&gt;Techniques to make clock
+switching glitch free&lt;/a&gt;.”
+In &lt;a href=&quot;https://www.eetimes.com/document.asp?doc_id=1202359&quot;&gt;the article&lt;/a&gt;,
+Mahmud provides just the logic we need.&lt;/p&gt;
+
+&lt;p&gt;According to
+&lt;a href=&quot;https://www.eetimes.com/document.asp?doc_id=1202359&quot;&gt;the article&lt;/a&gt;,
+the key piece we are missing is a pair of
+&lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;synchronizers&lt;/a&gt;.
+Since the clock select input isn’t guaranteed to be synchronous to
+either clock, it must be &lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;synchronized into each
+clock’s domain&lt;/a&gt;.  Once the
+clock select line has been split and synchronized into each respective
+clock domain, the output clock can then be synthesized by &lt;code class=&quot;highlighter-rouge&quot;&gt;and&lt;/code&gt;ing each
+leg of the clock domain with its respective enable, and &lt;code class=&quot;highlighter-rouge&quot;&gt;or&lt;/code&gt;ing the
+result together.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;assign	o_clk = ((a_sel)&amp;amp;&amp;amp;(i_clk_a))
+		||((b_sel)&amp;amp;&amp;amp;(i_clk_b));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This sounds simple enough.  Indeed, the article and the picture are so clear
+that writing out the design is quite straightforward.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;module clkswitch(i_clk_a, i_clk_b, i_areset_n, i_sel, o_clk);
+	input	wire	i_clk_a, i_clk_b;
+	input	wire	i_areset_n;
+	input	wire	i_sel;
+	output	wire	o_clk;
+
+	reg		aff, bff, a_sel, b_sel;
+
+	// First half of the synchronizer for A
+	//
+	// Set aff on the positive edge of clock A
+	initial aff = 0;
+	always @(posedge i_clk_a, negedge i_areset_n)
+	if (!i_areset_n)
+		aff = 1;
+	else
+		aff &amp;lt;= (i_sel)&amp;amp;&amp;amp;(!b_sel);
+
+	// Second half of the synchronizer for A
+	//
+	// Set a_sel based upon the negative edge of clock A
+	//
+	initial a_sel = 0;
+	always @(negedge i_clk_a, negedge i_areset_n)
+	if (!i_areset_n)
+		a_sel = 1;
+	else
+		a_sel &amp;lt;= aff;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Notice that this synchronizer uses both edges of the clock to synchronize
+on.  This would be a bad idea in an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;,
+since you have no control over how far apart the design elements are.
+However, this isn’t quite the same problem on an
+&lt;a href=&quot;/blog/2017/10/13/fpga-v-asic.html&quot;&gt;ASIC&lt;/a&gt;,
+as this design could be delivered as an internally
+routed black box.&lt;/p&gt;
+
+&lt;p&gt;The logic for B’s side is identical, save that it is based
+upon the negation of our select signal.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial bff = 0;
+	always @(posedge i_clk_b, negedge i_areset_n)
+	if (!i_areset_n)
+		bff &amp;lt;= 0;
+	else
+		bff &amp;lt;= (!i_sel)&amp;amp;&amp;amp;(!a_sel);
+
+	initial b_sel = 0;
+	always @(negedge i_clk_b, negedge i_areset_n)
+	if (!i_areset_n)
+		b_sel &amp;lt;= 0;
+	else
+		b_sel &amp;lt;= bff;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As the final step, the output clock is determined by clock &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; if
+&lt;code class=&quot;highlighter-rouge&quot;&gt;a_sel&lt;/code&gt; is ever true, and by clock &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt; if &lt;code class=&quot;highlighter-rouge&quot;&gt;b_sel&lt;/code&gt; is true.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	assign	o_clk = ((a_sel)&amp;amp;&amp;amp;(i_clk_a))
+			||((b_sel)&amp;amp;&amp;amp;(i_clk_b));
+endmodule&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This design would be bad practice within an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
+Besides transitioning on both positive and negative edges of a
+clock, we are also sourcing a clock from combinational logic.
+Both of these are big no-no’s in any
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
+design.  If you want a &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+within your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.
+design logic, use the vendor supplied black box that implements
+something approximating (or better than) the above logic.&lt;/p&gt;
+
+&lt;p&gt;Shall we see if we can
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verify&lt;/a&gt;
+whether this circuit truly works?&lt;/p&gt;
+
+&lt;h1 id=&quot;formally-verifying-the-clock-switch&quot;&gt;Formally Verifying the clock switch&lt;/h1&gt;
+
+&lt;p&gt;Our first
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;
+step is to determine what the “contract” is that
+this design needs to meet.  Specifically, we want to make certain that&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;The outgoing clock should only transition when one of the incoming clocks
+transitions.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The output clock’s high or low pulse width is no less than the width of the
+fastest clock&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;We can switch from one clock to another&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Let’s work through these one by one.  The first criteria is easy: if neither
+input clock rises, then we’ll assert that the output doesn’t rise either.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	if ((f_past_valid)&amp;amp;&amp;amp;(i_areset_n)&amp;amp;&amp;amp;(!$rose(i_clk_a))&amp;amp;&amp;amp;(!$rose(i_clk_b)))
+		assert(!$rose(o_clk));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Notice how I needed to add an exception for the
+&lt;a href=&quot;/formal/2018/04/12/areset.html&quot;&gt;asynchronous reset&lt;/a&gt;.  Hence
+this property will only hold as long as the reset line remains inactive (high).&lt;/p&gt;
+
+&lt;p&gt;Likewise, if neither input falls, then the output shouldn’t fall either.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	if ((f_past_valid)&amp;amp;&amp;amp;(i_areset_n)&amp;amp;&amp;amp;(!$fell(i_clk_a))&amp;amp;&amp;amp;(!$fell(i_clk_b)))
+		assert(!$fell(o_clk));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;If you don’t recognize the &lt;code class=&quot;highlighter-rouge&quot;&gt;f_past_valid&lt;/code&gt; signal, we’ve discussed it many
+times on this blog.  It is necessitated by the fact that on the initial time
+step, &lt;code class=&quot;highlighter-rouge&quot;&gt;$rose()&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;$fell()&lt;/code&gt;, and &lt;code class=&quot;highlighter-rouge&quot;&gt;$past()&lt;/code&gt; are not well defined.  Instead,
+we set the &lt;code class=&quot;highlighter-rouge&quot;&gt;f_past_valid&lt;/code&gt; just after that initial time step, and then start
+checking on every step thereafter.&lt;/p&gt;
+
+&lt;p&gt;The second criteria is a little harder to describe.  Indeed, our design choice
+to use a fractional clock makes this more difficult.  Because we are
+looking at the most significant bit of a counter, it’s not immediately
+apparent how long each clock should be high.  Without a divide operator
+to tell us how long we’d expect each clock leg to be high or low
+we’re sort of stuck.&lt;/p&gt;
+
+&lt;p&gt;We could switch from the &lt;a href=&quot;/blog/2017/06/02/generating-timing.html&quot;&gt;fractional
+clock division&lt;/a&gt;
+description above to an integer divide:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	if (f_a_count != 0)
+		f_a_count &amp;lt;= f_a_count - 1&#39;b1;
+	else
+		f_a_count &amp;lt;= f_a_idiv-1;
+
+	always @($global_clock)
+	if (f_a_count == 0)
+		assume(i_clk_a == !$past(i_clk_a));
+	else
+		assume($stable(i_clk_a);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This would offer some different properties to the clock, so I would
+encourage anyone interested to try this approach.&lt;/p&gt;
+
+&lt;p&gt;For this post, however, we’ll continue with the
+&lt;a href=&quot;/blog/2017/06/02/generating-timing.html&quot;&gt;fractional divider&lt;/a&gt;
+and see if we can’t find a simpler approach.&lt;/p&gt;
+
+&lt;p&gt;If you examine the logic for the output clock, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_clk&lt;/code&gt;, you’ll see that
+the output clock is determined by either &lt;code class=&quot;highlighter-rouge&quot;&gt;a_sel&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;b_sel&lt;/code&gt;.  If &lt;code class=&quot;highlighter-rouge&quot;&gt;a_sel&lt;/code&gt;
+is true, clock &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; is
+produced.  Likewise if &lt;code class=&quot;highlighter-rouge&quot;&gt;b_sel&lt;/code&gt; is true, then clock B is produced.  If neither
+is true, there should be no clock pulse out.  However, both should never be
+true at the same time.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+		assert(!a_sel || !b_sel);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We might also choose to assert that &lt;code class=&quot;highlighter-rouge&quot;&gt;a_sel&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;b_sel&lt;/code&gt; would only change
+on a clock edge.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	if ((f_past_valid)&amp;amp;&amp;amp;(i_areset_n)&amp;amp;&amp;amp;(!$fell(i_clk_a)))
+		assert($stable(a_sel));
+
+	always @($global_clock)
+	if ((f_past_valid)&amp;amp;&amp;amp;(i_areset_n)&amp;amp;&amp;amp;(!$fell(i_clk_b)))
+		assert($stable(b_sel));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;However, if you examine the design above you’ll see that this
+is indeed the case by examination—with the exception of the
+&lt;a href=&quot;/formal/2018/04/12/areset.html&quot;&gt;asynchronous reset&lt;/a&gt;
+input.  This one piece of our logic might produce a clock glitch, but
+we’ll assume that if you are using an
+&lt;a href=&quot;/formal/2018/04/12/areset.html&quot;&gt;asynchronous reset&lt;/a&gt;
+then you know what you are doing and you can handle such a glitch.&lt;/p&gt;
+
+&lt;p&gt;For our final criteria, let’s count clock ticks in each clock domain.
+We’ll start with the &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; clock domain.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	reg	[2:0]	a_ticks, last_a_ticks;
+
+	initial	a_ticks = 0;
+	always @($global_clock)
+		if (!i_areset_n)
+			a_ticks &amp;lt;= 0;
+		else if ($rose(i_clk_a)&amp;amp;&amp;amp;(a_sel)&amp;amp;&amp;amp;(! &amp;amp;a_ticks))
+			a_ticks &amp;lt;= a_ticks + 1&#39;b1;
+		else if (b_sel)
+			a_ticks &amp;lt;= 0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll do the same in a moment with the &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt; clock domain.  For now, let’s
+keep track of the number of clock ticks we’ve had in the &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; domain, and
+remember this value even after we leave the &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; domain.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	last_a_ticks = 0;
+	always @($global_clock)
+	if (!i_areset_n)
+		last_a_ticks &amp;lt;= 0;
+	else if ((f_past_valid)&amp;amp;&amp;amp;($past(a_sel)))
+		last_a_ticks &amp;lt;= a_ticks;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll then repeat this logic for the &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt; clock domain–both counting how
+many ticks have taken place since changing, and keeping track of that count
+once we switch back to &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt;s clock.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	reg	[2:0]	b_ticks, last_b_ticks;
+	initial	b_ticks = 0;
+	always @($global_clock)
+		if (!i_areset_n)
+			b_ticks &amp;lt;= 0;
+		else if ($rose(i_clk_b)&amp;amp;&amp;amp;(b_sel)&amp;amp;&amp;amp;(! &amp;amp;b_ticks))
+			b_ticks &amp;lt;= b_ticks + 1&#39;b1;
+		else if (a_sel)
+			b_ticks &amp;lt;= 0;
+
+	initial	last_b_ticks = 0;
+	always @($global_clock)
+	if (!i_areset_n)
+		last_b_ticks &amp;lt;= 0;
+	else if ((f_past_valid)&amp;amp;&amp;amp;($past(b_sel)))
+		last_b_ticks &amp;lt;= b_ticks;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;To make our traces look nice, we’ll assume that there must be at least
+three clock ticks between switches.  Since this minimum duration properties
+isn’t really a fundamental part of our proof, we’ll place it within an
+parameterized option to the core.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	generate if (OPT_COVER)
+	begin
+		// Only one clock should ever be active at any time
+		always @($global_clock)
+		assert((a_ticks == 0)||(b_ticks == 0));
+
+		always @($global_clock)
+		if ((f_past_valid)&amp;amp;&amp;amp;($past(a_sel))&amp;amp;&amp;amp;(a_ticks == 0))
+			assume(i_sel);
+
+		always @($global_clock)
+		if ((f_past_valid)&amp;amp;&amp;amp;($past(b_sel))&amp;amp;&amp;amp;(b_ticks == 0))
+			assume(!i_sel);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Using these two measures of the number of times either &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt; has
+ticked between clock swaps, we can now ask the formal tools to &lt;code class=&quot;highlighter-rouge&quot;&gt;cover()&lt;/code&gt;
+a clock transition from A to B where A is at least twice as fast as &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt;,
+and again from &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt; to &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt;.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		always @($global_clock)
+		cover((f_past_valid)&amp;amp;&amp;amp;(&amp;amp;last_a_ticks)&amp;amp;&amp;amp;(&amp;amp;b_ticks)&amp;amp;&amp;amp;(b_sel)
+			&amp;amp;&amp;amp;(f_a_step &amp;gt; (f_b_step&amp;lt;&amp;lt;1)));
+
+		always @($global_clock)
+		cover((f_past_valid)&amp;amp;&amp;amp;(&amp;amp;last_b_ticks)&amp;amp;&amp;amp;(&amp;amp;a_ticks)&amp;amp;&amp;amp;(a_sel)
+			&amp;amp;&amp;amp;(f_a_step &amp;gt; (f_b_step&amp;lt;&amp;lt;1)));
+	end endgenerate&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now, if everything works, then when we run
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+with a &lt;code class=&quot;highlighter-rouge&quot;&gt;mode&lt;/code&gt; of &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt;, and using the &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; task defined by the 
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.sby&quot;&gt;script&lt;/a&gt;,
+we’ll get two traces of clock transitions.&lt;/p&gt;
+
+&lt;p&gt;So we’ve now described two of the three properties above, and hand waved through
+the third.  Will this work?&lt;/p&gt;
+
+&lt;p&gt;Not quite.&lt;/p&gt;
+
+&lt;p&gt;Should you test this core with only those properties above, you’ll discover
+as I did that they aren’t sufficient to ensure that this &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+even worked.  You can see the output from
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt; below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. SymbiYosys results from the first formal verification attempt&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ckswitch-first-fail.png&quot; alt=&quot;Textual terminal output from SymbiYosys&quot; width=&quot;854&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;From this, we determine that our assertion from &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v#L184&quot;&gt;line
+184&lt;/a&gt;
+failed.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @($global_clock)
+	assert((!a_sel)||(!b_sel));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;h2 id=&quot;what-happened&quot;&gt;What happened?&lt;/h2&gt;
+
+&lt;p&gt;If you look near the bottom of the
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+output, you’ll see a line identifying a counterexample trace.  We can use this
+trace to find out why our proof didn’t work.  This trace is shown in Fig 5
+below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5. Trace file describing how the assertions might fail&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ckswitch-first-trace.png&quot; alt=&quot;Failing trace, showing a_sel and b_sel both true at the same time&quot; width=&quot;827&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If you look closely at the penultimate time step, between 70ns and 80ns,
+you’ll notice that both
+&lt;code class=&quot;highlighter-rouge&quot;&gt;a_sel&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;b_sel&lt;/code&gt; are true at the same time.  &lt;em&gt;This should never happen!&lt;/em&gt;
+This violates all of the properties we are hoping to get from this clock
+divider.&lt;/p&gt;
+
+&lt;p&gt;Looking closer, you can see that &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sel&lt;/code&gt; (shown in red) didn’t simply change
+from selecting clock A to clock B.  Instead, it started out requesting clock
+&lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt;, suddenly switched to selecting clock &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt;, and then immediately
+switched back before the synchronizers could settle.  Such a signal on
+then &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sel&lt;/code&gt; select line would defeat the purpose of our &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;,
+so it’s not really all that reasonable.&lt;/p&gt;
+
+&lt;p&gt;On the other hand, if we assume that &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sel&lt;/code&gt; won’t change until the clock
+transition is complete, then we get a lot farther:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	if ((f_past_valid)&amp;amp;&amp;amp;($past(i_sel))&amp;amp;&amp;amp;(!a_sel))
+		assume(i_sel);
+
+	always @($global_clock)
+	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(i_sel))&amp;amp;&amp;amp;(!b_sel))
+		assume(!i_sel);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;As another way we might express this, we might insist that anytime there is
+a change propagating through the synchronizers then &lt;code class=&quot;highlighter-rouge&quot;&gt;i_sel&lt;/code&gt; will be
+held constant.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @($global_clock)
+	if ((a_sel != aff)||(b_sel != bff))
+		assume($stable(i_sel));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Getting this design to &lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;pass
+induction&lt;/a&gt;
+requires some additional properties.  For example, we can’t allow the
+design to be transitioning in both rails at the same time.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
+	if (aff != a_sel)
+		assert(bff == b_sel);
+
+	always @(*)
+	if (bff != b_sel)
+		assert(aff == a_sel);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;With these changes the design passes, proving our first criteria–that the
+outgoing clock only
+ever changes on an input clock edge.  We also have a meager assurance that the
+outgoing clock will not be faster than either incoming clock.  Perhaps
+we should examine the third criteria, and see how this switch works when
+swapping?&lt;/p&gt;
+
+&lt;p&gt;As you may recall, our third criteria was whether or not we could
+switch from one clock to the other or back again.
+To see whether or not we met this criteria, we’ll need to run
+&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt;
+in its cover mode.  Our
+&lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.sby&quot;&gt;script&lt;/a&gt;
+has a &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; task defined within it that does just that.  The result is two
+generated clock traces that illustrate how clock transitions might happen.&lt;/p&gt;
+
+&lt;p&gt;The first trace shows that a design can switch from a faster clock to a slower
+clock.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6. Cover result, switching from a faster clock to a slower clock&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ckswitch-trace0.png&quot; alt=&quot;&quot; width=&quot;578&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The second trace, on the other hand, shows the clock switching from a slower
+clock to a faster clock.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 7. Cover result, switching from a slower clock to a faster clock&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ckswitch-trace1.png&quot; alt=&quot;&quot; width=&quot;603&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;But what about the idea of a failsafe clock?  Didn’t we say that one reason
+for using a &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+is to be able to have a failsafe clock, where if one
+dies then the other one picks back up?&lt;/p&gt;
+
+&lt;p&gt;This particular design doesn’t support a failsafe clock.
+If &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; is the failsafe clock, and &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt; stops transitioning, then you
+can’t switch from &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt; back to &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt; using &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;this
+design&lt;/a&gt;
+since &lt;code class=&quot;highlighter-rouge&quot;&gt;b_sel&lt;/code&gt; depends upon both a positive and a negative transition from
+clock &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;Even though this clock switch design doesn’t offer a failsafe capability,
+you should now understand the tools necessary to prove that your own design,
+perhaps even one with a failsafe capability, would work—but only in an
+&lt;a href=&quot;/blog/2017/10/13/fpga-v-asic.html&quot;&gt;ASIC&lt;/a&gt;
+design of course!  (Remember, the clock switch is not appropriate for an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
+design for the reasons given above.)&lt;/p&gt;
+
+&lt;h2 id=&quot;next-steps&quot;&gt;Next Steps&lt;/h2&gt;
+
+&lt;p&gt;Let’s think about what we just did.  We just verified that a design with
+three &lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+inputs “works”.  This involved formally describing two dissimilar clocks
+with arbitrary phases and frequencies.  These techniques apply well beyond
+this simple &lt;a href=&quot;https://github.com/ZipCPU/website/blob/master/examples/clkswitch.v&quot;&gt;clock
+switch&lt;/a&gt;
+design.  These techniques can be used in &lt;em&gt;any&lt;/em&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+design component to verify that your logic is working as desired–in spite of
+whatever clock phases or frequencies might be given to it.&lt;/p&gt;
+
+&lt;p&gt;While working with
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+inputs isn’t common, there are times and places for doing so.  I’ve already
+mentioned some examples above: an
+&lt;a href=&quot;/formal/2018/04/12/areset.html&quot;&gt;asynchronous reset&lt;/a&gt;,
+a &lt;a href=&quot;https://github.com/ZipCPU/wbuart32/blob/dev/rtl/rxuartlite.v&quot;&gt;serial port
+receiver&lt;/a&gt;,
+or perhaps a circuit that must read memory at one clock rate and feed a video
+stream at another rate.  In all of these cases, knowing how to
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verify&lt;/a&gt;
+your component in spite of any
+&lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;multiple clock domains&lt;/a&gt;
+will be a valuable tool.&lt;/p&gt;
+
+&lt;p&gt;The next step in this short series on
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Asynchronous_circuit&quot;&gt;asynchronous&lt;/a&gt;
+logic will be to take &lt;a href=&quot;http://www.sunburst-design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf&quot;&gt;Cliff Cummings’ asynchronous FIFO
+design&lt;/a&gt;,
+and apply the same basic
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;
+steps we just applied above.&lt;/p&gt;
+
+&lt;p&gt;As an added bonus in this process, you should be able to then turn around and
+&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally verify&lt;/a&gt;
+any modifications you need to make to
+&lt;a href=&quot;http://www.sunburst-design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf&quot;&gt;his design&lt;/a&gt;
+to meet your particular design requirements.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;And he said unto them, It is not for you to know the times or the seasons, which the Father hath put in His own power. (Acts 1:7)&lt;/em&gt;</description>
+        <pubDate>Thu, 31 May 2018 00:00:00 -0400</pubDate>
+        <link>http://zipcpu.com/formal/2018/05/31/clkswitch.html</link>
+        <guid isPermaLink="true">http://zipcpu.com/formal/2018/05/31/clkswitch.html</guid>
+        
+        
+        <category>formal</category>
+        
+      </item>
     
       <item>
         <title>A Slow but Symmetric FIR Filter Implementation</title>
@@ -1398,7 +2137,7 @@ or suggestions!&lt;/p&gt;
 you’ll know that I have formally verified &lt;a href=&quot;/blog/2018/01/22/formal-progress.html&quot;&gt;all of the leaf
 modules&lt;/a&gt;,
 and that I am now working on verifying
-&lt;a href=&quot;https://github.com/ZipCPU/blob/master/rtl/core/zipcpu.v&quot;&gt;the CPU&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;the CPU&lt;/a&gt;
 &lt;a href=&quot;/blog/2018/04/02/formal-cpu-bugs.html&quot;&gt;as a whole&lt;/a&gt;.
 By “leaf module”, I mean a design component that references no other design
 components.
@@ -1687,8 +2426,8 @@ of the file–for illustration purposes.&lt;/p&gt;
 &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; were abstracted.
 These were the
 &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/blob/master/rtl/core/div.v&quot;&gt;divide&lt;/a&gt;, and
-&lt;a href=&quot;https://github.com/ZipCPU/blob/master/rtl/core/mpyop.v&quot;&gt;multiply&lt;/a&gt;.
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/div.v&quot;&gt;divide&lt;/a&gt;, and
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/mpyop.v&quot;&gt;multiply&lt;/a&gt;.
 These are shown in Fig 8 as empty files with dotted lines around them,
 indicating that due to the abstraction they have very little logic remaining
 within them.  You can find their abstract representations in
@@ -2091,7 +2830,7 @@ which instruction precedes them.&lt;/p&gt;
 &lt;p&gt;Searching through all of the possibilities of these free variables
 can be expensive.  Indeed, this was the phase that was taking many hours
 of processing as I was working on verifying
-&lt;a href=&quot;https://github.com/ZipCPU/blob/master/rtl/core/zipcpu.v&quot;&gt;this core&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;this core&lt;/a&gt;
 module within the
 &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.  Now, using this method of
 invariants, the entire formal verification of the (still not quite complete
@@ -6292,2257 +7031,6 @@ be done without calculating a new matrix solution for every data point.&lt;/p&gt
         
         
         <category>dsp</category>
-        
-      </item>
-    
-      <item>
-        <title>Pipelining a Prefetch</title>
-        <description>&lt;p&gt;If you are familiar with the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;,
-you’ll know that it was built in order to be a fully capable
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt;
-while only using a
-&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;minimal amount&lt;/a&gt; of
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt; logic.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. The ZipCPU&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/zipcpu.png&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;There’s a problem, though, with the phrase, “minimal amount of logic.”
-Specifically, how much is minimal?  This is a difficult question,
-since the answer changes from
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;one design&lt;/a&gt;
-to the
-&lt;a href=&quot;https://github.com/ZipCPU/openarty&quot;&gt;next&lt;/a&gt;.  When it comes to a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;soft-core CPU&lt;/a&gt;,
-logic and performance start to trade off against each other as well.  What
-I mean by that is that you can often spend logic within an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt; in order
-to purchase better performance.  Hence, if you want to build a fast
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt;,
-you’ll want to use as much logic as you can to purchase that high speed.  On
-the other hand, if you want to &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;fit within a very small
-space&lt;/a&gt;,
-you might find that speed is not nearly as important.&lt;/p&gt;
-
-&lt;p&gt;As an example, this was the trade-off within the
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/&quot;&gt;S6SoC&lt;/a&gt;. The
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/&quot;&gt;S6SoC&lt;/a&gt; as you
-&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;may recall&lt;/a&gt;
-is a demonstration
-of the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; that runs within a
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/data_sheets/ds160.pdf&quot;&gt;Spartan 6 LX4&lt;/a&gt;–the
-smallest &lt;a href=&quot;https://www.xilinx.com/support/documentation/data_sheets/ds160.pdf&quot;&gt;Spartan 6
-(S6)&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-you could ever buy from
-&lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt;.  Getting a multi-tasking
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt; to fit within these
-constraints was a challenge.  Getting that same
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt;
-to have decent performance at the same time is even harder.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left&quot;&gt;&lt;caption&gt;Fig 2. Digilent&#39;s CMod S6&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cmods6.png&quot; alt=&quot;&quot; width=&quot;250&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Getting the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; to fit within the
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC&lt;/a&gt; took a bit of trimming.  I got rid
-of the
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipelining&lt;/a&gt;,
-switched to the lowest logic
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/memops.v&quot;&gt;memory controller&lt;/a&gt;
-I knew how to
-build and the lowest logic
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;.  I
-removed the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/div.v&quot;&gt;divide unit&lt;/a&gt;
-and removed
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/cpudefs.v&quot;&gt;early branching&lt;/a&gt;.
-(All of these modifications can be made from within the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/cpudefs.v&quot;&gt;cpudefs.v&lt;/a&gt; file.)
-I got rid of the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/zipcounter.v&quot;&gt;performance
-counters&lt;/a&gt;,
-the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v&quot;&gt;DMA
-engine&lt;/a&gt;,
-and the various
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/ziptimer.v&quot;&gt;timers&lt;/a&gt;
-that service the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;.
-I even had to remove the &lt;a href=&quot;/blog/2017/06/28/dbgbus-goal.html&quot;&gt;debugging
-bus&lt;/a&gt;–there just wasn’t
-room on the
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/data_sheets/ds160.pdf&quot;&gt;LX4&lt;/a&gt;.
-With a bit of work, I managed to get this
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/tree/master/rtl/cpu&quot;&gt;trimmed-down&lt;/a&gt;
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; to fit within the
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/data_sheets/ds160.pdf&quot;&gt;S6&lt;/a&gt;
-on board
-&lt;a href=&quot;https://store.digilentinc.com&quot;&gt;Digilent&lt;/a&gt;’s &lt;a href=&quot;https://store.digilentinc.com/cmod-s6-breadboardable-spartan-6-fpga-module&quot;&gt;CMod
-S6&lt;/a&gt;
-board.&lt;/p&gt;
-
-&lt;p&gt;Then I tried to apply this
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/tree/master/rtl/cpu&quot;&gt;trimmed-down&lt;/a&gt;
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; to an
-audio application.  Oh, it was a simple
-demonstration: when the button is pressed, play a doorbell sound from a
-recorded &lt;code class=&quot;highlighter-rouge&quot;&gt;8 kHz&lt;/code&gt; audio sample array.&lt;/p&gt;
-
-&lt;p&gt;The &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; wasn’t fast enough.&lt;/p&gt;
-
-&lt;p&gt;All the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; had to do was to
-read the audio samples from
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-memory, service interrupts, and particularly service the audio interrupt to
-write one sample at a time to the
-&lt;a href=&quot;/blog/2017/09/04/pwm-reinvention.html&quot;&gt;audio controller&lt;/a&gt;.
-(Remember, I had no room for the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v&quot;&gt;DMA
-engine&lt;/a&gt;
-to do this automatically.)&lt;/p&gt;
-
-&lt;p&gt;The &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; just wasn’t fast enough as
-built for even that.&lt;/p&gt;
-
-&lt;p&gt;&lt;em&gt;Speeding&lt;/em&gt; up a &lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt; in an
-environment where
-&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;every LUT matters&lt;/a&gt;
-can be a challenge.&lt;/p&gt;
-
-&lt;p&gt;The first thing I did was to move some of the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;’s instructions from
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-to &lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;block RAM&lt;/a&gt;.
-Since I didn’t have enough block
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;
-to do this for the whole multitasking
-“O/S”, I only put the critical components into the limited
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;That still wasn’t fast enough.&lt;/p&gt;
-
-&lt;p&gt;Then, in my last round with the &lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC&lt;/a&gt;, I
-created a better prefetch unit I called
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/cpu/dblfetch.v&quot;&gt;dblfetch&lt;/a&gt;.
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/cpu/dblfetch.v&quot;&gt;This prefetch&lt;/a&gt;
-was low logic enough to fit within the space
-I had, but also faster than the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;simpler prefetch&lt;/a&gt;
-I had started with.
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/cpu/dblfetch.v&quot;&gt;This prefetch&lt;/a&gt;
-unit, or rather a slightly modified one, is also the subject of this article.&lt;/p&gt;
-
-&lt;h2 id=&quot;measuring-memory-performance&quot;&gt;Measuring Memory Performance&lt;/h2&gt;
-
-&lt;p&gt;Let’s start, though, by looking at how to measure memory performance.  In
-a synchronous design, where everything takes place on a clock tick, then
-memory performance can be quantified by how many clocks it takes per
-transaction.&lt;/p&gt;
-
-&lt;p&gt;When using the &lt;a href=&quot;http://opencores.org/cdn/downloads/wbspec_b3.pdf&quot;&gt;B3 version&lt;/a&gt;
-of the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone bus&lt;/a&gt;, there’s
-a fixed number of clocks for every transaction–we’ll call this the
-transaction’s latency, &lt;code class=&quot;highlighter-rouge&quot;&gt;L&lt;/code&gt;.  Hence, if you want to access &lt;code class=&quot;highlighter-rouge&quot;&gt;N&lt;/code&gt; memory locations,
-this will cost you &lt;code class=&quot;highlighter-rouge&quot;&gt;LN&lt;/code&gt; clocks.&lt;/p&gt;
-
-&lt;table style=&quot;float: left&quot;&gt;&lt;caption&gt;Fig 3: A pair of Wishbone bus requests&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dblfetch-ram.svg&quot; alt=&quot;The trace for a pair of Wishbone bus requests, as drawn from the ZipCPU prefetch named dblfetch&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;On the other hand, if you use the
-&lt;a href=&quot;/blog/2017/08/14/strategies-for-pipelining.html&quot;&gt;pipelined&lt;/a&gt;
-mode of the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone bus&lt;/a&gt;
-as illustrated in Fig 3 on the left
-(&lt;a href=&quot;/doc/wbspec_b4.pdf&quot;&gt;version B4&lt;/a&gt; only), you can then have
-multiple transactions in flight at the same
-time.  In this case, the time it takes to accomplish a transaction becomes
-&lt;code class=&quot;highlighter-rouge&quot;&gt;(N-1)S+L&lt;/code&gt;.  In other words, there’s an initial latency &lt;code class=&quot;highlighter-rouge&quot;&gt;L&lt;/code&gt;, followed by a
-number of clocks &lt;code class=&quot;highlighter-rouge&quot;&gt;S&lt;/code&gt; for each additional transaction within the burst.&lt;/p&gt;
-
-&lt;p&gt;If you look at this from a purely peripheral perspective, you can see six
-separate peripheral implementations  (approximately) outlined in the table
-below.&lt;/p&gt;
-
-&lt;table class=&quot;bordered-table&quot;&gt;
-  &lt;thead&gt;
-    &lt;tr&gt;
-      &lt;th&gt;Peripheral&lt;/th&gt;
-      &lt;th&gt;Clocks to access&lt;/th&gt;
-    &lt;/tr&gt;
-  &lt;/thead&gt;
-  &lt;tbody&gt;
-    &lt;tr&gt;
-      &lt;td&gt;&lt;a href=&quot;https://opencores.org/project,qspiflash&quot;&gt;Initial QSPI Flash&lt;/a&gt;&lt;/td&gt;
-      &lt;td&gt;16N + 16&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbspiflash.v&quot;&gt;Flash&lt;/a&gt;&lt;/td&gt;
-      &lt;td&gt;32N + 40&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;Dual SPI Flash, XIP&lt;/td&gt;
-      &lt;td&gt;16N + 16&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;QSPI Flash, XIP&lt;/td&gt;
-      &lt;td&gt;8N +  8&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/memdev.v&quot;&gt;Block RAM&lt;/a&gt;&lt;/td&gt;
-      &lt;td&gt;N +  1&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;&lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbsdram.v&quot;&gt;SDRAM&lt;/a&gt;&lt;/td&gt;
-      &lt;td&gt;2N +  6&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;DDR3 SDRAM&lt;/td&gt;
-      &lt;td&gt;N + 22&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;
-
-&lt;p&gt;My &lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/wbqspiflash.v&quot;&gt;initial controller for the QSPI
-flash&lt;/a&gt;
-on the &lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC&lt;/a&gt; required 43-clocks
-for a single transaction.  There was a delay or two within the logic of the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; and the &lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/busmaster.v&quot;&gt;bus
-structure&lt;/a&gt;–we’ll
-say it was a two clock delay, with one clock on either side of the actual
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-access (shown in blue below).  Further, the
-non-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipelined&lt;/a&gt;
-version of the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; at the time
-required 4 more clocks per instruction.  The result was that it cost the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; 49 clocks per instruction (CPI).
-With a 12ns clock, this meant that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-could at best run 1.6 Million Instructions per Second (MIPS).&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. Unoptimized Prefetch from Flash and CPU Performance&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-slow-flash.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;At a rate of 1.6 MIPS I had 200 instructions to deal with each audio sample.
-These 200 instructions had handle everything else as well: interrupts, button
-presses, the software based real-time clock, etc.  No wonder it couldn’t keep
-up with the 8kHz audio stream!&lt;/p&gt;
-
-&lt;p&gt;Of course, the real answer to making a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt; faster would be to
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline the CPU&lt;/a&gt;
-and run with a &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;proper prefetch and instruction
-cache&lt;/a&gt;–even
-better, to run the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; from an
-on-board block
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/memdev.v&quot;&gt;device&lt;/a&gt;.
-This approach would have the performance shown in Fig 5.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5. Prefetch with Instruction Cache&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-wcache.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;If I only had the logic to do that, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; would’ve ran close to one clock
-per instruction, once the cache was loaded, and would then achieve nearly
-82 MIPS (minus cache stalls) on the
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/data_sheets/ds160.pdf&quot;&gt;Spartan 6&lt;/a&gt;.
-There just wasn’t enough logic in the
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/data_sheets/ds160.pdf&quot;&gt;LX4&lt;/a&gt;
-to do this.&lt;/p&gt;
-
-&lt;p&gt;What else could be done?&lt;/p&gt;
-
-&lt;p&gt;If I placed the most common instructions into block
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;,
-as I discussed above, then the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; could run at about
-12 MIPS.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6. Fetching instructions from Block RAM&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-bkram.svg&quot; alt=&quot;&quot; width=&quot;315&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Thanks to the author of the
-&lt;a href=&quot;https://github.com/hgeisse/eco32&quot;&gt;ECO32 CPU&lt;/a&gt;
-I was rather surprised to learn at the time that
-&lt;a href=&quot;https://www.gnu.org/software/binutils&quot;&gt;binutils&lt;/a&gt;
-supported this sort of dual addressing–with some addresses in
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;,
-and other addresses in a section of
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;
-that had been copied/loaded from the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;–all controlled from a
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/sw/dev/cmod.ld&quot;&gt;linker script&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;This would’ve been perfect except the
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/data_sheets/ds160.pdf&quot;&gt;S6 LX4&lt;/a&gt;
-just doesn’t have that much block
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Random-access_memory&quot;&gt;RAM&lt;/a&gt;.
-I &lt;em&gt;needed&lt;/em&gt; to run instructions from the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;In my case, there was more that could be done by trimming the &lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/wbqspiflash.v&quot;&gt;flash
-controller&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;To understand the options and possibilities, let’s back up for a moment and
-discuss what the
-&lt;a href=&quot;https://www.cypress.com/file/177966/download&quot;&gt;QSPI flash protocol&lt;/a&gt;
-requires.
-After you give the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-a “Fast Read Quad Output” command (0xEBh), the
-&lt;a href=&quot;https://www.cypress.com/file/177966/download&quot;&gt;QSPI flash&lt;/a&gt;
-I was working with would enter into an eXecute In Place (XIP) mode.
-From this XIP mode,
-any new instruction requires lowering the &lt;code class=&quot;highlighter-rouge&quot;&gt;CS_n&lt;/code&gt; line, issuing an address,
-then another byte indicating whether or not you wish to remain in XIP mode,
-and then several dummy clocks.  Only after all this setup could you then read
-one 32-bit value from the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-every eight clocks.&lt;/p&gt;
-
-&lt;p&gt;Fig 7. below shows the clocks required in the setup.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 7. QSPI Flash Quad Read Protocol in XIP Mode&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qspi-xip.png&quot; alt=&quot;&quot; width=&quot;600&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;This is the fastest way to read from the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;,
-although it requires an
-SCK or two for setup and tear-down.
-Using this mode, it will take 80 QSPI bits, or equivalently
-20 QSPI SCK’s, to read any arbitrary 32-bits of data from the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;One problem with my
-&lt;a href=&quot;https://opencores.org/project,qspiflash&quot;&gt;flash design&lt;/a&gt; at the time was
-that it was creating a SPI
-clock from logic.  On one clock cycle the SPI clock output would be a one,
-then a zero, etc.  As a result, the fastest SPI clock, &lt;code class=&quot;highlighter-rouge&quot;&gt;SCK&lt;/code&gt;, I could create
-was at half my system clock rate, or 41MHz.&lt;/p&gt;
-
-&lt;p&gt;If I instead switched from a &lt;em&gt;logic generated&lt;/em&gt; clock to a clock generated by a
-&lt;a href=&quot;https://www.xilinx.com&quot;&gt;Xilinx&lt;/a&gt;
-&lt;a href=&quot;https://www.xilinx.com/support/documentation/sw_manuals/xilinx14_7/7series_hdl.pdf&quot;&gt;ODDR&lt;/a&gt;
-primitive,
-then the SPI clock &lt;code class=&quot;highlighter-rouge&quot;&gt;SCK&lt;/code&gt; would transition on each clock edge and run at the
-same speed as the design’s system clock speed (82 MHz).
-By doubling the speed of the SPI SCK, I could then also double the speed of the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-to roughly 22-clocks per fetch, or 28 clocks per instruction.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 8. Doubling the SCK speed via an ODDR&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-fast-flash.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;While a 2.9 MHz instruction rate is better than a 1.6 MHz rate, it’s still
-quite dismal.&lt;/p&gt;
-
-&lt;p&gt;If I cleaned up the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; so that 2 of
-the five stages were
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipelined&lt;/a&gt;–the two
-stages that didn’t suffer from
-&lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipeline&lt;/a&gt;
-conflicts (prefetch and instruction decode), then I could get up to
-3.0 MHz.  This would be a slight improvement.&lt;/p&gt;
-
-&lt;p&gt;On the other hand, if I could fetch two instructions at a time, the second
-instruction would benefit from the fact that the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-chip is already set
-up to get a provide the next instruction word.  In this case, I could fetch
-2 instructions in 36 clocks vice one instruction in 28 clocks.  When the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; performance
-was factored in, the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; would now
-(nominally) take 36 clocks per two instructions, or 18 clocks total (with
-exceptions) per instruction.  This would mean that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-could then speed up to a whopping
-4.6 MIPS, based upon an (82 MHz/18 CPI).&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 9. Fetching two instructions from flash at a time&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-dblflash.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;This *was *going to be the topic of this article–how to read two instructions
-at a time.  It was how I managed to speed up the
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC&lt;/a&gt; at the time.  In a
-moment, though, I’ll share a better, faster, and &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;cheaper prefetch
-module&lt;/a&gt; just
-for this blog article.&lt;/p&gt;
-
-&lt;p&gt;Before going there, though, I should finish the story of the
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC&lt;/a&gt; since I made another
-improvement as well: I compressed instructions.&lt;/p&gt;
-
-&lt;p&gt;Using the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; compressed
-instruction set, two 16-bit instructions can be
-stored into a single 32-bit instruction word.  The performance isn’t
-necessarily all that wonderful, but roughly two in ten instructions can
-be packed together into a single word.
-(A recent bug-fix suggests the true value might be four in ten instructions,
-but I haven’t been able to measure this improvement properly yet–so we’ll
-just use the two in ten number.)
-I could probably do a bit better if
-I taught the compiler or the assembler how to re-order instructions to maximize
-this feature’s usage, but I’ll still take the 10% improvement.  Hence, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; speed ultimately
-became somewhere near (82/18/0.8) or 5.7 MHz.&lt;/p&gt;
-
-&lt;p&gt;A funny thing happened, though, on the way to putting
-&lt;a href=&quot;http://zipcpu.com/&quot;&gt;this blog&lt;/a&gt;
-post together.  When I started using
-&lt;a href=&quot;http://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;
-to measure the logic usage of
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/cpu/dblfetch.v&quot;&gt;this prefetch&lt;/a&gt;,
-I realized two things.  First, I was using more logic than I needed to, and
-second I could adjust the algorithm so that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-could run concurrently with this second fetch.  In this manner, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;
-can run continuously.  As a result, the (new/modified) performance of this
-algorithm is now shown below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 10. Two-Instruction Prefetch&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-new-dblfetch.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;At (roughly) 8 clocks per instruction (between
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Branch_(computer_science)&quot;&gt;branches&lt;/a&gt;),
-this new version should run at roughly
-10 MIPS—a big improvement over the 2MIPS we started with.  When you
-factor in the compressed instruction set, this yields an even better
-12.8 MIPS when running from &lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-and an 82MHz clock.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 11. Two instructions sharing the same instruction word&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-cis.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Consider the difference this makes when trying to process an 8k audio stream.
-Instead of struggling along at 200 &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-instructions per audio sample, I now have closer to 1,600
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; instructions per audio sample
-(neglecting
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Branch_(computer_science)&quot;&gt;branches&lt;/a&gt;).
-For just a little adjustment in logic, then, the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; now runs &lt;em&gt;MUCH&lt;/em&gt; faster.&lt;/p&gt;
-
-&lt;p&gt;Before leaving this topic, I would be remiss if I didn’t point out that the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; &lt;em&gt;can&lt;/em&gt; run a lot faster–it just
-takes more logic to implement
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;the cache&lt;/a&gt;
-necessary to do so.  Indeed, we may even be able to come back and discuss how
-the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;prefetch plus instruction
-cache&lt;/a&gt;
-approach is put together in a later article–although we’ll have to see
-if the &lt;a href=&quot;https://www.blueletterbible.org/kjv/jas/4/15&quot;&gt;Lord is willing&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;how-dblfetch-works&quot;&gt;How dblfetch Works&lt;/h2&gt;
-
-&lt;p&gt;While I could spend some time discussing how to strip the performance of a QSPI
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash&lt;/a&gt;
-controller to its
-&lt;a href=&quot;https://github.com/ZipCPU/s6soc/blob/master/rtl/qflashxpress.v&quot;&gt;bare minimums&lt;/a&gt;,
-today’s topic is going to be how to keep an instruction fetch operation going
-so as to achieve the performance shown in Fig 11 above.&lt;/p&gt;
-
-&lt;table style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 12: The two interfaces to a prefetch&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/prefetch-interface.svg&quot; alt=&quot;A prefetch must support both an interface to a CPU and an interface to memory&quot; width=&quot;380&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;As you may recall from our earlier discussion of the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;simpler prefetch&lt;/a&gt;,
-the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; prefetch interacts with the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-using only a small handful of signals:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;The clock, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clk&lt;/code&gt;, and reset, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt;, wires should need no more
-description.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;On any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Branch_(computer_science)&quot;&gt;branch&lt;/a&gt;,
-whether early (unconditional), or late (conditional or indirect), the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt; will raise an
-&lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; flag and set the new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;program counter&lt;/a&gt; in &lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc&lt;/code&gt;.
-From then until the next
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Branch_(computer_science)&quot;&gt;branch&lt;/a&gt;, the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;program counter&lt;/a&gt;
-will increment from one instruction to the next.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;There’s also an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clear_cache&lt;/code&gt; line, which is used to force the
-prefetch
-to mark any cached information as invalid.  This allows the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-to load instructions into a memory area, and then make sure the instructions
-freshly loaded into memory are the ones the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-executes later.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;These are just the signaling wires coming from the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;.  Most of the work within the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;,
-h, however, is done with the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; wires returned to the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; indicates that the instruction presented to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is a valid instruction, and by implication that the instruction fetch
-has completed.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; is the instruction being presented to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-It has meaning only if &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is also true.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Basically, any time &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is true, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; must contain a valid
-instruction.  Once set, these values must hold until the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-accepts them by raising the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; line.  (Why this is a negative logic
-signal, vs just a &lt;code class=&quot;highlighter-rouge&quot;&gt;*_ready&lt;/code&gt; line is a long story …)&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; is an active low line indicating that the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is stalled when active (low).  For those familiar with the AXI ready
-signals, this signal is basically a ready signal from the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-When this line is high, and &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is high on the same clock, then the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-has just accepted an instruction from the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;.
-and it is time to move on to the next instruction.&lt;/p&gt;
-
-    &lt;p&gt;This detail is key, so remember this: when &lt;code class=&quot;highlighter-rouge&quot;&gt;(o_valid)&amp;amp;&amp;amp;(i_stall_n)&lt;/code&gt;, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-has just accepted an instruction and we can move forward.&lt;/p&gt;
-
-    &lt;p&gt;Hence, any time &lt;code class=&quot;highlighter-rouge&quot;&gt;(o_valid)&amp;amp;&amp;amp;(!i_stall_n)&lt;/code&gt;, we’ll need to hold the
-instruction valid and wait for the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-to read it.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;If this signaling system is new or confusing to you, then I’m going to
-recommend that you go back and review the &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;formal properties of the
-wishbone bus&lt;/a&gt;,
-and likewise the &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;formal properties and initial
-discussion&lt;/a&gt;
-from when we examined the &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;single instruction
-prefetch&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;In this case, we’ll be building essentially the same &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/prefetch.v&quot;&gt;basic
-prefetch&lt;/a&gt;
-as &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;before&lt;/a&gt;
-save for a small number of changes.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;The first change is that we’ll allow up to two requests to be in flight
-at a time.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The second change is that we’ll need to keep track of both responses, and
-feed them to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-one at a time.&lt;/p&gt;
-
-    &lt;ul&gt;
-      &lt;li&gt;
-        &lt;p&gt;The first response from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-will go into the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; register, and will set &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt;.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;Subsequent responses will also go into the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; register, if ever
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is false&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;If &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is true, but &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; is low, indicating that the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is stalled, we won’t be able to place the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-return into the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; wires to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-Instead, we’ll create a one-instruction cache to place it into.&lt;/p&gt;
-      &lt;/li&gt;
-    &lt;/ul&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left&quot;&gt;&lt;caption&gt;Fig 13. Two bus requests issued&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-request.svg&quot; alt=&quot;The prefetch issues two requests to the bus&quot; width=&quot;400&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Let’s see if we can draw this out.  The process starts with a state machine
-that will issue two requests.  Further requests will be issued if any
-requests are outstanding when the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-accepts an instruction from the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The rule here, though, is that no request may be made of the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-unless there’s a place to put the result.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 14. Responses go into an Instruction Queue&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/pfpipe-response.svg&quot; alt=&quot;The responses from these requests go into a two-instruction queue&quot; width=&quot;400&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;On the return end from the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;,
-responses will go either into our &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;
-register to be sent immediately to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-or into the &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt; if &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; already has a valid value within it.
-Which location the return goes into
-will be governed both by the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; flag, indicating that &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;
-has a valid instruction within it, by &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt;, indicating that
-the &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt; has a valid instruction within it, and &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt;
-indicating that everything is moving forward.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-cpus-contract-with-the-prefetch&quot;&gt;The CPU’s Contract with the Prefetch&lt;/h2&gt;
-
-&lt;p&gt;Since I &lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;started working with formal
-methods&lt;/a&gt;, I’ve
-started thinking of modules
-within a design as having a &lt;em&gt;contract&lt;/em&gt; with the rest of the design.  For
-example, a memory module has a &lt;em&gt;contract&lt;/em&gt; to return the values found within
-the memory at the requested address, and to allow you to change those
-values and retrieve the changed values later.  In the case of a
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;,
-the contract is fairly simple: the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch
-module&lt;/a&gt;
-needs to return to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-the memory it read from the address the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-requested.  It’s that simple.&lt;/p&gt;
-
-&lt;p&gt;To make matters even easier,
-&lt;a href=&quot;http://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;
-offers two expressions that can help:
-&lt;code class=&quot;highlighter-rouge&quot;&gt;$anyseq&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt;.  These describe “free variables.”  They are so
-valuable, that I’d like to take a moment longer to discuss these terms.&lt;/p&gt;
-
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;$anyseq&lt;/code&gt; defines an arbitrary value that can change on every clock cycle.
-You might find it within a section of Verilog code that looks something like:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;wire	[N-1:0]	some_value;
-assign	some_value = $anyseq;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;It’s equivalent to having an unconstrained input (i.e. a “free variable”) to
-your module, but doesn’t require you to actually create such an input.&lt;/p&gt;
-
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt; is similar, only the value of &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt; will never change within
-a run.  Indeed, not only is it similar, but you’d write it out in the exact
-same way.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;wire	[N-1:0]	some_constant;
-assign	some_constant = $anyconst;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;With a just one simple assumption, &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyseq&lt;/code&gt; can be turned into an &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt;,
-as in:&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;wire	[N-1:0]	some_constant;
-assign	some_constant = $anyseq;
-always @($global_clock)
-	assume(some_valid == $past(some_value));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;However, this is only for illustration purposes.  &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt; will work
-for us today rather than &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyseq&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;Specifically, we can use &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt; to describe the formal contract between the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt; and
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;this prefetch&lt;/a&gt;
-module.  Using &lt;code class=&quot;highlighter-rouge&quot;&gt;$anyconst&lt;/code&gt;, we can describe both an arbitrary address in memory,
-as well as an arbitrary value (the instruction) that will be at this address.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;wire	[AW-1:0]	f_const_addr;
-wire	[DW-1:0]	f_const_insn;
-
-assign	f_const_addr = $anyconst;
-assign	f_const_insn = $anyconst;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Then the basic contract is that any time the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;
-tells the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-that it has a valid instruction, i.e. &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is true, &lt;em&gt;and&lt;/em&gt; that this
-instruction comes from the address listed above, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_addr&lt;/code&gt;, &lt;em&gt;then&lt;/em&gt; the
-instruction must also match the value listed above as well, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_insn&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(*)
-if ((o_valid)&amp;amp;&amp;amp;(o_pc == f_const_addr))
-	assert(o_insn == f_const_insn);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Well, this is close but it isn’t quite right yet.  This doesn’t handle the
-case where an attempt to read from this instruction address results in a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;.
-To handle that case, we’ll need an additional flag to determine
-if our arbitrary example address references a legal location on the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;wire	f_const_illegal;
-
-assign	f_const_illegal = $anyconst;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Using this new flag, the contract then becomes,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(*)
-if ((o_valid)&amp;amp;&amp;amp;(o_pc == f_const_addr))
-begin
-	assert(o_illegal == f_const_illegal);
-	if (!o_illegal)
-		assert(o_insn == f_const_insn);
-end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Well, even that’s not quite right.  I like using the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; bit as a
-sticky bit.  Once it becomes true, it should stay true until the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt; and
-issues an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; flag and new &lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc&lt;/code&gt;.  Alternatively, we can clear it on the
-rarer &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clear_cache&lt;/code&gt; flags.  This means that our contract is
-instead going to be,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;always @(*)
-if ((o_valid)&amp;amp;&amp;amp;(o_pc == f_const_addr))
-begin
-	if (f_const_illegal)
-		assert(o_illegal)
-	if (!o_illegal)
-		assert(o_insn == f_const_insn);
-end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll also have to add some assumptions to our algorithm in order to meet
-this contract.  Specifically, we’ll need to assume that any time we read
-from the &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_addr&lt;/code&gt; address
-that the result returned will be an acknowledgment (not an error) carrying
-&lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_insn&lt;/code&gt; in &lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_data&lt;/code&gt; if &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_illegal&lt;/code&gt; is false, or a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;
-if &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_illegal&lt;/code&gt; is true, but that part will be prefetch specific
-so we’ll hold off on that until we get to our actual properties.&lt;/p&gt;
-
-&lt;h2 id=&quot;working-through-the-algorithm&quot;&gt;Working through the Algorithm&lt;/h2&gt;
-
-&lt;p&gt;I normally work through an algorithm via pseudocode before presenting it
-here.  Today, we’ll just walk through this by steps–since I’m not sure I
-have a simple pseudocode to describe it.&lt;/p&gt;
-
-&lt;p&gt;So, here’s how this algorithm will function:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;On any reset or request to clear the cache, wait for a new PC to be given&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 13. On Reset&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dblfetch-reset.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;We’ll assume &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; takes place on the clock after &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt;.  That means
-that on the clock following &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt;, we want to initiate a bus request
-with the address of the program counter just given within &lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;This logic is shown in Fig 13. on the right.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;Likewise, on a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;,
-set the error flag and wait for a new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;You can see this in Fig 14. on the right.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 14. On a Bus Error&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dblfetch-buserr.svg&quot; alt=&quot;&quot; width=&quot;280&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;In that figure, you can see that following a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;:
-the bus cycle ends and so &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; drops.  &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; are
-then both set together.  &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; indicates that the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-transaction is complete, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; that it ended with an invalid instruction.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;On any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; request, start a new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-transaction.&lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;table align=&quot;right&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 15. On a New PC mid-cycle&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/dblfetch-midcycle.svg&quot; alt=&quot;&quot; width=&quot;400&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;As shown in Fig 15 above, if a
-  &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-  transaction is currently underway when the
-  &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-  signals an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt;, then the
-  &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-  request is aborted (&lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; is dropped) and a new one is started on the
-  clock following.  We’ll use the internal register
-  &lt;code class=&quot;highlighter-rouge&quot;&gt;invalid_bus_cycle&lt;/code&gt;, as shown in Fig 15, to mark that a
-  &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt; transaction was aborted,
-  and that a new
-  &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt; transaction
-  needs to be initiated on the next clock.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;When any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-transaction begins, immediately issue two requests.&lt;/p&gt;
-
-    &lt;p&gt;This was what we showed above in Fig 3 when we started.  Everything starts
-with two requests.  Then, if a response comes back before the second request
-is issued an additional value will be requested from the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;Remember the rule: no request may be issued unless there is a place to put
-the result–lest the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-respond faster then we are expecting.  Hence, the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-transaction starts out with our two instruction “cache” entries empty so we
-can issue two requests.  If one value comes back and leaves our “cache” for
-the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;,
-then we can immediately issue a third request.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The initial address requested will be given by the value in &lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc&lt;/code&gt;
-whenever &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; is true.
-Ever after, the request address should increment by one on each clock.&lt;/p&gt;
-
-    &lt;p&gt;This goes for the output
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;
-value, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; as well.  It will also be set to &lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc&lt;/code&gt;
-any time &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; is true.  However, unlike the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-addresses which increments on every new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-request that is made, this value will instead increment any time the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-accepts an instruction.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Responses to the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-will be placed into the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; register any time &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is
-false, or any time there’s nothing in the cache and &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; is true.&lt;/p&gt;
-
-    &lt;p&gt;We’ll get deeper into these details in the next section.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;If an instruction is being held in &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt;, the second return will be
-placed into a &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt;, and then
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-transaction will stop and the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone&lt;/a&gt;
-&lt;code class=&quot;highlighter-rouge&quot;&gt;CYC&lt;/code&gt; line will be lowered.&lt;/p&gt;
-
-    &lt;p&gt;We’ve gone for too long without an image.  Here’s what I’m talking about
-in Fig 16.&lt;/p&gt;
-
-    &lt;p&gt;It is important that the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-request end if the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is stalled for too long (&lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; is low), as the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-might be stalled at the internal &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/ex/wbdblpriarb.v&quot;&gt;memory vs prefetch
-arbiter&lt;/a&gt;
-while trying to access the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;.
-By making sure that we never receive more than two instructions, and then
-let the &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-return to idle, we keep the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-from entering into a deadlock state.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;All of this needs to be subject to the rule that the two element return
-&lt;a href=&quot;https://en.wikipedia.org/wiki/FIFO_(computing_and_electronics)&quot;&gt;FIFO&lt;/a&gt;
-cannot be allowed to ever overflow it’s two instruction depth.  We’ll use
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal properties&lt;/a&gt;
-below to convince ourselves that such will never happen.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-code&quot;&gt;The Code&lt;/h2&gt;
-
-&lt;p&gt;Now that you know the basic idea behind
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;the code&lt;/a&gt;,
-it’s time to examine it in detail.  Once we finish, we’ll get into the
-formal properties necessary to verify that this works in the next section.&lt;/p&gt;
-
-&lt;p&gt;We’ll start from the beginning: when shall a bus transaction begin and
-end?  As you may recall from the &lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal
-properties&lt;/a&gt; of the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone bus&lt;/a&gt;,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; will capture anytime we in the middle of one (or more) transactions,
-and &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_stb&lt;/code&gt; will be true anytime we are making a request of the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;.
-You may also remember that &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_stb&lt;/code&gt; can only ever be true during a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle.  Hence, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_stb&lt;/code&gt; must imply that &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; is also true.&lt;/p&gt;
-
-&lt;p&gt;The &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-initially starts out idle.  We’ll also return to an idle on any reset
-or &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_(computing)&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;.
-This logic is similar to any &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone
-bus&lt;/a&gt;
-master.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	o_wb_cyc = 1&#39;b0;
-	initial	o_wb_stb = 1&#39;b0;
-	always @(posedge i_clk)
-		if ((i_reset)||((o_wb_cyc)&amp;amp;&amp;amp;(i_wb_err)))
-		begin
-			o_wb_cyc &amp;lt;= 1&#39;b0;
-			o_wb_stb &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Next, during any
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-transaction, we’ll keep issuing transactions
-until a &lt;code class=&quot;highlighter-rouge&quot;&gt;last_stb&lt;/code&gt; flag becomes true.  We’re going to use this &lt;code class=&quot;highlighter-rouge&quot;&gt;last_stb&lt;/code&gt;
-idea to keep this set of
-&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;logic simpler&lt;/a&gt;,
-since &lt;code class=&quot;highlighter-rouge&quot;&gt;last_stb&lt;/code&gt; can be calculated on the prior clock.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		end else if (o_wb_cyc)
-		begin
-			if ((!o_wb_stb)||(!i_wb_stall))
-				o_wb_stb &amp;lt;= (!last_stb);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Releasing the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-is a little more complicated.&lt;/p&gt;
-
-&lt;p&gt;The first step is to count the number of items in flight at any given time.
-We’ll place this count into &lt;code class=&quot;highlighter-rouge&quot;&gt;inflight&lt;/code&gt; and come back to the logic to do
-this later.&lt;/p&gt;
-
-&lt;p&gt;We’ll end the transaction on any last acknowledgment.
-We’re also going to release the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-anytime we’ve made our last request,
-and nothing is in flight.  Finally, anytime a new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;program counter&lt;/a&gt;
-is given to us, or any time we are asked to clear our cache, we’ll
-also end this
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-transaction.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;			if (((i_wb_ack)&amp;amp;&amp;amp;(!o_wb_stb)&amp;amp;&amp;amp;(inflight&amp;lt;=1))
-				||((!o_wb_stb)&amp;amp;&amp;amp;(inflight == 0))
-				// Or any new transaction request
-				||((i_new_pc)||(i_clear_cache)))
-			begin
-				o_wb_cyc &amp;lt;= 1&#39;b0;
-				o_wb_stb &amp;lt;= 1&#39;b0;
-			end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;That’s how we’ll end a transaction, but when will one start?&lt;/p&gt;
-
-&lt;p&gt;We’re going to need to start a transaction on a couple conditions.
-First, if we are idle and the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-asks for a new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;,
-we’ll need to start
-a transaction.  Likewise, if the last transaction was aborted because the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-requested a new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;,
-then &lt;code class=&quot;highlighter-rouge&quot;&gt;invalid_bus_cycle&lt;/code&gt; will be true and we need to start again.  Finally,
-any time we’ve run our two instruction cache/FIFO
-dry, then we’ll start a new
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle as well.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		end else if ((i_new_pc)||(invalid_bus_cycle)
-			||((o_valid)&amp;amp;&amp;amp;(i_stall_n)&amp;amp;&amp;amp;(!o_illegal)))
-		begin
-			// ...
-			o_wb_cyc &amp;lt;= 1&#39;b1;
-			o_wb_stb &amp;lt;= 1&#39;b1;
-		end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Normally, when I build a multi-transaction
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-master, I know ahead of time how many transaction requests to issue.  Examples
-would be the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;prefetch plus
-cache&lt;/a&gt;
-bus master, which always fetches a complete cache line, and the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v&quot;&gt;full-featured
-debugging bus
-master&lt;/a&gt;
-I like to use.  In the case of the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v&quot;&gt;debugging
-bus&lt;/a&gt;,
-the read
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v&quot;&gt;bus&lt;/a&gt;,
-request tells it how many transactions to request, although the write
-&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/rtl/wbuexec.v&quot;&gt;bus&lt;/a&gt;,
-request just requests an additional transaction.&lt;/p&gt;
-
-&lt;p&gt;This &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-master is different.&lt;/p&gt;
-
-&lt;p&gt;In this case, we want to issue two requests, and then possibly more depending
-on whether or not we have enough available spaces.  Doing this requires
-counting the number of transactions in flight.  We’ll do this with the
-register, &lt;code class=&quot;highlighter-rouge&quot;&gt;inflight&lt;/code&gt;.  Upon any successful
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-request, we’ll increment this value and on
-any acknowledgment we’ll decrement it to keep a count of what’s
-in flight.  (We don’t need to adjust our count on
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;,
-since the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-transaction will always be aborted on any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;
-anyway.)&lt;/p&gt;
-
-&lt;p&gt;There are some key features of this logic.  Because an acknowledgment can come
-back when the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; line is low, such as immediately following an
-aborted transaction, we’ll just set everything to zero if &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; is low.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	inflight = 2&#39;b00;
-	always @(posedge i_clk)
-	if (!o_wb_cyc)
-		inflight &amp;lt;= 2&#39;b00;
-	else begin&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;After that, we increase the number of items in flight on any accepted
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-request, and decrease the number on any acknowledgment.  If neither are true,
-or if both are true, the count won’t change.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		case({ ((o_wb_stb)&amp;amp;&amp;amp;(!i_wb_stall)), i_wb_ack })
-		2&#39;b01:	inflight &amp;lt;= inflight - 1&#39;b1;
-		2&#39;b10:	inflight &amp;lt;= inflight + 1&#39;b1;
-		// If neither ack nor request, then no change.  Likewise
-		// if we have both an ack and a request, there&#39;s no change
-		// in the number of requests in flight.
-		default: begin end
-		endcase
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Just as an example of how
-&lt;a href=&quot;/blog/2018/03/14/is-formal-hard.html&quot;&gt;easy formal can be&lt;/a&gt;,
-I knew when I wrote these lines that &lt;code class=&quot;highlighter-rouge&quot;&gt;inflight&lt;/code&gt; could never be greater than
-two.  Hence, I originally placed an assert statement here to that effect.
-It has since been moved to our formal section and so we’ll discuss it
-below when we get to it.  I only bring it up here to discuss an example
-situation where it is useful to immediately write a formal property.&lt;/p&gt;
-
-&lt;p&gt;Let’s move on to the &lt;code class=&quot;highlighter-rouge&quot;&gt;last_stb&lt;/code&gt; piece of logic.  You may recall from above
-that we used a piece of logic to determine when the current request was the last
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-request that needed to be issued.  Normally when I build a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-master, this is a registered value–set on the clock before the last strobe.
-A good example of this would be the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v&quot;&gt;DMA controller&lt;/a&gt; for the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;,
-which separates the difficult logic of when to end a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle from the already
-&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;difficult logic&lt;/a&gt;,
-describing the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v&quot;&gt;DMA&lt;/a&gt;
-state machine.&lt;/p&gt;
-
-&lt;p&gt;This isn’t that either.&lt;/p&gt;
-
-&lt;p&gt;This &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-master is different because I want to keep issuing requests anytime the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-accepts an instruction.  In this case, the second strobe will be the
-last strobe–i.e. if the number in flight is more than one.  Likewise if
-there’s a valid instruction waiting for the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-then this also needs to be the last
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-request.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-		last_stb = (inflight != 2&#39;b00)||((o_valid)&amp;amp;&amp;amp;(!i_stall_n));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The next register, &lt;code class=&quot;highlighter-rouge&quot;&gt;invalid_bus_cycle&lt;/code&gt;, is one I’ve tried to get rid of many
-times.  In many ways it feels redundant.  Timing, however, requires it.
-Specifically, my problem is this: if &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; comes during the middle of a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle, &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;the
-prefetch&lt;/a&gt;
-immediately aborts that
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle.  The
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle needs to then be re-initiated on the next clock cycle, as shown in Fig 15
-above.  That’s the purpose of &lt;code class=&quot;highlighter-rouge&quot;&gt;invalid_bus_cycle&lt;/code&gt;: to tell the design to start
-up a new
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle after the last one was artificially ended by an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; request.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	invalid_bus_cycle = 1&#39;b0;
-	always @(posedge i_clk)
-		if (i_reset)
-			invalid_bus_cycle &amp;lt;= 1&#39;b0;
-		else if ((o_wb_cyc)&amp;amp;&amp;amp;(i_new_pc))
-			invalid_bus_cycle &amp;lt;= 1&#39;b1;
-		else if (!o_wb_cyc)
-			invalid_bus_cycle &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We discussed above how the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-request address, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_addr&lt;/code&gt;, will be set by
-the address given on any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; request.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	o_wb_addr = {(AW){1&#39;b1}};
-	always @(posedge i_clk)
-		if (i_new_pc)
-			o_wb_addr &amp;lt;= i_pc[AW+1:2];&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Other than on any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; request, we’ll increment the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-address on every successful transaction request but leave it alone otherwise.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		else if ((o_wb_stb)&amp;amp;&amp;amp;(!i_wb_stall))
-			o_wb_addr &amp;lt;= o_wb_addr + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We can now look at the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; signal.  As you may recall, this signal
-needs to be true any time a valid instruction is being presented to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;We’ll start on reset.  On any reset, any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; request, or any request
-to &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clear_cache&lt;/code&gt;, we’ll clear this valid signal.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	o_valid = 1&#39;b0;
-	always @(posedge i_clk)
-		if ((i_reset)||(i_new_pc)||(i_clear_cache))
-			o_valid &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Further, on any valid return from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;,
-whether an acknowledgment or an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;,
-we’ll set the valid signal to true.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		else if ((o_wb_cyc)&amp;amp;&amp;amp;((i_wb_ack)||(i_wb_err)))
-			o_valid &amp;lt;= 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The final piece of logic references what to do if the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-isn’t providing an instruction, but the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-has just accepted the one we’ve presented to it within &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;.  In this case,
-whether or not we are valid will be determined by whether or not the
-second word in our FIFO or cache, &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt;, has a valid value within it.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		else if (i_stall_n)
-			o_valid &amp;lt;= cache_valid;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;&lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; tells the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-when the instruction from the
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-is a valid instruction.  The instruction itself is kept in the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;
-register, our next item to discuss.&lt;/p&gt;
-
-&lt;p&gt;As you’ll recall from above, there are a couple cases to consider with &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;.
-If &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; isn’t true, then &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; is a don’t care.  If &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt;
-is true, but &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; is false, then the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is busy (stalled), and the
-instruction must stay ready and unchanged until the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is ready to accept it.&lt;/p&gt;
-
-&lt;p&gt;Hence, any time &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is false, or any time the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is ready to accept an instruction, then we can update the instruction.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	o_insn = {(32){1&#39;b1}};
-	always @(posedge i_clk)
-	if ((!o_valid)||(i_stall_n))
-	begin&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If the cache word is valid, then we want to present the cache word as the
-next instruction word.  Otherwise, the next instruction word can only come from
-the &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;.
-While it may not be on the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-on this cycle, it will eventually be on the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;,
-i.e. in &lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_data&lt;/code&gt;, and then &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; will be set on the
-next clock–keeping us from changing again until the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-accepts the instruction.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		if (cache_valid)
-			o_insn &amp;lt;= cache_word;
-		else
-			o_insn &amp;lt;= i_wb_data;
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As a side note, you may notice that the logic for this 32-bit word has
-been kept very simple.  &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;This is
-important&lt;/a&gt;.
-Complex logic on a wide bus can suddenly and greatly &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;increase your logic
-usage&lt;/a&gt;.
-Instead, we are reserving the complex logic for the one or two wire
-registers, such as &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_stb&lt;/code&gt; above, while keeping the logic
-for the larger registers, like &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_addr&lt;/code&gt;, or even &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; simple.&lt;/p&gt;
-
-&lt;p&gt;Speaking of &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt;, that’s our next register to examine.  The
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; register is very similar to the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_addr&lt;/code&gt; register that we dealt with
-above.  It needs to be set on any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; event, and otherwise incremented
-any time the output instruction is valid, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt;, and the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-accepts that instruction, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	o_pc = 0;
-	always @(posedge i_clk)
-		if (i_new_pc)
-			o_pc &amp;lt;= i_pc;
-		else if ((o_valid)&amp;amp;&amp;amp;(i_stall_n))
-			o_pc[AW+1:2] &amp;lt;= o_pc[AW+1:2] + 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You’ll notice that we kept this logic
-&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;simple&lt;/a&gt; as well,
-since the number of LUTs required by
-this logic will be required &lt;em&gt;for every bit&lt;/em&gt; of &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;Just to illustrate this point, the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; logic alone uses 61 4-LUTs of the
-total 246 LUTs used by the design as a whole on an iCE40.  That’s a whole 24%
-of the total logic for this design–and it’s a very minimal piece of logic at
-that.&lt;/p&gt;
-
-&lt;p&gt;The final word used to interface with the rest of the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; register.  This is the flag used to tell the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-that the attempt to read from this address resulted in a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;We’ll clear this flag on any reset, or &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; request.  Likewise, we’ll
-clear it on any request to clear the cache, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clear_cache&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	o_illegal = 1&#39;b0;
-	always @(posedge i_clk)
-		if ((i_reset)||(i_new_pc)||(i_clear_cache))
-			o_illegal &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As with &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;, nothing is allowed to change if we have a valid
-instruction that the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-hasn’t yet accepted the last instruction, or equivalently if
-&lt;code class=&quot;highlighter-rouge&quot;&gt;(o_valid)&amp;amp;&amp;amp;(!i_stall_n)&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		else if ((!o_valid)||(i_stall_n))
-		begin&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;That brings us to how &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; needs to be set.  If the &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt; is
-valid, then it moves into the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; position.  At that same time,
-if the &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_illegal&lt;/code&gt; flag associated with that &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt; is true,
-that will indicate that a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;
-was returned while attempting to request the second word.  This illegal
-flag will then also need to move into the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; position and we’ll set
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; in that case.&lt;/p&gt;
-
-&lt;p&gt;Otherwise, if the cached value isn’t valid, then there’s nothing in our
-cache and we’ll need to set the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; flag immediately on a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;,
-since that’s the value directly going into the first output position,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;			if (cache_valid)
-				o_illegal &amp;lt;= (o_illegal)||(cache_illegal);
-			else if ((o_wb_cyc)&amp;amp;&amp;amp;(i_wb_err))
-				o_illegal &amp;lt;= 1&#39;b1;
-		end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Ok, so we’ve now dealt with the output values to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;:
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;, and &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt;.  These are the values associated
-with the current item being sent to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-from our two instruction FIFO.&lt;/p&gt;
-
-&lt;p&gt;Let’s now turn our attention to that second response from the bus, the &lt;em&gt;other&lt;/em&gt;
-element in our two instruction FIFO.  We’ll store this value in the word
-&lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt;, and mark it as valid using &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt;.
-Should this word be the result of a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;,
-we’ll then set the value &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_illegal&lt;/code&gt; to reflect this.&lt;/p&gt;
-
-&lt;p&gt;We’ll start here, though, with &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt;.  On any reset, any new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;,
-or any time we clear the cache, &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt; needs to be cleared.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	cache_valid = 1&#39;b0;
-	always @(posedge i_clk)
-		if ((i_reset)||(i_new_pc)||(i_clear_cache))
-			cache_valid &amp;lt;= 1&#39;b0;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Otherwise, we need to set it any time &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is true, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt; is
-stalled &lt;code class=&quot;highlighter-rouge&quot;&gt;(!i_stall_n)&lt;/code&gt;, and a return comes in from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;.
-In a similar fashion, we’ll need to clear this flag anytime the &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt;
-gets moved into the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt; position and presented to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
- This will be when &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; is true, but not response is coming from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The only catch is when/if &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt; is already true and a new response
-comes back from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;. (This should never
-happen.) In this case, &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt; needs to be set as well.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		else begin
-			if ((o_valid)&amp;amp;&amp;amp;(o_wb_cyc)&amp;amp;&amp;amp;((i_wb_ack)||(i_wb_err)))
-				cache_valid &amp;lt;= (!i_stall_n)||(cache_valid);
-			else if (i_stall_n)
-				cache_valid &amp;lt;= 1&#39;b0;
-		end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This brings us to the cache word.  As you’ll recall from above, the
-&lt;code class=&quot;highlighter-rouge&quot;&gt;cache_word&lt;/code&gt; register is the second word in the output FIFO after &lt;code class=&quot;highlighter-rouge&quot;&gt;o_insn&lt;/code&gt;.
-This value is completely irrelevant, though, unless &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt; (above)
-is also true.  Hence, we can set it to whatever returns from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt; in
-&lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_data&lt;/code&gt; whenever it returns.  We’ll use other logic, above in &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt;,
-to determine whether or not this value is relevant to us.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-		if ((o_wb_cyc)&amp;amp;&amp;amp;(i_wb_ack))
-			cache_word &amp;lt;= i_wb_data;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Obviously this will fail if an acknowledgment is returned while &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt;
-is true.  We’ll need to make certain this never happens, and we’ll use the
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal methods&lt;/a&gt;
-below to convince ourselves that this will never happen.&lt;/p&gt;
-
-&lt;p&gt;The last value is the &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_illegal&lt;/code&gt; value.  This flag is used to
-indicate that the second response from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt; was a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_err&lt;/code&gt;.  As before, this value is cleared on any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt;,
-or &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clear_cache&lt;/code&gt;.  After that, it’s set on any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_err&lt;/code&gt; return where
-the first
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-return position in the FIFO is stuck waiting on the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;(o_valid)&amp;amp;&amp;amp;(!i_stall_n)&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	cache_illegal = 1&#39;b0;
-	always @(posedge i_clk)
-	if ((i_reset)||(i_clear_cache)||(i_new_pc))
-		cache_illegal &amp;lt;= 1&#39;b0;
-	else if ((o_wb_cyc)&amp;amp;&amp;amp;(i_wb_err)&amp;amp;&amp;amp;(o_valid)&amp;amp;&amp;amp;(!i_stall_n))
-		cache_illegal &amp;lt;= 1&#39;b1;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Remember that the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_err&lt;/code&gt; flag needs to be cross-checked with the
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; flag, since suddenly dropping &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; might still allow
-&lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_err&lt;/code&gt; to return on the next cycle when &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; is low.&lt;/p&gt;
-
-&lt;p&gt;That’s it!  At this point, we have a completed
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch module&lt;/a&gt;
-that will continue fetching instructions from memory until it’s two
-instruction word FIFO is full and the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-remains stalled.&lt;/p&gt;
-
-&lt;p&gt;But … does it work?  That’s the point of the
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal properties&lt;/a&gt;
-presented in the next section.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-formal-properties&quot;&gt;The Formal Properties&lt;/h2&gt;
-
-&lt;p&gt;A &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt;
-has two basic interfaces it needs to maintain, as shown
-above in Fig 12.  The first is formally characterized by the set of &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone
-properties&lt;/a&gt;.
-The second interface is to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-Therefore, we’ll spend some time putting together the assumptions and assertions
-necessary for interacting with the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-Finally, we’ll present the logic necessary to formally verify that &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;this
-prefetch&lt;/a&gt;
-formally maintains its &lt;em&gt;contract&lt;/em&gt; with the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt; as
-we discussed above.&lt;/p&gt;
-
-&lt;p&gt;We’ll start with the
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal properties&lt;/a&gt;
-necessary for interacting with the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone bus&lt;/a&gt;.
-Aside from assuming that &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt; is true on startup,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	`ASSUME(i_reset);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;most of this is already done for us by the &lt;code class=&quot;highlighter-rouge&quot;&gt;fwb_master&lt;/code&gt; module.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	localparam	F_LGDEPTH=2;
-	wire	[(F_LGDEPTH-1):0]	f_nreqs, f_nacks, f_outstanding;
-
-	//
-	// Add a bunch of wishbone-based asserts
-	fwb_master #(.AW(AW), .DW(DW), .F_LGDEPTH(F_LGDEPTH),
-				.F_MAX_STALL(2),
-				.F_MAX_REQUESTS(0), .F_OPT_SOURCE(1),
-				.F_OPT_CLK2FFLOGIC(F_OPT_CLK2FFLOGIC),
-				.F_OPT_RMW_BUS_OPTION(1),
-				.F_OPT_DISCONTINUOUS(0))
-		f_wbm(i_clk, i_reset,
-			o_wb_cyc, o_wb_stb, o_wb_we, o_wb_addr, o_wb_data, 4&#39;h0,
-			i_wb_ack, i_wb_stall, i_wb_data, i_wb_err,
-			f_nreqs, f_nacks, f_outstanding);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You may remember how we built that
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;property list together&lt;/a&gt;
-earlier, right?&lt;/p&gt;
-
-&lt;p&gt;In this case, the important parts of this are the parameters being used
-to set this up.  First, we’re only expecting a two items to ever be in
-flight at a time, so we can set &lt;code class=&quot;highlighter-rouge&quot;&gt;F_LGDEPTH&lt;/code&gt; to two.  Second, just to keep
-things moving, we’ll assume that the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-will never stall more than 2
-clocks at a time, &lt;code class=&quot;highlighter-rouge&quot;&gt;F_MAX_STALL(2)&lt;/code&gt;.  We won’t set a maximum number of
-requests, since our particular goal is to allow us to continually make
-requests until our result buffer is full.  &lt;code class=&quot;highlighter-rouge&quot;&gt;F_OPT_SOURCE&lt;/code&gt; is set to
-true, just to check that &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_stb&lt;/code&gt; gets set to true any time
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; rises.&lt;/p&gt;
-
-&lt;p&gt;It’s really just about that simple, but there is one exception: we’ll
-&lt;a href=&quot;/blog/2018/03/14/is-formal-hard.html&quot;&gt;need to tie our logic&lt;/a&gt;
-to the &lt;code class=&quot;highlighter-rouge&quot;&gt;f_nreqs&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_nacks&lt;/code&gt;, and &lt;code class=&quot;highlighter-rouge&quot;&gt;f_outstanding&lt;/code&gt; signals, or we won’t pass the
-&lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;formal induction&lt;/a&gt;
-step.&lt;/p&gt;
-
-&lt;p&gt;That logic is coming up in a bit.&lt;/p&gt;
-
-&lt;p&gt;The next section discusses the assumptions associated with interacting with
-the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-To make sure these statements hold properly, we’ll use a variety
-of &lt;code class=&quot;highlighter-rouge&quot;&gt;f_past_*&lt;/code&gt; variables.  We’ll use these in place of the &lt;code class=&quot;highlighter-rouge&quot;&gt;$past()&lt;/code&gt; operator,
-since
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-doesn’t support it (yet).  This includes &lt;code class=&quot;highlighter-rouge&quot;&gt;f_past_reset&lt;/code&gt;,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;f_past_clear_cache&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_past_o_valid&lt;/code&gt;, and &lt;code class=&quot;highlighter-rouge&quot;&gt;f_past_stall_n&lt;/code&gt;.&lt;/p&gt;
-
-&lt;p&gt;The first assumption is that following any reset, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-will provide a new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;instruction address&lt;/a&gt;
-on the next clock cycle.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-		if ((f_past_valid)&amp;amp;&amp;amp;(f_past_reset))
-			assume(i_new_pc);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll assume the same of an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clear_cache&lt;/code&gt; request, that the next clock
-cycle will provide us with an new
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;
-value.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-		if ((f_past_valid)&amp;amp;&amp;amp;(f_past_clear_cache))
-			assume(i_new_pc);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Further, we know from the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;’s code
-that the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_clear_cache&lt;/code&gt; request will never be held high for two clocks
-in a row.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if (f_past_clear_cache)
-		assume(!i_clear_cache);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This brings us to a rather unusual assertion.&lt;/p&gt;
-
-&lt;p&gt;Some time ago, I got frustrated trying to translate between word addresses
-on the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-and the byte addresses the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-uses.  In a fit of frustration, I converted all of the versions of the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;program counter&lt;/a&gt;
-maintained within the
-design to byte addressing.  That means that the bottom two bits of
-&lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc&lt;/code&gt; need to be zero.  It also means the bottom two bits of &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; will
-need to be zero, but we’ll get to that one later.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-		assume(i_pc[1:0] == 2&#39;b00);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The result of using byte addressing is that I can now correlate these
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;program counter&lt;/a&gt; values
-with the byte addresses in a dump of any
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-executable.&lt;/p&gt;
-
-&lt;p&gt;Now let’s talk about the &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; line.  Following any reset, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-will be reset and there will be no reason to stall.  Hence, following any
-reset &lt;code class=&quot;highlighter-rouge&quot;&gt;i_stall_n&lt;/code&gt; will be true indicating that the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is &lt;em&gt;ready&lt;/em&gt; to accept an instruction.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	initial	assume(i_stall_n);
-	always @(posedge i_clk)
-		if ((f_past_valid)&amp;amp;&amp;amp;(f_past_reset))
-			assume(i_stall_n);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;In a similar manner, the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-will never become busy and stall unless it has already accepted an instruction.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-		if ((f_past_valid)&amp;amp;&amp;amp;(!f_past_o_valid)&amp;amp;&amp;amp;(f_past_stall_n))
-			assume(i_stall_n);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Our last criteria regarding our interaction with the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is the assumption that the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-will always accept an instruction within four clocks.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	localparam	F_CPU_DELAY = 4;
-	reg	[4:0]	f_cpu_delay;
-
-	// Now, let&#39;s look at the delay the CPU takes to accept an instruction.
-	always @(posedge i_clk)
-		// If no instruction is ready, then keep our counter at zero
-		if ((!o_valid)||(i_stall_n))
-			f_cpu_delay &amp;lt;= 0;
-		else
-			// Otherwise, count the clocks the CPU takes to respond
-			f_cpu_delay &amp;lt;= f_cpu_delay + 1&#39;b1;
-
-	always @(posedge i_clk)
-		assume(f_cpu_delay &amp;lt; F_CPU_DELAY);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This isn’t necessarily true.  A divide instruction might cause the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-to stall for 30+ clocks.  However, it’s good enough to speed our way through
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;We can now turn to some assertions about our outputs to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-This isn’t (yet) the contract we discussed above, but we’ll get to that
-in the next section.&lt;/p&gt;
-
-&lt;p&gt;We’ll start with the assertion about the output
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;wishbone bus&lt;/a&gt;
-address.
-Anytime a new request is accepted by the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;,
-the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_pc&lt;/code&gt; should increment.  The only exception is following an
-&lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; signal–when it should be set by the new &lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc&lt;/code&gt; value.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;($past(o_wb_stb))&amp;amp;&amp;amp;(!$past(i_wb_stall))
-			&amp;amp;&amp;amp;(!$past(i_new_pc)))
-		assert(o_wb_addr &amp;lt;= $past(o_wb_addr)+1&#39;b1);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;When it comes to the output values, the rule is that anytime the output
-is valid and the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is stalled, i.e. any time &lt;code class=&quot;highlighter-rouge&quot;&gt;(o_valid)&amp;amp;&amp;amp;(!i_stall_n)&lt;/code&gt;,
-then the output values need to stay constant.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(i_reset))
-			&amp;amp;&amp;amp;(!$past(i_new_pc))&amp;amp;&amp;amp;(!$past(i_clear_cache))
-			&amp;amp;&amp;amp;($past(o_valid))&amp;amp;&amp;amp;(!$past(i_stall_n)))
-	begin
-		assert($stable(o_pc));
-		assert($stable(o_insn));
-		assert($stable(o_valid));
-		assert($stable(o_illegal));
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The same is true for that second cached word as well.  If that cache position
-is valid, yet the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-is stalled, then it should never change.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(i_reset))
-			&amp;amp;&amp;amp;(!$past(i_new_pc))&amp;amp;&amp;amp;(!$past(i_clear_cache))
-			&amp;amp;&amp;amp;($past(o_valid))&amp;amp;&amp;amp;(!$past(i_stall_n))
-			&amp;amp;&amp;amp;($past(cache_valid)))
-	begin
-		assert($stable(cache_valid));
-		assert($stable(cache_word));
-		assert($stable(cache_illegal));
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;In a fashion similar to &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_addr&lt;/code&gt; above, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; should only ever increment,
-and it should only do that if an instruction has been accepted–with the
-exception of any time &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; is asserted.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(i_new_pc))
-			&amp;amp;&amp;amp;($past(o_valid))&amp;amp;&amp;amp;($past(i_stall_n)))
-		assert(o_pc[AW+1:2] == $past(o_pc[AW+1:2])+1&#39;b1);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;As with &lt;code class=&quot;highlighter-rouge&quot;&gt;i_pc[1:0]&lt;/code&gt; and the frustration I described above, the bottom two
-bits of the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; address are unused.  Let’s assert here that they remain zero.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-		assert(o_pc[1:0] == 2&#39;b00);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Upon any
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;
-return, one of either &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; or &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_illegal&lt;/code&gt; should be
-set.  Further, if &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; is set, so too should be &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; to indicate
-this is a valid return, and the same for &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(i_reset))
-			&amp;amp;&amp;amp;(!$past(i_new_pc))
-			&amp;amp;&amp;amp;(!$past(i_clear_cache))
-			&amp;amp;&amp;amp;($past(o_wb_cyc))&amp;amp;&amp;amp;($past(i_wb_err)))
-		assert( ((o_valid)&amp;amp;&amp;amp;(o_illegal))
-			||((cache_valid)&amp;amp;&amp;amp;(cache_illegal)) );&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Any time &lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; gets set, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; should also be set at the same time.
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; will then stay true until cleared by a &lt;code class=&quot;highlighter-rouge&quot;&gt;i_reset&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt;, etc,
-so this is the most important part of the check.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(o_illegal))&amp;amp;&amp;amp;(o_illegal))
-		assert(o_valid);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll need to check for the same thing in the cache as well.  Hence, any
-time the cached value was not illegal before, and the cache remains invalid
-now, then the cache cannot have become illegal during this clock as well.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(cache_illegal))&amp;amp;&amp;amp;(!cache_valid))
-		assert(!cache_illegal);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Following any &lt;code class=&quot;highlighter-rouge&quot;&gt;i_new_pc&lt;/code&gt; request, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; &lt;em&gt;must&lt;/em&gt; be low.  This assertion
-comes from searching for a bug in the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/idecode.v&quot;&gt;instruction
-decoder&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;($past(i_new_pc)))
-		assert(!o_valid);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Finally, any time we transition from &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; to &lt;code class=&quot;highlighter-rouge&quot;&gt;!o_valid&lt;/code&gt;, we should also
-be starting a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle–lest we somehow get stuck.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(i_reset))&amp;amp;&amp;amp;(!$past(i_clear_cache))
-			&amp;amp;&amp;amp;($past(o_valid))&amp;amp;&amp;amp;(!o_valid)&amp;amp;&amp;amp;(!o_illegal))
-		assert((o_wb_cyc)||(invalid_bus_cycle));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Okay, that was a lot of properties!  Are you still with me?&lt;/p&gt;
-
-&lt;p&gt;At this point, we are finally ready for the contract with the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;!
-Remember how we discussed this above?  Let’s now take a look at how it’s done.&lt;/p&gt;
-
-&lt;p&gt;We’ll start with three arbitrary values, an address, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_addr&lt;/code&gt;, an
-instruction, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_insn&lt;/code&gt;, and whether or not that address will return a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;,
-&lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_illegal&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	wire	[AW-1:0]	f_const_addr;
-	wire	[DW-1:0]	f_const_insn;
-	wire			f_const_illegal;
-
-	// ...
-	assign	f_const_addr    = $anyconst;
-	assign	f_const_insn    = $anyconst;
-	assign	f_const_illegal = $anyconst;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The next section is a bit verbose.  It probably doesn’t need to be.
-But, just to tell the story …&lt;/p&gt;
-
-&lt;p&gt;Over the course of time, while working with these values, I got somewhat
-frustrated with the waveform viewing tool I was using.  One frustration was
-my formal properties often contained something like &lt;code class=&quot;highlighter-rouge&quot;&gt;if ((A)&amp;amp;&amp;amp;(B)&amp;amp;&amp;amp;...)&lt;/code&gt; and
-I could never tell when
-something failed which of &lt;code class=&quot;highlighter-rouge&quot;&gt;A&lt;/code&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;B&lt;/code&gt;, or (other) wasn’t true.  To keep this
-from happening, I assigned wires (below) to the various comparisons checks
-I needed to do.  This way, I can examine these wires on any trace
-failure and see why things failed.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	wire	f_this_addr, f_this_pc, f_this_req, f_this_data,
-		f_this_insn;
-
-	assign	f_this_addr = (o_wb_addr ==   f_const_addr);
-	assign	f_this_pc   = (o_pc      == { f_const_addr, 2&#39;b00 });
-	assign	f_this_req  = (i_pc      == { f_const_addr, 2&#39;b00 });
-	assign	f_this_data = (i_wb_data ==   f_const_insn);
-	assign	f_this_insn = (o_insn    ==   f_const_insn);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;That said, I’m undecided as to whether or not this frustration should lead me
-to split out wires like this in the future.&lt;/p&gt;
-
-&lt;p&gt;Ok, that’s the setup, here’s the contract: on any clock where the result
-is valid, and where it’s our &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_addr&lt;/code&gt; address being returned, then
-we need to be returning either this instruction, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_insn&lt;/code&gt;, or
-&lt;code class=&quot;highlighter-rouge&quot;&gt;o_illegal&lt;/code&gt; if this instruction returned a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if ((o_valid)&amp;amp;&amp;amp;(f_this_pc))
-	begin
-		if (f_const_illegal)
-			assert(o_illegal);
-		if (!o_illegal)
-			assert(f_this_insn);
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Of course, this will only work if the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-itself returns either this instruction or an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;
-upon request.  Since this is an input of the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;,
-it needs to be assumed.&lt;/p&gt;
-
-&lt;p&gt;The trick in making this assumption is that we need to know which return
-of the many
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-requests that we’ve made is the return value for this contract instruction.
-Given that we increment &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_addr&lt;/code&gt; any time we send a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-request in flight, and given that
-&lt;code class=&quot;highlighter-rouge&quot;&gt;f_outstanding&lt;/code&gt; counts the number of items in flight, we can then know if this
-return is our address by subtracting from &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_addr&lt;/code&gt; the number of items
-in flight.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	assign	f_this_return = (o_wb_addr - f_outstanding == f_const_addr);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Using this predicate, we can now say that if the next
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-return will be for this request (i.e. &lt;code class=&quot;highlighter-rouge&quot;&gt;f_this_return&lt;/code&gt; is set), then if
-we receive an acknowledgment from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-the data should be &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_insn&lt;/code&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if ((o_wb_cyc)&amp;amp;&amp;amp;(f_this_return))
-	begin
-		if (i_wb_ack)
-			assume(i_wb_data == f_const_insn);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;To handle whether we get a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;
-or an acknowledgment, we’ll do it this way:  If &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_illegal&lt;/code&gt; is true, we
-should &lt;em&gt;only&lt;/em&gt; get an &lt;code class=&quot;highlighter-rouge&quot;&gt;i_wb_err&lt;/code&gt; from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-and never any valid acknowledgment.  Likewise the reverse: if &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_illegal&lt;/code&gt;
-is false, we should &lt;em&gt;only&lt;/em&gt; ever get an acknowledgment from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;.
-This particular way of describing this behavior allows the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;.
-to still take its own sweet time to return any values, but
-yet still forces the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;error&lt;/a&gt;
-when appropriate–i.e., when &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_illegal&lt;/code&gt; is set.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		if (f_const_illegal)
-			assume(!i_wb_ack);
-		else
-			assume(!i_wb_err);
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;There’s a corollary to our contract above.  This corollary has to do
-with the cached value that hasn’t yet been given to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.
-In this case, we still need to assert that this cached value holds to our
-contract.  While this wouldn’t be necessary for a simple Bounded Model Check
-(BMC), it is a &lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;necessary
-requirement&lt;/a&gt;
-in order to pass the formal
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal&lt;/a&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction step&lt;/a&gt;.
-Hence, if the address within the cache, the next &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; address, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc+4&lt;/code&gt;,
-matches our arbitrary address, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_const_addr&lt;/code&gt;, and if the cache has a valid
-value within it, then these conditions apply: unless the cache value is
-illegal, it should contain our arbitrary instruction word.  Likewise,
-if the cache value is supposed to be illegal, then &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_illegal&lt;/code&gt;
-should be true as well.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if ((o_pc[AW+1:2] + 1&#39;b1 == f_const_addr)&amp;amp;&amp;amp;(cache_valid))
-	begin
-		if (!cache_illegal)
-			assert(cache_word == f_const_insn);
-
-		if (f_const_illegal)
-			assert(cache_illegal);
-	end&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;That’s our contract.  If we meet that contract, then we’ll know this
-design works.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;(!$past(cache_illegal))&amp;amp;&amp;amp;(!cache_valid))
-		assert(!cache_illegal);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’re not done yet, however.&lt;/p&gt;
-
-&lt;p&gt;First, we want to make certain that our two instruction FIFO will never
-overflow.  As we’ve written our design above, any overflow would be
-catastrophic.  Hence, any time we request a new value, we must have a place
-to put it.  In other words, either the cache value must be empty, or the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;
-must have just accepted a value.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if (o_wb_stb)
-		assert((!cache_valid)||(i_stall_n));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;In a similar vein, any time both the output and the cache value are both
-valid, then we need to guarantee that we aren’t requesting any more values,
-and that nothing is in flight.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if ((o_valid)&amp;amp;&amp;amp;(cache_valid))
-		assert((f_outstanding == 0)&amp;amp;&amp;amp;(!o_wb_stb));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;These should be sufficient to keep us from overflowing this two instruction
-FIFO.&lt;/p&gt;
-
-&lt;p&gt;However, the
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal properties&lt;/a&gt;
-we’ve listed so far &lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;aren’t sufficient to
-guarantee&lt;/a&gt;
-that the design will pass the &lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction
-step&lt;/a&gt;.  In order to pass
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt;,
-we need to restrict the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt;
-engine so that it only considers reachable states.&lt;/p&gt;
-
-&lt;p&gt;To make certain we don’t over-restrict our design, we’ll limit ourselves here
-to only using assert statements.  As a result, the BMC and
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt;
-stages will be able to catch anything that is over constrained–as long as the
-number of stages examined in BMC is more than the stages examined during
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The first assertion is that any time we have at least one item in our FIFO,
-that is any time &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is true, and any time that item isn’t moving forward,
-then there can only be one or zero
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-requests outstanding.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if ((o_valid)&amp;amp;&amp;amp;(!i_stall_n))
-		assert(f_outstanding &amp;lt; 2);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The next assertion follows, but in this case any time the FIFO is completely
-empty we allow ourselves to have up to two requests in flight.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if ((!o_valid)||(i_stall_n))
-		assert(f_outstanding &amp;lt;= 2);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Further, any time we are within a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle, i.e. &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; is high, but yet we’ve stopped making
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-requests, i.e. &lt;code class=&quot;highlighter-rouge&quot;&gt;o_wb_stb&lt;/code&gt; is low, then there should
-be some number of requests in flight.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;($past(o_wb_cyc))&amp;amp;&amp;amp;(!$past(o_wb_stb))
-			&amp;amp;&amp;amp;(o_wb_cyc))
-		assert(inflight != 0);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Just to make sure we captured everything, let’s state this again: on any
-return from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;,
-there must be a place to put that return.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if ((o_wb_cyc)&amp;amp;&amp;amp;(i_wb_ack))
-		assert(!cache_valid);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Further, our design has two separate counters of how many items are within
-flight.  One is from the &lt;code class=&quot;highlighter-rouge&quot;&gt;f_outstanding&lt;/code&gt; counter created within the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;formal WB properties&lt;/a&gt;,
-module, and the other our &lt;code class=&quot;highlighter-rouge&quot;&gt;inflight&lt;/code&gt; counter.&lt;/p&gt;
-
-&lt;p&gt;These two counters need to be identical any time the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;,
-is in use.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if (o_wb_cyc)
-		assert(inflight == f_outstanding);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Now let’s look at the address of the request being made, vs the address
-being given to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;First, upon any return from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;,
-that goes into &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt;, the address
-of the value returned needs to be equal to the value given to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	assign	this_return_address = o_wb_addr - f_outstanding;
-	assign	next_pc_address = o_pc[AW+1:2] + 1&#39;b1;
-
-	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;($past(o_wb_cyc))
-			&amp;amp;&amp;amp;(!$past(i_reset))
-			&amp;amp;&amp;amp;(!$past(i_new_pc))
-			&amp;amp;&amp;amp;(!$past(i_clear_cache))
-			&amp;amp;&amp;amp;(!$past(invalid_bus_cycle))
-			&amp;amp;&amp;amp;(($past(i_wb_ack))||($past(i_wb_err)))
-			&amp;amp;&amp;amp;((!$past(o_valid))||($past(i_stall_n)))
-			&amp;amp;&amp;amp;(!$past(cache_valid)))
-		assert(o_pc[AW+1:2] == $past(this_return_address));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This isn’t enough, though, to constrain the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt;
-engine.  I know, I tried.&lt;/p&gt;
-
-&lt;p&gt;Getting
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;this design&lt;/a&gt;
-to pass the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt; step
-required running the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt;
-engine many times, then looking at the failures and trying to find out
-which wires or values didn’t make sense.  When you find them, you look
-at them and wonder, how on earth did that happen?  That doesn’t follow
-my design principles!  Yes, but you
-&lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;need to tell&lt;/a&gt;
-the &lt;a href=&quot;https://en.wikipedia.org/wiki/Mathematical_induction&quot;&gt;induction&lt;/a&gt; step
-engine that.&lt;/p&gt;
-
-&lt;p&gt;So, let’s look at the case where &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; isn’t true, but yet we are within a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle.  In this case, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt; must be the address of the next request
-that will be returned from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;($past(o_wb_cyc))&amp;amp;&amp;amp;(!o_valid)&amp;amp;&amp;amp;(!$past(i_new_pc))
-			&amp;amp;&amp;amp;(o_wb_cyc))
-		assert(o_pc[AW+1:2] == this_return_address);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We need to check the same thing with the cache word.  Any time the cache
-becomes valid, the address coming back needs to be one past the &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt;
-address being presented to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;($past(o_wb_cyc))
-			&amp;amp;&amp;amp;(!$past(cache_valid))&amp;amp;&amp;amp;(cache_valid))
-		assert(next_pc_address == $past(this_return_address));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The final step looks at these relationships a bit more thoroughly.  We’ll
-examine only those times, though, when the bus is active.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	if ((f_past_valid)&amp;amp;&amp;amp;($past(o_wb_cyc))&amp;amp;&amp;amp;(o_wb_cyc))
-	begin&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If there’s one active value in our FIFO, then anything returned from the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-should have an address given by our next
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-address.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		if ((o_valid)&amp;amp;&amp;amp;(!cache_valid))
-			assert(this_return_address == next_pc_address);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Likewise anytime we have no valid instructions, the next value to be returned
-by the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-must match the next
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;
-value, &lt;code class=&quot;highlighter-rouge&quot;&gt;o_pc&lt;/code&gt;, to be sent to the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/zipcpu.v&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		else if (!o_valid)
-			assert(this_return_address == o_pc[AW+1:2]);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Finally, any time the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-is idle, and there’s only one word in our cache and it’s not illegal,
-then the address remaining on the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-needs to be the next address to be requested.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	end else if ((f_past_valid)&amp;amp;&amp;amp;(!invalid_bus_cycle)
-			&amp;amp;&amp;amp;(!o_wb_cyc)&amp;amp;&amp;amp;(o_valid)&amp;amp;&amp;amp;(!o_illegal)
-			&amp;amp;&amp;amp;(!cache_valid))
-		assert(o_wb_addr == next_pc_address);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;This leaves us with only two more assertions.  These are sort of dogs and
-cats assertions that don’t fit under any other category above.&lt;/p&gt;
-
-&lt;p&gt;First, the &lt;code class=&quot;highlighter-rouge&quot;&gt;invalid_bus_cycle&lt;/code&gt; should only ever be true if we aren’t in a
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle.  This assertion was added to make certain I could simplify
-some of the assertions above.  Since I know it is true, I could make the
-other assertions simpler.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if (invalid_bus_cycle)
-		assert(!o_wb_cyc);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Finally, the &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt; signal should never be true unless &lt;code class=&quot;highlighter-rouge&quot;&gt;o_valid&lt;/code&gt; is
-also true.  This lines up with the idea that &lt;code class=&quot;highlighter-rouge&quot;&gt;cache_valid&lt;/code&gt; is our signal that
-the second item within our two-element FIFO is valid, so therefore the first
-item in the FIFO must also be valid in these cases as well.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(*)
-	if (cache_valid)
-		assert(o_valid);&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Wow!  That was a lot of work on those properties!  The cool thing about these,
-though, is that now that I have these properties, I can then test simple logic
-changes to my design, such as &lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;trying to remove LUTs to make the design
-simpler&lt;/a&gt;,
-and see if those changes affect the functionality of this design.&lt;/p&gt;
-
-&lt;h2 id=&quot;cover-properties&quot;&gt;Cover Properties&lt;/h2&gt;
-
-&lt;p&gt;I haven’t presented &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; properties before, although they are a valuable
-part of
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal methods&lt;/a&gt;.
-The &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; property is very different from the &lt;code class=&quot;highlighter-rouge&quot;&gt;assume&lt;/code&gt; an &lt;code class=&quot;highlighter-rouge&quot;&gt;assert&lt;/code&gt; properties
-above.  Indeed, &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; is called a “liveness” property, unlike
-&lt;code class=&quot;highlighter-rouge&quot;&gt;assume&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;assert&lt;/code&gt; which are called “safety” properties.  The difference is
-that &lt;code class=&quot;highlighter-rouge&quot;&gt;assume&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;assert&lt;/code&gt; properties must apply to all traces, whereas a
-&lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; property only needs to apply to a single trace to be true.&lt;/p&gt;
-
-&lt;p&gt;A quick Google search suggests that there’s a bit of a disagreement as to
-whether “liveness” properties are even needed, or whether “safety” properties
-are sufficient.&lt;/p&gt;
-
-&lt;p&gt;While I’m not going to enter into that debate today, I will note that
-&lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; statements can be used while you are building your design to
-see if it is working.&lt;/p&gt;
-
-&lt;p&gt;As an example, before I listed out all of the properties in the last
-section, I wanted to know if this routine might ever get a third
-acknowledgment from the same
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle.  If you’ll remember from Fig 11 above, this was part of the purpose
-of
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;this design&lt;/a&gt;
-in the first place–to be able to continue the
-&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;bus&lt;/a&gt;
-cycle as long as possible.  Therefore, I put the following &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt;
-statement into my design.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	always @(posedge i_clk)
-	cover((f_past_valid)&amp;amp;&amp;amp;($past(f_nacks)==3)
-		&amp;amp;&amp;amp;($past(i_wb_ack))&amp;amp;&amp;amp;($past(o_wb_cyc)));&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;When this &lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; statement failed at first, I knew I didn’t have my design
-right yet.  Further, when I dug into the problem, I discovered that this
-&lt;code class=&quot;highlighter-rouge&quot;&gt;cover&lt;/code&gt; statement was failing not due to my logic, but rather due to some
-erroneous assumptions I had made.&lt;/p&gt;
-
-&lt;p&gt;Erroneous assumptions can be particularly problematic in
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal methods&lt;/a&gt;,
-especially if you are only using the “safety” properties, &lt;code class=&quot;highlighter-rouge&quot;&gt;assume&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;assert&lt;/code&gt;,
-since an erroneous assumption will artificially limit your proof.  Worse yet,
-you might not notice that your assumptions are creating this artificial
-limit.  Such an assumption might then give you a false assurance that your
-design works–even though it does not. (Yes, I’ve &lt;a href=&quot;/blog/2018/02/09/first-cyclonev.html&quot;&gt;been burned by
-this&lt;/a&gt;
-more than once.)&lt;/p&gt;
-
-&lt;h2 id=&quot;logic-usage&quot;&gt;Logic Usage&lt;/h2&gt;
-
-&lt;p&gt;If you’ll remember from when we started, the purpose of this particular
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch
-module&lt;/a&gt;
-was to be a compromise–it was to have better performance than our &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;one
-instruction prefetch&lt;/a&gt;,
-but not nearly as much as we might have with a proper &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;instruction
-cache&lt;/a&gt;.
-It’s also supposed to be a (fairly) low logic design.&lt;/p&gt;
-
-&lt;p&gt;So, for a small design, how did we do?&lt;/p&gt;
-
-&lt;p&gt;In particular, I’d like to place
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;this prefetch&lt;/a&gt;
-into both a
-&lt;a href=&quot;https://tinyfpga.com&quot;&gt;TinyFPGA&lt;/a&gt;
-and the &lt;a href=&quot;/blog/2017/12/16/max1k.html&quot;&gt;MAX1000 from Arrow&lt;/a&gt;.
-Will it fit?&lt;/p&gt;
-
-&lt;p&gt;The iCE40 &lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-within the &lt;a href=&quot;https://tinyfpga.com&quot;&gt;TinyFPGA&lt;/a&gt; board is perhaps the most
-constrained of these two.  This
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;
-has just less than 8k 4-LUTs available to it.  With just a simple
-&lt;a href=&quot;https://www.clifford.at/yosys&quot;&gt;yosys&lt;/a&gt;
-script,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;read_verilog dblfetch.v
-synth_ice40&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;we can easily measure this components usage on an iCE40–in only
-a half-second no less (try doing that with a vendor tool!).  You can
-see the LUT4 usage of these various components in the table below.&lt;/p&gt;
-
-&lt;table class=&quot;bordered-table&quot;&gt;
-  &lt;thead&gt;
-    &lt;tr&gt;
-      &lt;th&gt;Prefetch&lt;/th&gt;
-      &lt;th&gt;LUT4s&lt;/th&gt;
-      &lt;th&gt;iCE40 Device usage&lt;/th&gt;
-    &lt;/tr&gt;
-  &lt;/thead&gt;
-  &lt;tbody&gt;
-    &lt;tr&gt;
-      &lt;td&gt;Single&lt;/td&gt;
-      &lt;td&gt;74&lt;/td&gt;
-      &lt;td&gt;1.0%&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;Double&lt;/td&gt;
-      &lt;td&gt;247&lt;/td&gt;
-      &lt;td&gt;3.2%&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;(Before)&lt;/td&gt;
-      &lt;td&gt;277&lt;/td&gt;
-      &lt;td&gt;3.6%&lt;/td&gt;
-    &lt;/tr&gt;
-    &lt;tr&gt;
-      &lt;td&gt;w/ 4k Cache&lt;/td&gt;
-      &lt;td&gt;621&lt;/td&gt;
-      &lt;td&gt;8.0%&lt;/td&gt;
-    &lt;/tr&gt;
-  &lt;/tbody&gt;
-&lt;/table&gt;
-
-&lt;p&gt;As you can see from the table, this module offers an area compromise between
-the &lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;slowest prefetch
-module&lt;/a&gt;
-and the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;full prefetch and cache
-module&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;running-the-zipcpu-with-this-prefetch&quot;&gt;Running the ZipCPU with this prefetch&lt;/h2&gt;
-
-&lt;p&gt;If you want to try running the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-or even
-&lt;a href=&quot;/zipcpu/2018/02/12/zbasic-intro.html&quot;&gt;ZBasic&lt;/a&gt; with this
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;this prefetch&lt;/a&gt;
-installed, all you need to do is to adjust the flags in
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/cpudefs.v&quot;&gt;cpudefs.v&lt;/a&gt;.
-Specifically, you’ll want to make certain the &lt;code class=&quot;highlighter-rouge&quot;&gt;OPT_SINGLE_FETCH&lt;/code&gt; define is
-commented,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;// `define	OPT_SINGLE_FETCH&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;and the &lt;code class=&quot;highlighter-rouge&quot;&gt;OPT_DOUBLE_FETCH&lt;/code&gt; line is not,&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;`ifndef	OPT_SINGLE_FETCH
-`define	OPT_DOUBLE_FETCH
-`endif&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;You may recall discussing &lt;a href=&quot;/zipcpu/2018/01/31/cpu-build.html&quot;&gt;this comparison in a previous
-article&lt;/a&gt;,
-only now this &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;compromise prefetch
-module&lt;/a&gt;
-has been updated for better performance and lower logic.  Hence, if you’ve
-downloaded the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; before, you’ll
-want to do a &lt;code class=&quot;highlighter-rouge&quot;&gt;git pull&lt;/code&gt; to get the latest version of
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;this module&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
-
-&lt;p&gt;While it’s generally true that nothing comes for free, today’s post presents
-a bit of an exception.  By redesigning &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;my original dblfetch
-module&lt;/a&gt;,
-used by the &lt;a href=&quot;https://github.com/ZipCPU/s6soc&quot;&gt;S6SoC&lt;/a&gt;
-and some other &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; low logic
-implementations, we were able to get both better performance and
-&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;fewer LUTs&lt;/a&gt;.
-Hence, there are two conclusions we might draw:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;In general, the more LUTs you apply to a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;soft-core CPU&lt;/a&gt;,
-the faster the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt; will be.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;There exist times when a better design can achieve more or better
-performance.  Today’s post represents one of those times.  Such
-performance increases, though, do tend to be asymptotic over time.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;What made the difference?  This new/updated
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;
-doesn’t use a two element memory array, nor the associated pair of valid
-signals, to capture the two elements returned by the bus.&lt;/p&gt;
-
-&lt;p&gt;How about the
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal methods&lt;/a&gt; we
-used?  Did they help?  To this I’ll answer both yes and no.  The first time
-I used this logic in a
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;simulated&lt;/a&gt;
-&lt;a href=&quot;/blog/2017/12/16/max1k.html&quot;&gt;board&lt;/a&gt;, the
-&lt;a href=&quot;/zipcpu/2018/02/12/zbasic-intro.html&quot;&gt;CPU test&lt;/a&gt;
-failed.  That’s the “No” part of the answer.  However, the logic failed
-within the early branch logic in the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/idecode.v&quot;&gt;instruction
-decoder&lt;/a&gt;, not the
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;.
-Indeed, this updated
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;
-has yet to have any failures since passing
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal verification&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Sadly, this wonderful anecdote of the performance of
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal methods&lt;/a&gt;
-isn’t nearly as clear as I might like it to be.  The logic that failed within
-the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/idecode.v&quot;&gt;instruction
-decoder&lt;/a&gt;
-had already been &lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formally
-verified&lt;/a&gt;.
-Apparently, that proof just wasn’t sufficient and I must still be only learning
-&lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;formal methods&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The one question we haven’t answered is just how much faster is this
-&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dblfetch.v&quot;&gt;prefetch&lt;/a&gt;?
-That is, how does it’s &lt;em&gt;performance&lt;/em&gt; quantitatively compare to the other
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
-&lt;a href=&quot;/zipcpu/2017/11/18/wb-prefetch.html&quot;&gt;prefetch&lt;/a&gt; modules?
-I’m going to hold those questions off, though, for a future article on how
-to measure your &lt;a href=&quot;https://en.wikipedia.org/wiki/Soft_microprocessor&quot;&gt;CPU&lt;/a&gt;’s
-performance via a benchmark test–such as the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Dhrystone&quot;&gt;Dhrystone benchmark&lt;/a&gt;.  Such a
-benchmark test will also bring us face to face with the fact that our
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
-speed measurements above weren’t accurate at all since they ignored the
-(very significant) cost of
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Branch_(computer_science)&quot;&gt;branching&lt;/a&gt;.&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Many will say to me in that day, Lord, Lord, have we not prophesied in thy name? and in thy name have cast out devils? and in thy name done many wonderful works?  And then will I profess unto them, I never knew you: depart from me, ye that work iniquity.  (Matt 7:22-23)&lt;/em&gt;</description>
-        <pubDate>Wed, 21 Mar 2018 00:00:00 -0400</pubDate>
-        <link>http://zipcpu.com/zipcpu/2018/03/21/dblfetch.html</link>
-        <guid isPermaLink="true">http://zipcpu.com/zipcpu/2018/03/21/dblfetch.html</guid>
-        
-        
-        <category>zipcpu</category>
         
       </item>
     
