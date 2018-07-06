@@ -1,0 +1,1948 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Crossing clock domains with an Asynchronous FIFO</title>
+  <meta name="description" content="My first VGA video project wasfor a Basys3 board,following Digilent’sinstructions.The system ran at 100MHz with a 25MHz pixel clock that I could create bydiv...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2018/07/06/afifo.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Crossing clock domains with an Asynchronous FIFO</h1>
+    <p class="post-meta"><time datetime="2018-07-06T00:00:00-04:00" itemprop="datePublished">Jul 6, 2018</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>My first <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA video</a> project was
+for a <a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users">Basys3 board</a>,
+following <a href="https://reference.digilentinc.com/reference/programmable-logic/basys-3/reference-manual">Digilent’s
+instructions</a>.
+The system ran at 100MHz with a 25MHz pixel clock that I could create by
+dividing the 100MHz clock down in logic, rather than using a PLL.  In that
+design, I could also divide the 100MHz clock by two in logic to reference
+flash, and so I had a <a href="https://opencores.org/project/qspiflash">flash
+controller</a>
+running from a 50MHz clock.  It was a complex design, partly because in order
+to get enough bandwidth from flash to video I needed to compress the video
+images on the flash device.  In the end, though, everything ran off of a single
+100MHz clock–in spite of the various rates moving through the board.</p>
+
+<p>If only things stayed that easy.</p>
+
+<p>Since then, I’ve worked on a <a href="https://github.com/ZipCPU/videozip">video project</a>
+having a 148.5MHz pixel rate, but where the
+<a href="https://en.wikipedia.org/wiki/Synchronous_dynamic_random-access_memory">SDRAM memory</a>
+controller wanted a 100MHz clock.
+Moving the pixels from the memory clock to the video and back again was a
+challenge that I never got past–and part of the reason why the design doesn’t
+quite work yet.</p>
+
+<p>I’ve also wanted to work on an <a href="https://en.wikipedia.org/wiki/I2S">I2S audio</a>
+system–also on <a href="https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications">Digilent’s
+Nexys Video board</a>.
+Like the 148.5MHz video system, the audio system on that board wants a clock
+that isn’t an easy logical division of 100MHz: it wants a 49.152MHz clock.</p>
+
+<p>Both of these designs required having a data stream generated in one
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>,
+but consumed in another.</p>
+
+<p>Sure, I tried solving the problem using the techniques I’d discussed earlier
+in my <a href="/blog/2017/10/20/cdc.html">clock domain
+crossing</a> article, but the results
+… never really worked.  When passing streaming data around, the approaches
+described in
+<a href="/blog/2017/10/20/cdc.html">that article</a> just weren’t
+up to the task.  They were the wrong solution for the job.  A much more
+appropriate solution would’ve been an <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous
+FIFO</a>.</p>
+
+<p>My journey with <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous
+FIFO</a>s
+started out with the initial belief that they were a wizards concept
+that I just didn’t understand.  Then I found a 
+<a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">paper</a>
+by Cliff Cummings on the topic.  Not only did
+<a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">this paper</a>
+describe what an <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous
+FIFO</a>
+was, but it also made some amazing claims about the
+<a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">FIFO</a>’s
+performance that weren’t apparent to me as I examined his code.
+In particular, I wasn’t convinced that his implementation of an <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous
+FIFO</a>
+wouldn’t overflow, wouldn’t underflow, or even that the
+<a href="/formal/2018/04/12/areset.html">asynchronous reset</a>’s
+would work properly.</p>
+
+<p>At one time I even sat down with Cummings and asked him about his
+implementation.  After chatting together, we both agreed the design might be
+an ideal design to verify using <a href="/blog/2017/10/19/formal-intro.html">formal
+techniques</a>.</p>
+
+<p>So let me dedicate this article to him.</p>
+
+<p>This article is also a gateway article to other articles discussing systems
+that require <a href="/blog/2017/10/20/cdc.html">clock domain
+crossings</a>–such as presenting the
+<a href="https://github.com/ZipCPU/vgasim">video simulator</a> I posted on
+<a href="https://github.com/ZipCPU/vgasim">github</a>, and what makes it special.</p>
+
+<p>Since the FIFO we’ll be discussing today is asynchronous, I would
+recommend you first read our discussion of properties associated with an
+<a href="/formal/2018/04/12/areset.html">asynchronous reset</a>,
+as well as the <a href="/formal/2018/05/31/clkswitch.html">example of the asynchronous clock
+switch</a>.  These will
+give you a bit of background regarding how we might handle multiple clocks
+while at the same time working through a design
+<a href="/blog/2017/10/19/formal-intro.html">formally</a>.</p>
+
+<h2 id="basic-fifo">Basic FIFO</h2>
+
+<p>If you’ve never wrestled with the concept of an <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous
+FIFO</a>
+before, you might ask yourself what the big deal is?  Indeed, in many ways an
+<a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous FIFO</a>
+is just like <a href="/blog/2017/07/29/fifo.html">any other FIFO</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 1. A Basic synchronous FIFO</caption><tr><td><img src="/img/afifo-sinternal.svg" alt="" width="780" /></td></tr></table>
+
+<p>Let’s compare the two FIFOs with each other.  Both a synchronous and
+asynchronous FIFOs have a write pointer.  We’ll call this <code class="highlighter-rouge">wbin</code>.  Then,
+on any write, we’ll increase this pointer by one–but only if the FIFO
+isn’t already FULL.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	wbin = 0;
+	always @(posedge i_wclk or negedge i_wrst_n)
+	if (!i_wrst_n)
+		wbin &lt;= 0;
+	else ((i_wr)&amp;&amp;(!o_wfull))
+		wbin &lt;= wbin + 1;</code></pre></figure>
+
+<p>Did you notice that this logic takes place using the write
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>,
+<code class="highlighter-rouge">i_wclk</code>?  Or that the
+<a href="/formal/2018/04/12/areset.html">reset</a>
+was a negative edge driven
+<a href="/formal/2018/04/12/areset.html">asynchronous reset</a>
+in the write <a href="/blog/2017/10/20/cdc.html">clock domain</a>
+as well?  You’d expect this from an <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous
+FIFO</a>.
+The write pointer logic within a <a href="/blog/2017/07/29/fifo.html">synchronous
+FIFO </a>
+would be the same except that only one
+clock would be used, likely with a synchronous reset as well.</p>
+
+<p><a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">Cliff Cummings’
+FIFO</a>
+is just subtly different from <a href="/blog/2017/07/29/fifo.html">my own earlier presentation of a synchronous
+FIFO</a>: his 
+<a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">FIFO</a>
+holds a full <code class="highlighter-rouge">2^N</code> elements.  The <a href="/blog/2017/07/29/fifo.html">FIFO I presented
+earlier</a>
+only holds <code class="highlighter-rouge">(2^N)-1</code> elements.  I like the difference, and will probably
+upgrade my own synchronous FIFO implementations to follow this lead as well.
+This changes <code class="highlighter-rouge">wbin</code> slightly–we’ll now use <code class="highlighter-rouge">N+1</code> address bits in
+<code class="highlighter-rouge">wbin</code> to hold a pointer into a <code class="highlighter-rouge">2^N</code> element FIFO.</p>
+
+<p>Moving on with our comparison between asynchronous and synchronous FIFOs,
+both of them will need to place the incoming data into a memory (block RAM)
+on any write.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_wclk)
+	if ((i_wr)&amp;&amp;(!o_wfull))
+		mem[wbin[AW-1:0]] &lt;= i_wdata;</code></pre></figure>
+
+<p>In the case of the asynchronous FIFO, this is also done specifically using a
+clock associated with the write channel, <code class="highlighter-rouge">i_wclk</code>.  I’ve also used <code class="highlighter-rouge">AW</code> to
+reflect the <em>address width</em> of this memory.  I’ll probably still refer to this
+as <code class="highlighter-rouge">N</code> throughout in this text.</p>
+
+<p>The read logic is very similar to the write logic above.  The logic starts
+by adjusting a read address pointer which we’ll call <code class="highlighter-rouge">rbin</code>.
+Like <code class="highlighter-rouge">wbin</code> above, this has one more bit than necessary to actually address
+a value within the buffer–hence it has <code class="highlighter-rouge">N+1</code> bits to access <code class="highlighter-rouge">2^N</code> data points.
+In a fashion similar to the write pointer, this pointer also needs to
+increment: anytime there’s a read request and the buffer isn’t empty.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	rbin = 0;
+	always @(posedge i_rclk or negedge i_rrst_n)
+	if (!i_rrst_n)
+		rbin &lt;= 0;
+	else if ((i_rd)&amp;&amp;(!o_rempty))
+		rbin &lt;= rbin + 1;</code></pre></figure>
+
+<p>As a final step, we’ll read from the memory and return the result.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	o_rdata = mem[rbin[AW-1:0]];</code></pre></figure>
+
+<p>Voila!  That’s the basics of any FIFO–synchronous or asynchronous.  How
+much harder can it be?</p>
+
+<p>Much.</p>
+
+<p>As with most digital design problems, the devil lies buried in the details.
+In this case, look a little closer at the two flags, <code class="highlighter-rouge">o_wfull</code> indicating
+that the FIFO is full and <code class="highlighter-rouge">o_rempty</code> indicating that it is empty.</p>
+
+<p>As a first attempt to calculate these, we might express them with
+combinatorial logic, as in:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// The FIFO is empty when both read and write pointers point to the
+	// same location.
+	assign	o_rempty = (wbin == rbin);
+
+	// It is full when wbin-rbin = 2^N.  In that case, the bottom AW
+	// address bits are identical, but the top bit is different.
+	assign	o_wfull  = (wbin[AW] != rbin[AW])
+				&amp;&amp; (wbin[AW-1:0]==rbin[AW-1:0]);</code></pre></figure>
+
+<p>Herein lies the problem.</p>
+
+<p>For a synchronous FIFO, both <code class="highlighter-rouge">AW+1</code> bit pointers are generated on the same
+clock, so there isn’t an immediately apparent problem.  Sure, you might
+adjust this logic so the <code class="highlighter-rouge">o_rempty</code> and <code class="highlighter-rouge">o_wfull</code> flags are registered,
+but they’ll still have these same basic values.</p>
+
+<p>The big problem with these two pointers is specific to any
+<em>asynchronous</em> FIFO design.  In an asynchronous design, the read pointer is
+kept in the read clock domain and the write pointer in a separate write clock
+domain.  Calculating <code class="highlighter-rouge">o_rempty</code> or <code class="highlighter-rouge">o_wfull</code> requires <a href="/blog/2017/10/20/cdc.html">crossing clock
+domains</a>.
+This invites problems with
+<a href="https://en.wikipedia.org/wiki/Metastability_in_electronics">metastability</a>,
+where a design might fine work in simulation but not on actual hardware.
+Indeed, it might work 95% of the time on actual hardware, leaving behind
+incomprehensible results when it doesn’t work.</p>
+
+<p>I’ve tried to illustrate this problem in Fig 2 below.  In this figure, I
+colored the background based upon which part of the design lies within each
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>, whether
+yellow for the write clock, or green for the read clock.</p>
+
+<table align="center" style="float: none"><caption>Fig 2. In an Asynchronous FIFO, the pointers need to cross clock domains</caption><tr><td><img src="/img/afifo-internals.svg" alt="" width="780" /></td></tr></table>
+
+<p>Fixing these two flags is really the focus of how to build an <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">asynchronous
+FIFO</a>.
+To do so, we’ll build off of our previous work using <a href="/blog/2017/10/20/cdc.html">2FF or 3FF
+synchronizers</a>, but this time we’ll
+need to introduce <a href="https://en.wikipedia.org/wiki/Gray_code">Gray codes</a> as well.
+Each of these concepts is shown in Fig 2 above.</p>
+
+<h2 id="gray-codes">Gray Codes</h2>
+
+<table align="center" style="float: right"><caption>Fig 3. A two clock synchronizer</caption><tr><td><img src="/img/cdc-dbl-clock.svg" alt="" width="360" /></td></tr></table>
+
+<p>When we <a href="/blog/2017/10/20/cdc.html">last discussed clock domain
+crossings</a>, we shows how it was
+possible to use a two or a three clock synchronizer to pass a
+one-bit value from one
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>
+to the next.  Fig 3 shows an example of this, using two
+<a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip flops</a>
+clocked in the new domain–this would be a <a href="/blog/2017/10/20/cdc.html">two clock
+synchronizer</a>.</p>
+
+<p>The code for this operation is shown below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge new_clock)
+		resynchronized_value &lt;= { unstable_values, unsynchronized_input };</code></pre></figure>
+
+<p>In the case of this one bit difference, it doesn’t really matter if that one
+bit change arrives one clock earlier or one clock later–it’s just a slow
+signal with no dependencies.</p>
+
+<table align="center" style="float: right"><caption>Fig 4. Counting in Gray Code</caption><tr><td><img src="/img/afifo-gray-code.svg" alt="" width="360" /></td></tr></table>
+
+<p>Sadly, we’re not trying to cross a 1-bit signal from one
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>
+to another, but rather an <code class="highlighter-rouge">N</code> bit (i.e. <code class="highlighter-rouge">AW</code>-bit) signal from one
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>
+to the next–whether <code class="highlighter-rouge">wbin</code> to the read clock side or <code class="highlighter-rouge">rbin</code> to the write
+clock side.  If we put the whole word into a synchronizer, like the one shown
+in Fig 3 but with more bits, then the outputs
+wouldn’t suffer from
+<a href="https://en.wikipedia.org/wiki/Metastability_in_electronics">metastability</a>
+anymore, but they might not be stable anymore
+either.  For example, if <code class="highlighter-rouge">rbin</code> were all ones and transitioning to all zeros,
+then some uncontrolled random number of ones might be set at the output of the
+synchronizer–depending upon how the bits were routed, and thus upon
+which arrived before the new clock signal and which arrived afterwards.
+As an example, an <code class="highlighter-rouge">8'hff</code> transitioning to <code class="highlighter-rouge">8'h00</code> might be read as <code class="highlighter-rouge">8'h52</code>
+(among many, many other possibilities).  This is unacceptable.</p>
+
+<p>The solution is to pass the address from one
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>
+to another in a form chosen so that only one bit will ever change at any time.
+Formally, we can describe such a <code class="highlighter-rouge">word</code> with the requirement that the
+difference between any <code class="highlighter-rouge">word</code> and the <code class="highlighter-rouge">$past()</code> version of it must be
+no more than one bit.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge first_clk)
+		word &lt;= // Logic to create the next value;
+
+	// Verify that it has no more than one bit difference
+	always @(posedge first_clk)
+		assert((word == $past(word))
+			||($onehot(word ^ $past(word))));</code></pre></figure>
+
+<p><code class="highlighter-rouge">$onehot</code> is a <a href="https://en.wikipedia.org/wiki/SystemVerilog">SystemVerilog</a>
+function that returns <code class="highlighter-rouge">1</code> (true) if and only
+if one bit is set within its argument, and zero otherwise.</p>
+
+<p>Sadly, the open source version of <a href="https://www.clifford.at/yosys">Yosys</a>
+doesn’t (yet) understand <code class="highlighter-rouge">$onehot</code>.  (The commercial version does.)  We’ll
+alternatively express this within a loop.</p>
+
+<p>Specifically, if any single bit changes between the new and old values, then
+all other values must be the same.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	genvar	k;
+	generate for (k=0; k &lt;= AW; k=k+1)
+	begin : CHECK_ONEHOT
+		always @($global_clock)
+			assert(word[k] == $past(word[k])
+				||(word ^ $past(word) ^ (1&lt;&lt;k) == 0));
+	end</code></pre></figure>
+
+<p>Okay, so this is our criteria for success, but what sort of encoding meets
+this criteria?  <a href="https://en.wikipedia.org/wiki/Gray_code">Gray coding</a>!</p>
+
+<p>If we have a counter such as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+		counter &lt;= counter + 1;</code></pre></figure>
+
+<p>then a <a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+version of that same counter will have the property that only
+one bit changes at a time.  We can create this 
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+by exclusively <code class="highlighter-rouge">OR</code>ing the counter with itself shifted down by one.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign graycounter = counter ^ (counter &gt;&gt; 1);</code></pre></figure>
+
+<p>Using such a
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+counter, we can <a href="/blog/2017/10/20/cdc.html">cross clock
+domains</a>
+with both read
+and write address pointers.  Not only will the results be stable and so
+not suffer from
+<a href="https://en.wikipedia.org/wiki/Metastability_in_electronics">metastability</a>,
+but they will also capture all of the 
+information within the address in an fashion that won’t be corrupted
+if any given bit within the word arrives earlier or later.</p>
+
+<p>This means we’ll add
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a> pointers to
+our FIFO design in order to bridge them across
+the <a href="/blog/2017/10/20/cdc.html">clock domain divide</a>.
+First, the read pointer, now
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+and represented as <code class="highlighter-rouge">rgray</code>, will cross to the write <a href="/blog/2017/10/20/cdc.html">clock
+domain</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	{ wq2_rgray,  wq1_rgray } = 0;
+	always @(posedge i_wclk or negedge i_wrst_n)
+	if (!i_wrst_n)
+		{ wq2_rgray, wq1_rgray } &lt;= 0;
+	else
+		{ wq2_rgray, wq1_rgray } &lt;= { wq1_rgray, rgray };</code></pre></figure>
+
+<p>This is just an <code class="highlighter-rouge">N</code>-bit wide, two flip-flop synchronizer, such as we
+<a href="/blog/2017/10/20/cdc.html">introduced earlier</a>
+and diagrammed in Fig 3 above.</p>
+
+<p>Second, the write pointer,
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+as <code class="highlighter-rouge">wgray</code>, will cross from the write to the read
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	{ rq2_wgray,  rq1_wgray } = 0;
+	always @(posedge i_rclk or negedge i_rrst_n)
+	if (!i_rrst_n)
+		{ rq2_wgray, rq1_wgray } &lt;= 0;
+	else
+		{ rq2_wgray, rq1_wgray } &lt;= { rq1_wgray, wgray };</code></pre></figure>
+
+<p>This brings our two pointers, <code class="highlighter-rouge">rbin</code> and <code class="highlighter-rouge">wbin</code>,  into the other
+<a href="/blog/2017/10/20/cdc.html">clock domain</a> as <code class="highlighter-rouge">wq2_rgray</code>
+and <code class="highlighter-rouge">rq2_wgray</code>, but these values are no longer counters.  How shall we use
+them in our comparisons?  Do we need to convert them back to more traditional
+counters?</p>
+
+<h2 id="comparing-gray-coded-pointers">Comparing Gray coded pointers</h2>
+
+<p>Let’s examine how we might use these two
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> pointers.
+Remember, we need to determine when the FIFO is empty and when it is
+full.  Before, we had the two lines,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	o_rempty = (wbin == rbin);
+	assign	o_wfull  = (wbin[AW] != rbin[AW])
+				&amp;&amp; (wbin[AW-1:0]==rbin[AW-1:0]);</code></pre></figure>
+
+<p>Perhaps you noticed the <code class="highlighter-rouge">r</code> in <code class="highlighter-rouge">o_rempty</code>, or the <code class="highlighter-rouge">w</code> in <code class="highlighter-rouge">o_wfull</code>.  These
+are from <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">Cummings’
+notation</a>,
+and used to remind the reader that <code class="highlighter-rouge">o_rempty</code> is calculated in the read
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>,
+whereas <code class="highlighter-rouge">o_wfull</code> is calculated in the write
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>.</p>
+
+<p>If you examine the
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+counters illustrated in Fig 4, you’ll notice that the
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+values are unique–just like the counters they represent.  Further, an
+<code class="highlighter-rouge">N</code> bit counter can be represented with an <code class="highlighter-rouge">N</code> bit
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray code</a>.
+In other words, if you want to check whether or not two pointers
+are identical, you only need to check whether the two
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a> pointers are identical.</p>
+
+<p>This works great for testing whether or not the FIFO is empty.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	o_rempty = (rq2_wgray == rgray);</code></pre></figure>
+
+<p>But how shall we test if the FIFO is full?</p>
+
+<p>In this case, the math is more complicated.  We want to test whether or not
+<code class="highlighter-rouge">wbin - rbin == 2^N</code>.  If this is true, then the FIFO is full.  Notice that
+any time this comparison is true, the bottom <code class="highlighter-rouge">N-1</code> bits will be constant
+between <code class="highlighter-rouge">wbin</code> and <code class="highlighter-rouge">rbin</code>, and the top bit will be flipped.</p>
+
+<table align="center" style="float: right"><caption>Fig 5. If the top bit of an address changes, then both the top two bits of the Gray coded address change</caption><tr><td><img src="/img/afifo-ptr-to-graycode.svg" alt="" width="360" /></td></tr></table>
+
+<p>To see how this comparison changes once converted to
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray code</a>,
+consider the
+example of <code class="highlighter-rouge">16</code> element FIFO.  Such a FIFO will require 5-bit read and write
+pointers.  We’ll allow 5-bits of the read pointer to have the arbitrary
+value, <code class="highlighter-rouge"><span class="p">{</span><span class="err">a,</span><span class="w"> </span><span class="err">b,</span><span class="w"> </span><span class="err">c,</span><span class="w"> </span><span class="err">d,</span><span class="w"> </span><span class="err">e</span><span class="p">}</span></code>.  When the FIFO is full, the associated write
+pointer will be <code class="highlighter-rouge"><span class="p">{</span><span class="w"> </span><span class="err">!a,</span><span class="w"> </span><span class="err">b,</span><span class="w"> </span><span class="err">c,</span><span class="w"> </span><span class="err">d,</span><span class="w"> </span><span class="err">e</span><span class="w"> </span><span class="p">}</span></code>.  Now, consider what will happen to this
+pointer when converted to
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray code</a>,
+as shown in Fig 5 for the write pointer.</p>
+
+<p>Remember how the only bit that differed for the write pointer was the most
+significant bit.  From Fig 5, you can see that all but the top two bits will
+be identical between the read and write pointers following the conversion to
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray code</a>.
+Hence, we can test whether the two pointers are identical
+in all but their top bits by testing whether the top two bits are opposites,
+but the rest of the bits are identical.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	o_wfull  = (wgray[AW:AW-1] == ~wq2_rgray[AW:AW-1])
+				&amp;&amp; (wgray[AW-2:0]==wq2_rgray[AW-2:0]);</code></pre></figure>
+
+<p>The solution <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">Cummings’
+presents</a>
+is almost identical.  The difference is that he creates <code class="highlighter-rouge">o_rempty</code> and
+<code class="highlighter-rouge">o_wfull</code> using clocked logic instead of combinatorial for better performance.
+As a result, his solution looks more like,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_rclk or negedge i_rrst_n)
+	if (!i_rrst_n)
+		o_rempty &lt;= 1'b0;
+	else
+		o_rempty &lt;= (rq2_wgray == rgray);</code></pre></figure>
+
+<p>and</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_wclk or negedge i_wrst_n)
+	if (!i_wrst_n)
+		o_wfull &lt;= 1'b0;
+	else
+		o_wfull &lt;= (wgray[AW:AW-1] == ~wq2_rgray[AW:AW-1])
+				&amp;&amp; (wgray[AW-2:0]==wq2_rgray[AW-2:0]);</code></pre></figure>
+
+<p>However, at this point in the development … I got lost.  Sure, these
+pointers are now
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a> and so they’ll pass
+from one <a href="/blog/2017/10/20/cdc.html">clock domain</a>
+to another without problems, but how shall I get some confidence that this
+design actually works now that it is so different from the synchronous FIFO
+I am familiar with?  I mean, what confidence can I have that these two flags,
+already delayed by two clocks, are going to keep the FIFO from underruns or
+overruns?
+<a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">Cummings</a>
+confidently declares that his solution works, citing the works of those who
+have proved these properties.  However, even after I read his document, I
+remained unconvinced, and not certain of whether or not I wanted to trust my
+professional designs to his hand waving.  (Sorry Cliff!)</p>
+
+<p>What I’d like is to have the confidence that can only come from some form
+of <em><a href="/blog/2017/10/19/formal-intro.html">formal proof</a></em>
+that this whole thing works–even after <a href="/blog/2017/10/20/cdc.html">crossing
+clock domains</a>.</p>
+
+<p>Therefore, let’s start looking at the components necessary to
+<a href="/blog/2017/10/19/formal-intro.html">formally verify</a>
+this design.</p>
+
+<h2 id="proof-outline">Proof Outline</h2>
+
+<p>Let’s consider what we might wish to prove.</p>
+
+<ol>
+  <li>
+    <p>We’d like to make certain that the FIFO pointers are “within bounds” at all
+times.  Since we used <code class="highlighter-rouge">AW+1</code> (address width) bits to represent a <code class="highlighter-rouge">2^(AW)</code>
+element FIFO, we’ll need to measure the fill at all times and make certain
+it remains within <code class="highlighter-rouge">0</code> and <code class="highlighter-rouge">2^(AW)</code>.</p>
+
+    <p>One of the neat things about
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+is that the variables and tests used within the formal section need not
+be synthesizable, neither are they susceptible to
+<a href="https://en.wikipedia.org/wiki/Metastability_in_electronics">metastability</a>.
+As a result, we can violate all principles of good synthesizable design,
+and we can measure the actual FIFO fill directly at any instant (well, at
+any formal timestep).</p>
+
+    <p>This fill should start out at zero, and it should always be less than
+or equal to the total amount of space in the FIFO.</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	wire	[AW-1:0]	f_fill;
+	assign	f_fill = (wbin - rbin);
+
+	initial	assert(f_fill == 0);
+	always @(*)
+		assert(f_fill &lt;= { 1'b1, {(AW){1'b0}} });</code></pre></figure>
+
+<ol start="2">
+  <li>Looking at the empty flag, we want to assert that any time the FIFO is
+actually empty, that the <code class="highlighter-rouge">o_rempty</code> flag is also high.</li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		if (f_fill == 0)
+			assert(o_rempty);</code></pre></figure>
+
+<ol start="3">
+  <li>We’ll want to do the same thing for <code class="highlighter-rouge">o_wfull</code>: any time the FIFO is truly
+full, we’ll want to assert that <code class="highlighter-rouge">o_wfull</code> is high.</li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		if (f_fill == { 1'b1, {(AW){1'b0}}})
+			assert(o_rempty);</code></pre></figure>
+
+<ol start="4">
+  <li>Just to make certain that these values won’t get stuck, let’s also use
+a <code class="highlighter-rouge">cover</code> property to cover going from not-empty to empty, and from
+full to not full.</li>
+</ol>
+
+<ol start="5">
+  <li>
+    <p>Finally, the <a href="http://www.techdesignforums.com/practice/technique/doc-formal-harness-the-power-of-invariant-based-bug-hunting/">classic means of proving that a FIFO
+works</a>
+is to accept two arbitrary values into the FIFO, at an arbitrary but
+sequential pair of locations, and then to verify that those same two
+values may be read out of the FIFO some time later.</p>
+
+    <p>Let’s add that to our proof requirements as well.</p>
+  </li>
+</ol>
+
+<p>This is only a high level view of the
+<a href="/blog/2017/10/19/formal-intro.html">formal properties</a>
+we’d like to use.  We’ll add some other properties below as well–if for
+no other reason than to make certain our design can <a href="/blog/2018/03/10/induction-exercise.html">pass
+induction</a>.</p>
+
+<h2 id="cliff-cummings-asynchronous-fifo">Cliff Cummings’ Asynchronous FIFO</h2>
+
+<table align="center" style="float: right"><caption>Fig 6. Asynchronous FIFO block diagram</caption><tr><td><img src="/img/afifo_io.svg" alt="" width="360" /></td></tr></table>
+
+<p><a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">Cummings’ FIFO</a>
+has the basic interface shown on the right in Fig 6.  Operation starts in the
+write domain, where <code class="highlighter-rouge">i_wdata</code> is written to the FIFO anytime <code class="highlighter-rouge">i_wr</code> is true
+and the <code class="highlighter-rouge">o_wfull</code> flag is false.  The data can then be read later from
+<code class="highlighter-rouge">o_rdata</code> any time <code class="highlighter-rouge">i_rd</code> is true and <code class="highlighter-rouge">o_rempty</code> is false, in the values
+<code class="highlighter-rouge">o_rdata</code>.  Likewise, there’s a clock and an
+<a href="/formal/2018/04/12/areset.html">asynchronous reset</a>
+associated with each
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>.</p>
+
+<p>Indeed, the interface is very straight-forward.</p>
+
+<p><a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">Cummings’
+FIFO</a>,
+however, is built using a series of separate modules: one module for each
+clock synchronizer, one for the memory itself, and another two modules for
+the read pointer and the write pointer respectively.
+Since a design with any hidden states within it may <a href="/blog/2018/03/10/induction-exercise.html">struggle to pass
+induction</a>,
+I took the liberty of rearranging <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">Cummings’
+FIFO</a>
+a little bit.  Specifically,
+I placed all the parts and pieces into a
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">single file</a>.
+This will make it easier to reference values within the design from within a
+single <a href="/blog/2017/10/19/formal-intro.html">formal property</a>
+section below.</p>
+
+<p>The design begins with some declarations.  Note that this FIFO will use a
+parameterized data width of two bits, and an address width of 4 bits–and so
+this FIFO will hold <code class="highlighter-rouge">2^4=16</code> elements.  While the widths are arbitrary, I’ve
+chosen smaller widths to help deal with the combinatorial explosion associated
+with using
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
+		i_rclk, i_rrst_n, i_rd, o_rdata, o_rempty);
+	parameter	DSIZE = 2,
+			ASIZE = 4;
+	localparam	DW = DSIZE,
+			AW = ASIZE;
+	input	wire			i_wclk, i_wrst_n, i_wr;
+	input	wire	[DW-1:0]	i_wdata;
+	output	wire			o_wfull;
+	input	wire			i_rclk, i_rrst_n, i_rd;
+	output	wire	[DW-1:0]	o_rdata;
+	output	wire			o_rempty;
+
+	wire	[AW-1:0]	waddr, raddr;
+	wire			wfull_next, rempty_next;
+	reg	[AW:0]		wgray, wbin, wq2_rgray, wq1_rgray,
+				rgray, rbin, rq2_wgray, rq1_wgray;
+	//
+	wire	[AW:0]		wgraynext, wbinnext;
+	wire	[AW:0]		rgraynext, rbinnext;
+
+	reg	[DW-1:0]	mem	[0:((1&lt;&lt;AW)-1)];</code></pre></figure>
+
+<p>These declarations are followed by the write logic of
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.
+This includes bringing the read
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> pointers into the write
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	//
+	// Cross clock domains
+	//
+	// Cross the read Gray pointer into the write clock domain
+	initial	{ wq2_rgray,  wq1_rgray } = 0;
+	always @(posedge i_wclk or negedge i_wrst_n)
+	if (!i_wrst_n)
+		{ wq2_rgray, wq1_rgray } &lt;= 0;
+	else
+		{ wq2_rgray, wq1_rgray } &lt;= { wq1_rgray, rgray };</code></pre></figure>
+
+<p>maintaining the write pointer and its
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray code</a>
+equivalent,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Calculate the next write address, and the next graycode pointer.
+	assign	wbinnext  = wbin + { {(AW){1'b0}}, ((i_wr) &amp;&amp; (!o_wfull)) };
+	assign	wgraynext = (wbinnext &gt;&gt; 1) ^ wbinnext;
+
+	assign	waddr = wbin[AW-1:0];
+
+	// Register these two values--the address and its Gray code
+	// representation
+	initial	{ wbin, wgray } = 0;
+	always @(posedge i_wclk or negedge i_wrst_n)
+	if (!i_wrst_n)
+		{ wbin, wgray } &lt;= 0;
+	else
+		{ wbin, wgray } &lt;= { wbinnext, wgraynext };
+
+	assign	wfull_next = (wgraynext == { ~wq2_rgray[AW:AW-1],
+				wq2_rgray[AW-2:0] });</code></pre></figure>
+
+<p>and writing values into the <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">asynchronous
+FIFO</a>
+on the write clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	//
+	// Calculate whether or not the register will be full on the next
+	// clock.
+	initial	o_wfull = 0;
+	always @(posedge i_wclk or negedge i_wrst_n)
+	if (!i_wrst_n)
+		o_wfull &lt;= 1'b0;
+	else
+		o_wfull &lt;= wfull_next;
+
+	//
+	// Write to the FIFO on a clock
+	always @(posedge i_wclk)
+	if ((i_wr)&amp;&amp;(!o_wfull))
+		mem[waddr] &lt;= i_wdata;</code></pre></figure>
+
+<p>The write section is followed by the read section, having almost exactly the
+same format.  First the
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+write address crosses clocks into the read
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	//
+	// Cross clock domains
+	//
+	// Cross the write Gray pointer into the read clock domain
+	initial	{ rq2_wgray,  rq1_wgray } = 0;
+	always @(posedge i_rclk or negedge i_rrst_n)
+	if (!i_rrst_n)
+		{ rq2_wgray, rq1_wgray } &lt;= 0;
+	else
+		{ rq2_wgray, rq1_wgray } &lt;= { rq1_wgray, wgray };</code></pre></figure>
+
+<p>then the read pointer is adjusted.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Calculate the next read address,
+	assign	rbinnext  = rbin + { {(AW){1'b0}}, ((i_rd)&amp;&amp;(!o_rempty)) };
+	// and the next Gray code version associated with it
+	assign	rgraynext = (rbinnext &gt;&gt; 1) ^ rbinnext;
+
+	// Register these two values, the read address and the Gray code version
+	// of it, on the next read clock
+	//
+	initial	{ rbin, rgray } = 0;
+	always @(posedge i_rclk or negedge i_rrst_n)
+	if (!i_rrst_n)
+		{ rbin, rgray } &lt;= 0;
+	else
+		{ rbin, rgray } &lt;= { rbinnext, rgraynext };
+
+	// Memory read address Gray code and pointer calculation
+	assign	raddr = rbin[AW-1:0];</code></pre></figure>
+
+<p>Finally, an determination is made as to whether or not
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+is empty and then a value is (may be) read from the buffer.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Determine if we'll be empty on the next clock
+	assign	rempty_next = (rgraynext == rq2_wgray);
+
+	initial o_rempty = 1;
+	always @(posedge i_rclk or negedge i_rrst_n)
+	if (!i_rrst_n)
+		o_rempty &lt;= 1'b1;
+	else
+		o_rempty &lt;= rempty_next;
+
+	//
+	// Read from the memory--a clockless read here, clocked by the next
+	// read FLOP in the next processing stage (somewhere else)
+	//
+	assign	o_rdata = mem[raddr];
+
+endmodule</code></pre></figure>
+
+<p>This is all straight forward with the exception of our pending question: will
+this work?</p>
+
+<p>Let’s write some
+<a href="/blog/2017/10/19/formal-intro.html">formal properties</a>
+together to find out.</p>
+
+<h2 id="assuming-two-clocks">Assuming two clocks</h2>
+
+<table align="center" style="float: right"><caption>Fig 7. Assuming an Arbitrary Clock Rate</caption><tr><td><img src="/img/afifo-clkstep.svg" alt="" width="240" /></td></tr></table>
+
+<p>We’ve <a href="/formal/2018/05/31/clkswitch.html">already discussed</a>
+how to assume a clock using
+<a href="https://en.wikipedia.org/wiki/SystemVerilog">SystemVerilog</a> properties
+and <a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>.
+Basically, this involves allowing the solver to pick two
+arbitrary step sizes, <code class="highlighter-rouge">f_wclk_step</code> and <code class="highlighter-rouge">f_rclk_step</code>, creating counters
+that step by these amounts but with arbitrary initial states, and then assuming
+the incoming clock is identical to the most-significant bits of these counters.
+All of this logic is shown pictorially in Fig 7 to the right.</p>
+
+<p>Let’s walk through those steps again, this time in Verilog.</p>
+
+<p>We’ll start with the arbitrary clock steps.  These are just constants, chosen
+by the solver.  They are subject to assumed constraints, but nothing more.
+In past articles, I would’ve used
+the magic value <code class="highlighter-rouge">$anyconst</code> to describe a value with these properties.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	localparam	F_CLKBITS=5;
+	wire	[F_CLKBITS-1:0]	f_wclk_step, f_rclk_step;
+
+	assign	f_wclk_step = $anyconst;
+	assign	f_rclk_step = $anyconst;</code></pre></figure>
+
+<p>However, in an effort to make these random constant value declarations more
+uniform, and particularly to be able to support both
+<a href="https://en.wikipedia.org/wiki/SystemVerilog">SystemVerilog</a>
+<em>and</em>
+<a href="https://en.wikipedia.org/wiki/VHDL">VHDL</a>,
+<a href="https://www.clifford.at/yosys">Yosys</a>
+now has the option of declaring these clock step amounts using an
+attribute, <code class="highlighter-rouge">(* anyconst *)</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	(* anyconst *) wire	[F_CLKBITS-1:0]	f_wclk_step, f_rclk_step;</code></pre></figure>
+
+<p>We’ll assume that both of these step sizes are greater than zero.
+This will guarantee that each clock moves forward–and that they are never
+stuck.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		assume(f_wclk_step != 0);
+	always @(*)
+		assume(f_rclk_step != 0);</code></pre></figure>
+
+<p>We can now use these steps sizes in a counter.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	reg	[F_CLKBITS-1:0]	f_wclk_count, f_rclk_count;
+
+	always @($global_clock)
+		f_wclk_count &lt;= f_wclk_count + f_wclk_step;
+	always @($global_clock)
+		f_rclk_count &lt;= f_rclk_count + f_rclk_step;</code></pre></figure>
+
+<p>Notice the reference to <code class="highlighter-rouge">$global_clock</code> here.  This is a reference to the
+time-step within the
+<a href="/blog/2017/10/19/formal-intro.html">formal solver</a>.</p>
+
+<p>Although <code class="highlighter-rouge">$global_clock</code> is a
+<a href="https://en.wikipedia.org/wiki/SystemVerilog">SystemVerilog</a>
+concept,
+<a href="https://en.wikipedia.org/wiki/SystemVerilog">SystemVerilog</a>
+actually defines this value differently.  In
+<a href="https://en.wikipedia.org/wiki/SystemVerilog">SystemVerilog</a>,
+the <code class="highlighter-rouge">$global_clock</code> needs
+to be defined before it can be used.  It’s similar, but not quite the same
+as the global formal timestep.  To bridge this gap, the commercial version of
+<a href="https://www.clifford.at/yosys">Yosys</a> allows,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	(* gclk *) wire	gbl_clock;
+	global clocking @(posedge gbl_clock); endclocking;</code></pre></figure>
+
+<p>In this case, <code class="highlighter-rouge">gbl_clock</code> is defined to be the global simulation clock.
+Transitions on any edge of this clock will reference a formal timestep.
+The <code class="highlighter-rouge">global clocking</code> declaration just defines the
+<a href="https://en.wikipedia.org/wiki/SystemVerilog">SystemVerilog</a>
+identifier,
+<code class="highlighter-rouge">$global_clock</code>, to be a reference to a transition of this formal timestep
+clock, <code class="highlighter-rouge">gbl_clock</code>.</p>
+
+<p>Now, with all this background, we can finally assume our incoming clocks
+at their various speeds.  Specifically, we’ll assume that the read and write
+clocks are synonymous with the most significant bit of these counters.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+	begin
+		assume(i_wclk == f_wclk_count[F_CLKBITS-1]);
+		assume(i_rclk == f_rclk_count[F_CLKBITS-1]);
+	end</code></pre></figure>
+
+<p>This will give them each a rough 50% duty cycle.</p>
+
+<p>If you look at either clock within a trace, you’ll notice that the edges will
+appear to jitter back and forth.  For example, the clock might take two time
+periods in one cycle and three in the next.  This is normal.  It is a
+byproduct of how the clocks are defined.  However, these formal clocks don’t
+need to be so stable that you can drive a hardware PLL from them.  They only
+need to be representative of two separate clock rates, and they will be that
+for us.</p>
+
+<h2 id="the-asynchronous-reset">The Asynchronous Reset</h2>
+
+<p>Cummings’ design includes two negative logic
+<a href="/formal/2018/04/12/areset.html">asynchronous reset</a>
+signals,
+<code class="highlighter-rouge">i_wrst_n</code>, and <code class="highlighter-rouge">i_rrst_n</code>.   These two
+<a href="/formal/2018/04/12/areset.html">resets</a>
+are related to each other.  Specifically, we’ll assume that the two
+<a href="/formal/2018/04/12/areset.html">resets</a>
+will always be asserted at the same time together, but that they are
+only ever de-asserted with their respective clocks.  This latter criteria is
+sometimes called asynchronous assertion with a synchronous release.</p>
+
+<p>You can see this concept drawn out in Fig 8 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 8. Asynchronous assertion, Synchronous Release</caption><tr><td><img src="/img/afifo-async-reset.svg" alt="" width="540" /></td></tr></table>
+
+<p>This is what we are going to insist, or rather assume, of our
+<a href="/formal/2018/04/12/areset.html">reset</a>.  (Remember: assume
+inputs, assert local state and outputs.)</p>
+
+<p>But first, let’s discuss the initial state of the
+<a href="/formal/2018/04/12/areset.html">reset</a>.
+Initially, I wanted to assume that both resets started asserted.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	assume(!i_wrst_n);
+	initial	assume(!i_rrst_n);</code></pre></figure>
+
+<p>What happens, though, with this approach when you want to implement a design
+where the
+<a href="/formal/2018/04/12/areset.html">reset</a>s are both hard-wired
+high (inactive)?  This should be an allowed configuration for an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.
+Instead, let’s only assume that both
+<a href="/formal/2018/04/12/areset.html">resets</a>
+start out the same.  That is, either the design starts with both
+<a href="/formal/2018/04/12/areset.html">resets</a>
+active or with no
+<a href="/formal/2018/04/12/areset.html">resets</a>
+active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	assume(i_wrst_n == i_rrst_n);</code></pre></figure>
+
+<p>We’ll also assume that both
+<a href="/formal/2018/04/12/areset.html">resets</a>
+are driven from one source.  That means that if one
+<a href="/formal/2018/04/12/areset.html">reset</a>
+line falls, i.e. that
+<a href="/formal/2018/04/12/areset.html">reset</a>
+is asserted, then the other must fall as well–just as we illustrated in Fig 8
+above.  Neither <a href="/formal/2018/04/12/areset.html">reset</a>
+should be asserted without the other.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+		assume($fell(i_wrst_n)==$fell(i_rrst_n));</code></pre></figure>
+
+<p>This assumption has a sad consequence: because it is a clocked assumption,
+which it needs to be in order to evaluate <code class="highlighter-rouge">$fell()</code>, it will take a clock
+edge before this assumption is applied.  As a result, many of our assertions,
+particularly those that depend upon results from both
+<a href="/formal/2018/04/12/areset.html">resets</a>,
+which would otherwise have depended on <code class="highlighter-rouge">@(*)</code> are instead asserted on
+<code class="highlighter-rouge">@($global_clock)</code>.</p>
+
+<p>We’ll also assume a synchronous release from
+<a href="/formal/2018/04/12/areset.html">reset</a>, also shown in Fig 8
+above.  Hence, if the associated clock doesn’t rise, then neither should the
+<a href="/formal/2018/04/12/areset.html">reset</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if (!$rose(i_wclk))
+		assume(!$rose(i_wrst_n));
+
+	always @($global_clock)
+	if (!$rose(i_rclk))
+		assume(!$rose(i_rrst_n));</code></pre></figure>
+
+<p>Before we leave the discussion of the
+<a href="/formal/2018/04/12/areset.html">reset</a>,
+there’s one more item to check.  Following any
+<a href="/formal/2018/04/12/areset.html">reset</a>,
+the read and write pointers should be zero.  If the write side deasserts the
+<a href="/formal/2018/04/12/areset.html">reset</a>
+first, the write pointer may start incrementing before the read
+pointer.  On the other hand, if the read side leaves the
+<a href="/formal/2018/04/12/areset.html">reset</a>
+state first, it shouldn’t be allowed to read anything until something has
+been written into
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.
+Hence, we’ll assert that anytime the write
+<a href="/formal/2018/04/12/areset.html">reset</a>
+is low that the read address must point to the beginning of
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if (!i_wrst_n)
+		assert(rbin == 0);</code></pre></figure>
+
+<h2 id="assuming-synchronous-inputs">Assuming Synchronous Inputs</h2>
+
+<p>Whenever you build a set of
+<a href="/blog/2017/10/19/formal-intro.html">formal properties</a>
+to describe logic in multiple
+<a href="/blog/2017/10/20/cdc.html">clock domains</a>,
+you’ll want to assume that the inputs associated with each
+<a href="/blog/2017/10/20/cdc.html">clock domain</a>
+remain synchronous to that
+<a href="/blog/2017/10/20/cdc.html">domain</a>.
+While technically whether or not this takes
+place depends upon the problem, I personally find it disconcerting to watch
+values change arbitrarily within the generated trace–values that should’ve
+only changed on a clock edge.  Going one step further, we should also assert
+that the outputs are synchronous with each
+<a href="/blog/2017/10/20/cdc.html">domain</a>
+as well.</p>
+
+<p>The basic form of asserting that something is synchronous to a positive
+edged clock is to assert that if the clock doesn’t rise, then the value should
+be stable.  This needs to be done with the <code class="highlighter-rouge">$global_clock</code>, since it’s
+describing the minimum sub-clock time interval within the design.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if (!$rose(clk))
+		assert($stable(value));</code></pre></figure>
+
+<p>You also need an <a href="/blog/2017/10/19/formal-intro.html"><code class="highlighter-rouge">f_past_valid</code>
+flag</a> to
+describe this as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	reg	f_past_valid_gbl;
+	initial	f_past_valid_gbl = 1'b0;
+	always $($global_clock)
+		f_past_valid_gbl &lt;= 1'b1;</code></pre></figure>
+
+<p>In our case, we can use three separate <code class="highlighter-rouge">f_past_valid</code> types of flags: one for
+each of the clocks in our design, <code class="highlighter-rouge">$global_clock</code>, <code class="highlighter-rouge">i_wclk</code> (not shown), and
+<code class="highlighter-rouge">i_rclk</code> (not shown).  Without these values,
+the solver will try to reference an undefined value before time began and
+all assertions based upon this value would fail.  For this reason, all
+references to <code class="highlighter-rouge">$past()</code> or in this case to <code class="highlighter-rouge">$rose()</code>, <code class="highlighter-rouge">$fell()</code>, or <code class="highlighter-rouge">$stable()</code>
+need to be qualified by an <code class="highlighter-rouge">f_past_valid</code> piece of logic.  In this case,
+by <code class="highlighter-rouge">f_past_valid_gbl</code>–the <code class="highlighter-rouge">f_past_valid</code> signal we created for the formal
+time-step.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if (f_past_valid_gbl)
+	begin</code></pre></figure>
+
+<p>In the case of the write clock, if the write clock hasn’t risen than the
+write request line, <code class="highlighter-rouge">i_wr</code>, and the write data, <code class="highlighter-rouge">i_wdata</code>, should both
+be assumed constant.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		if (!$rose(i_wclk))
+		begin
+			assume($stable(i_wr));
+			assume($stable(i_wdata));</code></pre></figure>
+
+<p>In a similar manner, the <code class="highlighter-rouge">o_wfull</code> flag should also
+be constant.  Since this latter flag is an output, we’ll <em>assert</em> that it is
+constant rather than <em>assuming</em> it.  The only difficulty being the
+<a href="/formal/2018/04/12/areset.html">reset</a>.
+Specifically, if the write
+<a href="/formal/2018/04/12/areset.html">reset</a>
+is ever asserted, then <code class="highlighter-rouge">o_wfull</code> will drop asynchronously.  Hence,
+we’ll need to check for that.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			assert($stable(o_wfull)||(!i_wrst_n));
+		end</code></pre></figure>
+
+<p>The read logic is almost identical as well, so it’s not that remarkable.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		if (!$rose(i_rclk))
+		begin
+			assume($stable(i_rd));
+			assert((o_rempty)||($stable(o_rdata)));
+			assert((!i_rrst_n)||($stable(o_rempty)));
+		end
+	end</code></pre></figure>
+
+<p>This is just one of those rather tedious parts of an asynchronous proof.</p>
+
+<h2 id="verifying-the-reset">Verifying the Reset</h2>
+
+<p>My readers should understand why I use <code class="highlighter-rouge">f_past_valid</code>: if you make an assertion
+using the <code class="highlighter-rouge">$past</code> operator, one were the <code class="highlighter-rouge">$past()</code> operator references a value
+before the initial time began, then the solver can immediately declare that
+assertion to be invalid.  Not only that, there will be no trace associated
+with that past assertion.  To keep this from happening, I use a register I call
+<code class="highlighter-rouge">f_past_valid</code>.  It’s initialized to zero, and then set immediately to one on
+the first clock tick.</p>
+
+<p>This is all straightforward.  It’s something I’ve been doing for many proofs,
+and I’ve posted about the <a href="/blog/2017/10/19/formal-intro.html">reasons for it
+already</a>
+on this blog.</p>
+
+<p>One time, however, I was caught by surprise when I examined a trace
+describing a
+<a href="/blog/2017/10/19/formal-intro.html">formal proof</a>
+that crossed multiple files.  In this trace, the
+<code class="highlighter-rouge">f_past_valid</code> signals didn’t line up!  Some were true, others were false.
+This should’ve never happened in real life.  What made it happen was
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>,
+where the solver gets to pick the initial states for all values.</p>
+
+<p>To keep this from happening, I will often add statements to my design forcing
+the design to be in
+<a href="/formal/2018/04/12/areset.html">reset</a>
+any time <code class="highlighter-rouge">f_past_valid</code> is false.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+	if (!f_past_valid)
+		assume(i_reset);</code></pre></figure>
+
+<p>I also use <code class="highlighter-rouge">f_past_valid</code> to double check any initialization statements.  For
+synchronous logic, this usually looks something like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_clk)
+	if ((!f_past_valid)||($past(i_reset)))
+	begin
+		assert(value == 0);
+		// ....
+	end</code></pre></figure>
+
+<p>In this manner, I can insist that anytime one <code class="highlighter-rouge">f_past_valid</code> is false, the
+entire design is in its
+<a href="/formal/2018/04/12/areset.html">reset</a>
+state, <em>and</em> that the
+<a href="/formal/2018/04/12/areset.html">reset</a>
+state is identical to the initial state.</p>
+
+<p>That’s not how I verified this design, though.  In particular, within this
+design I wanted to allow the
+<a href="/formal/2018/04/12/areset.html">reset</a>,
+line(s) to be tied high if the designer so chose.</p>
+
+<p>In this design, I used the fact that the
+<a href="/formal/2018/04/12/areset.html">reset was asynchronous</a>,
+to do things a little differently.  Instead of checking whether the
+<a href="/formal/2018/04/12/areset.html">reset</a>
+was true in the past, we’ll do this second check based upon whether the
+<a href="/formal/2018/04/12/areset.html">reset</a>
+is currently asserted.</p>
+
+<p>Hence, anytime the write
+<a href="/formal/2018/04/12/areset.html">reset</a>
+is asserted, or until the first write clock,
+all of our write values should be in their initial states.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+	if ((!f_past_valid_wr)||(!i_wrst_n))
+	begin
+		`ASSUME(i_wr == 0);
+		//
+		`ASSERT(wgray == 0);
+		`ASSERT(wbin == 0);
+		`ASSERT(!o_wfull);
+		//
+		`ASSERT(wq1_rgray == 0);
+		`ASSERT(wq2_rgray == 0);
+		`ASSERT(rq1_wgray == 0);
+		`ASSERT(rq2_wgray == 0);</code></pre></figure>
+
+<p>While this section is all about the <em>write</em> side of the interface,
+we’ll make an exception to this rule for two values associated with the read
+clock: the FIFO read address, <code class="highlighter-rouge">rbin</code>, and its associated <code class="highlighter-rouge">o_rempty</code> signal.
+Anytime the registers in the write clock are in their
+<a href="/formal/2018/04/12/areset.html">reset</a>,
+state, these read values must also remain in their
+<a href="/formal/2018/04/12/areset.html">reset</a>
+values–since the write side hasn’t yet written anything to be read, and the
+read pointer isn’t allowed to move forward from an empty FIFO while it’s still
+empty, etc.  You get the idea.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		//
+		`ASSERT(rbin == 0);
+		`ASSERT(o_rempty);
+	end</code></pre></figure>
+
+<p>The read side is less remarkable.  It also includes roughly the same logic.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+	if ((!f_past_valid_rd)||(!i_rrst_n))
+	begin
+		`ASSUME(i_rd == 0);
+		//
+		`ASSERT(rgray == 0);
+		`ASSERT(rbin == 0);
+		`ASSERT(rq1_wgray == 0);
+		`ASSERT(rq2_wgray == 0);
+		`ASSERT(wq1_rgray == 0);
+		`ASSERT(wq2_rgray == 0);
+	end</code></pre></figure>
+
+<p>At this point, we know our design starts in a
+<a href="/formal/2018/04/12/areset.html">reset</a>
+configuration either at the beginning of time, or following any
+<a href="/formal/2018/04/12/areset.html">reset</a>.</p>
+
+<h2 id="verifying-the-fill-levels">Verifying the Fill Levels</h2>
+
+<p>All of the steps so far have been preliminary, set up sorts of things.  None
+of them have actually impacted the proof requirements we listed above.  Let’s
+now move into the actual FIFO properties associated with its operation.
+We’ll start with the pointers in this section, and then verify the two
+element write test in the next section.  In between these two sections,
+we’ll skip the proof of the
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray codes</a>.
+It follows directly from the discussion
+above, and it is in the file if you wish to reference it.
+Indeed, many of the properties associated with the fill of
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">this FIFO</a>
+we’ve already discussed above, but they are important enough to discuss
+one more time here.</p>
+
+<p>Will start with a measure of how full
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a> is.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	wire	[AW:0]		f_fill;
+
+	assign	f_fill = (wbin - rbin);</code></pre></figure>
+
+<p>I like to prefix values, like this one, that are only used in the
+<a href="/blog/2017/10/19/formal-intro.html">formal properties</a>
+with a <code class="highlighter-rouge">f_</code>.  It helps me quickly recognize which values are used for the
+<a href="/blog/2017/10/19/formal-intro.html">formal proof</a>,
+and which are used within the design itself.</p>
+
+<p>As mentioned above, because <code class="highlighter-rouge">f_fill</code> is a value only defined in our formal
+properties, it can depend upon values that
+<a href="/blog/2017/10/20/cdc.html">cross clock domains</a>.</p>
+
+<p>As we indicated above, we’ll start out asserting that
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+is initially empty, and that it never has more than <code class="highlighter-rouge">2^(AW)</code> elements within it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	initial	`ASSERT(f_fill == 0);
+	always @($global_clock)
+		`ASSERT(f_fill &lt;= { 1'b1, {(AW){1'b0}} });</code></pre></figure>
+
+<p>Now let’s look at <code class="highlighter-rouge">o_wfull</code>.  In particular, anytime
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+is full, the <code class="highlighter-rouge">o_wfull</code> flag should be asserted.  This property should help
+to assure users of <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">this asynchronous
+FIFO</a>
+that it actually works–at least, that this flag works.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// Any time the FIFO is full, o_wfull should be true.  It may take a
+	// clock or two to clear, though, so this is an implication and not
+	// an equals.
+	always @($global_clock)
+	if (f_fill == {1'b1,{(AW){1'b0}}})
+		`ASSERT(o_wfull);</code></pre></figure>
+
+<p>We’ll also check how things work on the clock before everything is full.
+Specifically, if
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+has <code class="highlighter-rouge">2^(AW)-1</code> elements in it, it should then be
+full on the next write.  That means that either the <code class="highlighter-rouge">o_wfull</code> flag must be true,
+there’s no request to write, or <code class="highlighter-rouge">o_wfull</code> will be set to true on the next clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if (f_fill == {1'b0,{(AW){1'b1}}})
+		`ASSERT((wfull_next)||(!i_wr)||(o_wfull));</code></pre></figure>
+
+<p>This was one of those extra properties necessary to pass
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>.</p>
+
+<p>We’ll make a similar assertion about
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+being empty:  Any time the FIFO is truly empty, the <code class="highlighter-rouge">o_rempty</code> must be
+true.  In this design, it will also be asserted at other times as well
+(i.e. there’s a lag before its cleared), so as with the write check above it,
+this is a one-way implication only, and not an equals.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if (f_fill == 0)
+		`ASSERT(o_rempty);</code></pre></figure>
+
+<p>We’ll add another assertion in here for good measure and to help with
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>.
+Specifically, we’ll assert that if the <code class="highlighter-rouge">f_fill</code> isn’t quite zero, then either
+the empty flag is true, or the empty flag will be true on the next clock,
+or nothing is being read.  Put simply, let’s check the logic before the fill
+becomes empty just like we did with the logic before
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+became full.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	// If the FIFO is about to be empty, the logic should be able
+	// to detect that condition as well.
+	always @($global_clock)
+	if (f_fill == 1)
+		`ASSERT((rempty_next)||(!i_rd)||(o_rempty));</code></pre></figure>
+
+<p>Consistency requires that the
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> pointers
+always match their respective address pointers.  Let’s insist that be the
+case here, lest the
+<a href="/blog/2018/03/10/induction-exercise.html">induction engine</a>
+find some way to defeat this proof using an invalid state.  This applies for
+both read and write <a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> pointers.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		`ASSERT(wgray == ((wbin&gt;&gt;1)^wbin));
+
+	always @(*)
+		`ASSERT(rgray == ((rbin&gt;&gt;1)^rbin));</code></pre></figure>
+
+<p>Finally, let’s double check that our
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> pointer
+arithmetic truly does match
+our address arithmetic.  Remember, in the design above, we pushed the empty
+and full logic from combinatorial logic into clocked logic.  The combinatorial
+logic should still hold, so let’s check it here.</p>
+
+<p>First, is
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+full?  If so, the <a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> pointers
+should differ in their top bit but be identical for the rest of their bits.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		`ASSERT( (rgray == { ~wgray[AW:AW-1], wgray[AW-2:0] })
+			== (f_fill == { 1'b1, {(AW){1'b0}} }) );</code></pre></figure>
+
+<p>Second, if <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the
+FIFO</a> is empty,
+and only if <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the
+FIFO</a>
+is empty, then the <a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> pointers
+should be identical.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		`ASSERT((rgray == wgray) == (f_fill == 0));</code></pre></figure>
+
+<p>These are the basic properties we want to prove about
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>’s
+fill amount.
+If all you want is a bounded model check, you can skip to the next section.</p>
+
+<p>On the other hand, if you’d like a full
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+check, and hence a proof for all time, then we need to check
+that the values and registers associated with
+<a href="/blog/2017/10/20/cdc.html">crossing clock domains</a> are
+valid as well.</p>
+
+<p>To do this, we’ll create 2-FF synchronizers within the
+<a href="/blog/2017/10/19/formal-intro.html">formal properties</a>
+section to delay the binary pointer values so they’ll have an image,
+in the new clock domain, synchronous with the value of their
+<a href="https://en.wikipedia.org/wiki/Gray_code">Gray</a> versions.
+Again, since this isn’t synthesizable code, there’s no danger of
+<a href="https://en.wikipedia.org/wiki/Metastability_in_electronics">metastability</a>
+here, as there would be in the synthesis section above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	reg	[AW:0]	f_w2r_rbin, f_w1r_rbin,
+			f_r2w_wbin, f_r1w_wbin;
+	wire	[AW:0]	f_w2r_fill, f_r2w_fill;
+
+	initial	{ f_w2r_rbin, f_w1r_rbin } = 0;
+	always @(posedge i_wclk or negedge i_wrst_n)
+	if (!i_wrst_n)
+		{ f_w2r_rbin, f_w1r_rbin } &lt;= 0;
+	else
+		{ f_w2r_rbin, f_w1r_rbin } &lt;= { f_w1r_rbin, rbin };
+
+	initial	{ f_r2w_wbin, f_r1w_wbin } = 0;
+	always @(posedge i_rclk or negedge i_rrst_n)
+	if (!i_rrst_n)
+		{ f_r2w_wbin, f_r1w_wbin } &lt;= 0;
+	else
+		{ f_r2w_wbin, f_r1w_wbin } &lt;= { f_r1w_wbin, wbin };</code></pre></figure>
+
+<p>The next step is to force these helper variables to be properly matched to
+their <a href="https://en.wikipedia.org/wiki/Gray_code">Gray coded</a>
+counter parts.  (No pun intended.)  That is, we should be able to convert
+these values to <a href="https://en.wikipedia.org/wiki/Gray_code">Gray code</a> and they
+should match.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		`ASSERT(rq1_wgray == ((f_r1w_wbin&gt;&gt;1)^f_r1w_wbin));
+	always @(*)
+		`ASSERT(rq2_wgray == ((f_r2w_wbin&gt;&gt;1)^f_r2w_wbin));
+
+	always @(*)
+		`ASSERT(wq1_rgray == ((f_w1r_rbin&gt;&gt;1)^f_w1r_rbin));
+	always @(*)
+		`ASSERT(wq2_rgray == ((f_w2r_rbin&gt;&gt;1)^f_w2r_rbin));</code></pre></figure>
+
+<p>Finally, we can calculate the fill at the other end of this synchronizer
+chain.  These two fill values, one using <code class="highlighter-rouge">wbin</code> and the re-synchronized <code class="highlighter-rouge">rbin</code>,
+the other using <code class="highlighter-rouge">rbin</code> and the re-synchronized <code class="highlighter-rouge">wbin</code>, should clearly describe
+our <code class="highlighter-rouge">o_wfull</code> and <code class="highlighter-rouge">o_rempty</code> flags.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assign	f_w2r_fill = wbin - f_w2r_rbin;
+	assign	f_r2w_fill = f_r2w_wbin - rbin;
+
+
+	// And assert that the fill is always less than or equal to full.
+	// This catches underrun as well as overflow, since underrun will
+	// look like the fill suddenly increases
+	always @(*)
+		`ASSERT(f_w2r_fill &lt;= { 1'b1, {(AW){1'b0}} });
+	always @(*)
+		`ASSERT(f_r2w_fill &lt;= { 1'b1, {(AW){1'b0}} });
+
+	// From the writers perspective, anytime the Gray pointers are
+	// equal save for the top bit, the FIFO is full and should be asserted
+	// as such.  It is possible for the FIFO to be asserted as full at
+	// some other times as well.
+	always @(*)
+	if (wgray == { ~wq2_rgray[AW:AW-1], wq2_rgray[AW-2:0] })
+		`ASSERT(o_wfull);
+
+	// The same basic principle applies to the reader as well.  From the
+	// readers perspective, anytime the Gray pointers are equal the FIFO
+	// is empty, and should be asserted as such.
+	always @(*)
+	if (rgray == rq2_wgray)
+		`ASSERT(o_rempty);</code></pre></figure>
+
+<p>At this point, we now have full confidence in our two flags, <code class="highlighter-rouge">o_wfull</code> and
+<code class="highlighter-rouge">o_rempty</code>.</p>
+
+<p>When I first
+<a href="/blog/2017/10/19/formal-intro.html">formally verified</a>
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">this FIFO</a>,
+this was where I stopped.  Then I was told of <a href="http://www.techdesignforums.com/practice/technique/doc-formal-harness-the-power-of-invariant-based-bug-hunting/">additional FIFO
+property</a>,
+which we’ll discuss in the next
+section.</p>
+
+<h2 id="fifo-contract">FIFO Contract</h2>
+
+<table align="center" style="float: right"><caption>Fig 9. Two consecutive items written to a FIFO, must be able to be read out consecutively at a later time</caption><tr><td><img src="/img/afifo-two-items.svg" alt="" width="420" /></td></tr></table>
+
+<p>I’ve now been a part of and read several discussions about how to 
+<a href="/blog/2017/10/19/formal-intro.html">formally verify</a>
+a FIFO–whether synchronous or asynchronous.  I’ve even found
+<a href="http://www.techdesignforums.com/practice/technique/doc-formal-harness-the-power-of-invariant-based-bug-hunting/">one reference to this method</a> as well,
+although there must be more.
+These discussions all revolve around two arbitrary values written to
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+in succession, that then need to be able to be read out of the in succession.</p>
+
+<p>This was a new criteria for me when I first heard it, so I decided to try
+it on one of my own FIFOs to see if it would work.  It didn’t pass
+(originally)–I was overwriting the FIFO’s tail on any write request during
+overrun.  Oops.  Hence, while I used to think this criteria wasn’t all that
+necessary, I no longer hold that view.</p>
+
+<p>If you read 
+<a href="http://www.techdesignforums.com/practice/technique/doc-formal-harness-the-power-of-invariant-based-bug-hunting/">Doc Formal’s article</a>
+on <a href="/formal/2018/04/23/invariant.html">invariants</a>,
+or the slides I saw at <a href="https://dvcon.org-us-2018">DVCON 2018</a>,
+they all made this proof look quite easy.  When I actually tried it myself,
+I couldn’t figure out how to keep it as simple as the slides presented it.  In
+particular, how can you constrain the formal engine in such a way that the
+parts of the proof don’t get out of hand and into an inconsistent state?</p>
+
+<p>As a result, we’ll apply this criteria below in such a constrained way that
+there’s no way the solver could get it wrong.  Specifically, if the solver
+starts in the middle of the two element sequence described by this contract,
+we’ll make certain below that the state the solver finds itself within matches
+our own internal state in every way and in every step along the way.</p>
+
+<p>So let’s start out by picking an arbitrary location within
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	(* anyconst *) wire [AW:0]		f_const_addr;</code></pre></figure>
+
+<p>and a location immediately following it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	wire	[AW:0]		f_const_next_addr;
+
+	assign	f_const_next_addr = f_const_addr + 1;</code></pre></figure>
+
+<p>Let’s also pick two arbitrary values which will eventually will be placed in
+those
+locations.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	(* anyconst *) reg [DW-1:0]	f_const_first, f_const_next;</code></pre></figure>
+
+<p>Let’s also create an expression that will be true anytime the first address,
+<code class="highlighter-rouge">f_const_addr</code>, is within the valid set of FIFO values.  This is tricky
+because the read and write pointers will wrap around the end of the FIFO,
+so we’ll have to break this out by stages.  Since it’s non-intuitive,
+we’ll show this graphically as we go along.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	reg			f_addr_valid, f_next_valid;</code></pre></figure>
+
+<p>Looking at the first address, <code class="highlighter-rouge">f_const_addr</code>, if the read pointer follows
+the write pointer in order, and <code class="highlighter-rouge">f_const_addr</code> is between the two, then
+<code class="highlighter-rouge">f_const_addr</code> references an item within
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.
+This case is shown in Fig 10 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 10. The Arbitrary Address lies between the Read and Write Pointers</caption><tr><td><img src="/img/afifo-case-one.svg" alt="" width="540" /></td></tr></table>
+
+<p>Given the picture above, the test should start to make sense.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+	begin
+		f_addr_valid = 1'b0;
+		if((wbin &gt; rbin)&amp;&amp;(wbin &gt; f_const_addr)
+					&amp;&amp;(rbin &lt;= f_const_addr))
+			// Order rbin &lt;= addr &lt; wbin
+			f_addr_valid = 1'b1;</code></pre></figure>
+
+<p>In a similar fashion, if <code class="highlighter-rouge">wbin</code> has wrapped around so that the write pointer
+is now less than the read pointer, <code class="highlighter-rouge">rbin</code>, but <code class="highlighter-rouge">f_const_addr</code> remains less
+than the write pointer, then <code class="highlighter-rouge">f_const_addr</code> is within
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.
+This is shown in Fig 11 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 11. The Arbitrary Address lies between the Read and Write Pointers</caption><tr><td><img src="/img/afifo-case-two.svg" alt="" width="540" /></td></tr></table>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		else if ((wbin &lt; rbin)&amp;&amp;(f_const_addr &lt; wbin))
+			// addr &lt; wbin &lt; rbin
+			f_addr_valid = 1'b1;</code></pre></figure>
+
+<p>Finally, if the write pointer is less than the read pointer, but <code class="highlighter-rouge">f_const_addr</code>
+lies after the read pointer, then the address is in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 12. The Arbitrary Address lies between the Read and Write Pointers</caption><tr><td><img src="/img/afifo-case-three.svg" alt="" width="540" /></td></tr></table>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		else if ((wbin &lt; rbin)&amp;&amp;(rbin &lt;= f_const_addr))
+			// wbin &lt; rbin &lt; addr
+			f_addr_valid = 1'b1;
+	end</code></pre></figure>
+
+<p>I’ll skip the similar, though identical, comparison for the next address
+following, <code class="highlighter-rouge">f_const_next_addr</code>.  You can find it within <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the verilog code for
+the FIFO</a>
+if you like.</p>
+
+<p>The next step is to implement the logic shown in Fig 9 above.  With all the
+associated details, this becomes rather complex, so let’s break it down a bit.
+Specifically, we’ll create some logic to determine if the first, second, or
+both values are in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.
+That is, not only is their address a valid reference to an item within
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+but the data at that address must match as well.</p>
+
+<p>For the first value to be in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+1) it’s address must lie within
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+and 2) the value at that address must match the first of our two values.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	wire	f_first_in_fifo, f_second_in_fifo, f_both_in_fifo;
+
+	always @(*)
+		f_first_in_fifo = (f_addr_valid)
+				&amp;&amp;(mem[f_const_addr[AW-1:0]]==f_const_first);</code></pre></figure>
+
+<p>The same logic applies to the second value within
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">our FIFO</a>,
+only we’ll check against the next address, <code class="highlighter-rouge">f_const_next_addr</code>, and the value
+against <code class="highlighter-rouge">f_const_next</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		f_second_in_fifo = (f_next_valid)
+				&amp;&amp;(mem[f_const_next_addr[AW-1:0]]==f_const_next);</code></pre></figure>
+
+<p>Finally, we’ll set <code class="highlighter-rouge">f_both_in_fifo</code> to only be true if both values are within
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+at their respective address locations.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		f_both_in_fifo = (f_first_in_fifo)&amp;&amp;(f_second_in_fifo);</code></pre></figure>
+
+<p>Conceptually, this might look like Fig 13 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 13. Both addresses and data items lie within the FIFO</caption><tr><td><img src="/img/afifo-case-both.svg" alt="" width="540" /></td></tr></table>
+
+<p>At this point we want to assert that if both values are in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+then we should at some point later in time be able to read them both out one
+by one.</p>
+
+<p>If you read other articles on FIFOs, you’ll often see them simplified
+using a concurrent assertion so that the logic reads something like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assert property (@(posedge i_clk)
+		disable iff (i_rrst_n)
+		f_both_in_fifo |-&gt;
+			f_wait_for_first_read [*0:$]
+			##1 f_read_first
+			##1 f_wait_for_second_read [*0:$]
+			##1 f_read_second);</code></pre></figure>
+
+<p>Decoding this, it means that if both values are in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+then
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+can remain in that state indefinitely, or alternatively a read request can
+read the first value from
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.
+Then, <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+can wait with the second value in memory indefinitely
+or (ultimately) it can be read out.</p>
+
+<p>The problem with this simplified notation is all the details.
+Worse, in my case I wanted to be able to support an
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+length shorter than the entire (potentially infinite) sequence length.  To make
+certain the solver could handle this case, I wanted to make certain that every
+state within the sequence was constrained unambiguously.  All registers
+associated with each of the states
+needed to be fully constrained so there was no room for the solver to
+place the design into an invalid state.</p>
+
+<p>Again, feel free to use Fig 9 above as a reference in this discussion below.</p>
+
+<p>For example, waiting for the first read means that both values must be in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+and that neither are being read at that time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	wire	f_wait_for_first_read, f_read_first, f_read_second,
+		f_wait_for_second_read;
+
+	always @(*)
+		f_wait_for_first_read = (f_both_in_fifo)
+				&amp;&amp;((!i_rd)||(f_const_addr != rbin)||(o_rempty));</code></pre></figure>
+
+<p>Notice the <code class="highlighter-rouge">o_rempty</code> flag.  I wasn’t expecting this one.  If both items are in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+then <code class="highlighter-rouge">o_rempty</code> should be zero already, right?  Not quite.  When I ran
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>,
+the produced trace reminded me that while <code class="highlighter-rouge">o_rempty</code> will be raised any time
+the design is empty, it may take a couple of clock cycles after the design
+is no longer empty in order to be lowered.  Hence, if <code class="highlighter-rouge">i_rd</code> is true but
+<code class="highlighter-rouge">o_rempty</code> is also true, then no read is taking place and we’ll need to keep
+waiting for that first read.</p>
+
+<p>Reading the first value from
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+means that there must be a read request,
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+must not be empty (finally), and the read request must be of the first value.
+Further, at the time of this read, both values must still be in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		f_read_first = (i_rd)&amp;&amp;(o_rdata == f_const_first)&amp;&amp;(!o_rempty)
+			&amp;&amp;(rbin == f_const_addr)&amp;&amp;(f_both_in_fifo);</code></pre></figure>
+
+<p>We’ll then wait for our second read.  This may take between zero and an
+infinite number of clock cycles.  While waiting, the second value must
+be still in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+the read pointer must point to the second of our two
+addresses, and we can’t allow any reads from
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		f_wait_for_second_read = (f_second_in_fifo)
+				&amp;&amp;((!i_rd)||(o_rempty))
+				&amp;&amp;(f_const_next_addr == rbin);</code></pre></figure>
+
+<p>Finally, the last stage in our test is the one where the second value is read
+from <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>.
+In this case, there must be a read request, the read data
+must match the data we started with,
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+cannot be empty, the address must match, etc.  It’s a mouthful!</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(*)
+		f_read_second = (i_rd)&amp;&amp;(o_rdata == f_const_next)&amp;&amp;(!o_rempty)
+				&amp;&amp;(rbin == f_const_next_addr)
+				&amp;&amp;(f_second_in_fifo);</code></pre></figure>
+
+<p>You may have noticed that I’ve just assigned values to variables.  These
+values describe the various states the FIFO may be in, but they don’t (yet)
+string those states together via an assertion of any type.  That’s coming
+next.</p>
+
+<p>If you ever find yourself needing to do this, let me share with you what not
+to do.  Do not place all of these criteria into one big huge property like
+the one shown below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	assert property (@(posedge i_clk)
+		(f_first_in_fifo)&amp;&amp;(f_second_in_fifo);
+		|-&gt; (f_first_in_fifo)&amp;&amp;(f_second_in_fifo)
+			&amp;&amp;((!i_rd)||(f_const_addr != rbin)||(o_rempty)) [*0:$]
+		##1 (i_rd)&amp;&amp;(o_rdata == f_const_first)&amp;&amp;(!o_rempty)
+			&amp;&amp;(rbin == f_const_addr)
+			&amp;&amp;(f_first_in_fifo)&amp;&amp;(f_second_in_fifo);
+		##1 (f_second_in_fifo)
+				&amp;&amp;((!i_rd)||(o_rempty))
+				&amp;&amp;(f_const_next_addr == rbin) [*0:$]
+		##1 (i_rd)&amp;&amp;(o_rdata == f_const_next)&amp;&amp;(!o_rempty)
+				&amp;&amp;(rbin == f_const_next_addr)
+				&amp;&amp;(f_second_in_fifo));</code></pre></figure>
+
+<p>(My initial attempt was even worse–I didn’t use <code class="highlighter-rouge">f_first_in_fifo</code> or
+<code class="highlighter-rouge">f_sceond_in_fifo</code>.)</p>
+
+<p>The problem with such a complicated property is, what happens when it fails?
+In my case, <a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>
+would say that the assertion failed, and then
+give me the line of this assertion and a trace showing me that the assertion
+had failed.  It never said which part of the assertion, which line within the
+assertion, or which step the assertion was within, was the one that failed.
+The line number was always the line number of the whole assertion sequence.</p>
+
+<p>You can guess how I solved this problem using the state definitions we just
+defined above.  By creating wires to contain these complicated logic
+components, these logic components describing which state we are in then
+show up on the trace.  This made it possible for me to understand the trace,
+and thus to see what was going wrong.</p>
+
+<p>On the other hand, if you are using the open source version of
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>,
+then you’ll have to describe this check using immediate assertions alone.
+Again, the wires defining the various states above will help us simplify the
+state machine we’ll need to write.</p>
+
+<p>Starting at the top, we’ll create a quick state transition checker that will
+be disabled any time <code class="highlighter-rouge">i_wrst_n</code> gets asserted.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if ((f_past_valid_gbl)&amp;&amp;(i_wrst_n))
+	begin</code></pre></figure>
+
+<p>The state starts with both items in
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>,
+or equivalently with <code class="highlighter-rouge">f_both_in_fifo</code> true.  Following <code class="highlighter-rouge">f_both_in_fifo</code>, we
+can either read the first value or continue waiting for the
+first value to be read.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		if ((!$past(f_read_first))&amp;&amp;(($past(f_both_in_fifo))))
+			assert((f_wait_for_first_read)
+				|| (($rose(i_rclk))&amp;&amp;(f_read_first)));</code></pre></figure>
+
+<p>Let me point you attention to the <code class="highlighter-rouge">$rose(i_rclk)</code> condition for a moment.  The
+first value cannot be read without a read that starts on the rising read
+clock edge.</p>
+
+<p>Once we’ve read that first value, we’ll need to stay in that state until the
+next clock edge.  On the next read clock edge, we can either read the second
+value, or start waiting for the second value to be read.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		if ($past(f_read_first))
+			assert(
+				((!$rose(i_rclk))&amp;&amp;(f_read_first))
+				||($rose(i_rclk)&amp;&amp;((f_read_second)
+						||(f_wait_for_second_read))));</code></pre></figure>
+
+<p>Finally, if we were waiting for the second value to be read on the last time
+step, then we can continue waiting on this time step, or if the clock rises
+we can actually start reading the second value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		if ($past(f_wait_for_second_read))
+			assert((f_wait_for_second_read)
+				||(($rose(i_rclk))&amp;&amp;(f_read_second)));
+	end</code></pre></figure>
+
+<p>There you have it!  That’s the majority of this proof.</p>
+
+<p>In hindsight, I probably didn’t need all of those free variables,
+those using <code class="highlighter-rouge">(* anyconst *)</code>, to make this work.  If I have to come back to
+this later, I may remove them–instead reflecting that any input value is
+by default a free variable of its own right.</p>
+
+<h2 id="cover-properties">Cover Properties</h2>
+
+<p>We’re not quite done yet.  We’d still
+like to know about whether or not some things that might actually take place.
+This was the fourth part in our proof outline above.  So far, we’ve skipped
+it.  We’ve proved parts one through five except for part four.  Part four
+requires us to demonstrate that
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+can actually fill, and that it can actually empty.</p>
+
+<p>Why might we need this?  Consider, what
+would happen if we had somehow accidentally assumed
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+would remain empty, or that it would never reach it’s fill?  Just to make
+certain we didn’t mess things up, let’s make sure several states are reachable.</p>
+
+<p>First, let’s make sure we can enter the empty state.  This is good since
+we start up in the empty state.  In order to return to empty, the FIFO must
+be able to both receive a value into it and to have a value read out of it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @($global_clock)
+	if (f_past_valid_gbl)
+		cover((o_rempty)&amp;&amp;(!$past(o_rempty)));</code></pre></figure>
+
+<p>The same basic logic applies to the full state.  The design starts out
+non-full, and we’d like to have some assurance that
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the FIFO</a>
+can be filled, and also that it can leave its full condition.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	always @(posedge i_wclk)
+	if (f_past_valid_wr)
+		cover($past(o_wfull)&amp;&amp;(!o_wfull));</code></pre></figure>
+
+<p>If you check out
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the design</a>,
+you’ll find there are several other cover properties as well.  Feel free
+to examine and comment on whether I may have missed any.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">`endif
+endmodule</code></pre></figure>
+
+<h2 id="conclusions">Conclusions</h2>
+
+<p>Voila!  All of what you need to know to
+<a href="/blog/2017/10/19/formal-intro.html">formally verify</a>
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">an asynchronous
+FIFO</a>.
+Yes, it took a lot of work, but the good thing is that this work
+only needed to be done once.  Now you can use
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">this FIFO</a>
+to <a href="/blog/2017/10/20/cdc.html">cross clock domains</a>
+with all kinds of things like … bus requests even!</p>
+
+<p>Still not convinced?  Feel free to examine <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">the code and the
+properties</a>
+yourself.  You can even add your own properties, in case I’ve missed
+any–whatever it takes to convince you that this
+<a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">FIFO</a>
+actually works.</p>
+
+<p>Now, what shall we use this for?</p>
+
+<p>Perhaps we could use this to cross clock domains using a bus?  For example,
+what if you had two <a href="/zipcpu/2017/11/07/wb-formal.html">wishbone
+buses</a>, one in each of two
+<a href="/blog/2017/10/20/cdc.html">clock domains</a>.
+<a href="/blog/2017/10/20/cdc.html">Crossing
+clock domains</a>
+with between those <a href="/blog/2017/11/07/wb-formal.html">buses</a>
+can be a challenge.  Not only that, but it’s a particularly challenge required
+by just about any <a href="https://github.com/ZipCPU/vgasim">video system</a>.  Why?
+Well, it just so happens that in every video design I’ve ever done (there
+haven’t been that many), the pixel clock ends up being at one frequency
+and the memory (and system) clock is at another.  Hence, I’d like to come
+back to <a href="https://github.com/ZipCPU/website/blob/master/examples/afifo.v">this FIFO
+design</a>
+later and modify it so that it produces an output fill level for a
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/imgfifo.v">frame buffer</a>
+controller.
+Such a controller will wait until there is room for another burst length
+in the buffer before trying to fill the buffer with a burst.</p>
+
+<table align="center" style="float: none"><caption>Fig 14. Asynchronous FIFO within a Video Application</caption><tr><td><img src="/img/afifo-video.svg" alt="" width="780" /></td></tr></table>
+
+<p>Indeed, that’s part of the
+<a href="https://github.com/ZipCPU/vgasim">VGA simulator</a>
+I recently posted on line.
+<a href="https://github.com/ZipCPU/vgasim">That project</a>
+includes simulation code for both a
+<a href="https://github.com/ZipCPU/vgasim/blob/master/bench/cpp/vgasource.cpp">source</a>
+and a <a href="https://github.com/ZipCPU/vgasim/blob/master/bench/cpp/vgasim.cpp">sink video
+signal</a>,
+taking the source from a location on the screen of the simulator’s host, and
+then displaying the result in a window on that same screen as well.  Of course,
+there’s still plenty of room for improvement in the project.  In particular,
+I have need of an HDMI simulation–something that would be an easy adjustment
+to make to the <a href="https://github.com/ZipCPU/vgasim">VGA simulation</a>
+project.</p>
+
+<p>Perhaps we should come back to that project in a future article, and show how
+you can use it?</p>
+
+<p>For now, let me thank Cliff Cummings for his <a href="http://www.sunburst.design.com/papers/CummingsSNUG2002SJ_FIFO1.pdf">excellent article on how to build
+an asynchronous
+FIFO</a>,
+and further for his encouragement to write this article!</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>But, beloved, be not ignorant of this one thing, that one day is with the Lord as a thousand years, and a thousand years as one day. (2 Pet 3:8)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstreeam FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
