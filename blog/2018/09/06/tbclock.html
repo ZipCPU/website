@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Handling multiple clocks with Verilator</title>
+  <meta name="description" content="For some reason, every time I've ever worked with video I've never managed tobe fortunate enough to have the same clock rate for both the pixel clockand the ...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2018/09/06/tbclock.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Handling multiple clocks with Verilator</h1>
+    <p class="post-meta"><time datetime="2018-09-06T00:00:00-04:00" itemprop="datePublished">Sep 6, 2018</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    For some reason, every time I've ever worked with video I've never managed to
+be fortunate enough to have the same clock rate for both the pixel clock
+and the memory.  The closest I came was using a 25MHz pixel clock on the
+[Basys3 board](https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users)
+which I could create by dividing a [100MHz clock by
+four](https://reference.digilentinc.com/reference/programmable-logic/basys-3/reference-manual)
+in logic.  While that probably wasn't the best way to do it, I did manage to
+successfully create a 640x480 image on my test display.
+
+<TABLE align="center" style="float: right"><CAPTION>Fig 1. A Nexys Video Board</CAPTION><TR><TD><IMG SRC="/img/nexys-video.png" ALT="" WIDTH="473"></TD></TR></TABLE>
+
+When I moved on to the more serious pixel clock of 148.5 MHz in my
+[VideoZip project](https://github.com/ZipCPU/videozip) using the
+[Nexys Video board](https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications),
+I could no longer manipulate my 100MHz system clock in logic to generate a
+148.5MHz pixel clock.  [Xilinx](https://www.xilinx.com)'s DDR3 memory
+controller insisted on a clock of 100MHz, so I was stuck needing to deal with
+two dissimilar clocks.
+
+Up until [that project](https://github.com/ZipCPU/videozip), I had never
+used more than one clock with
+[Verilator](https://www.veripool.org/wiki/verilator).
+Many of my designs were based upon just a single clock.  How was I going to
+handle multiple clocks?  This turned into one of the biggest
+challenges I had when developing [VideoZip](https://github.com/ZipCPU/videozip).
+([VideoZip](https://github.com/ZipCPU/videozip) remains a work in progress.)
+
+The pixel clock on the [Nexys Video
+board](https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications)
+isn't the only problem for [VideoZip](https://github.com/ZipCPU/videozip).
+The Gb [Ethernet](https://en.wikipedia.org/wiki/Ethernet) port ([RGMII](https://en.wikipedia.org/wiki/Media-independent_interface)) wants to run at 125 MHz, reasoning about 8-bits at a time.  If this weren't bad enough, the
+[I2S](https://en.wikipedia.org/wiki/I2S)
+audio interface wants an outgoing clock rate near 49.152 MHz.  While logical
+and ugly kludges to this problem exist (which I may yet write about), the
+appropriate way to deal with this is to use a PLL or digital clock manager to
+generate these dissimilar clocks.
+
+<TABLE align="center" style="float: left"><CAPTION>Fig 2: Multiple Clocking Needs</CAPTION><TR><TD><IMG SRC="/img/tbclock-nexys.svg" ALT="" WIDTH="480"></TD></TR></TABLE>
+
+The unfortunate consequence was that I needed a multiple clock simulation
+capability.  Ouch.
+
+The solution I eventually chose crosses multiple project boundaries,
+but it is worthwhile enough that I'll share it here.  It involves not only
+modifying my prior [Verilator test bench
+wrapper](/blog/2017/06/21/looking-at-verilator.html),
+but also a [test-bench clock helper
+class](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h).
+While the updated test bench wrapper can be created manually, I'll show you
+in the end how to use
+[AutoFPGA](/blog/zipcpu/2017/10/05/autofpga-intro.html)
+to tie each piece together into your design.
+
+## Reasoning about clocks
+
+If you remember
+[how I use](/blog/2017/06/21/looking-at-verilator.html)
+[Verilator](https://www.veripool.org/wiki/verilator),
+you'll remember that I like to wrap a
+[Verilated](https://www.veripool.org/wiki/verilator)
+design in a test bench class I call
+[TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h).
+Among other things, this [test bench
+class](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+has an ``tick()`` method that I
+can call any time I want the clock within my design to tick once.
+In my [AutoFPGA](/blog/zipcpu/2017/10/05/autofpga-intro.html) enabled projects, this
+[TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+class is created via [AutoFPGA](/blog/zipcpu/2017/10/05/autofpga-intro.html).  The class also
+has some nice capabilities for opening and closing
+[VCD trace files](/blog/2017/07/31/vcd.html)--but
+those are not a part of today's story.
+
+`tick()` works by:
+
+1. Leaving the clock at zero and dumping the design state to a
+   [VCD file](/blog/2017/07/31/vcd.html) (if so enabled).
+
+2. Setting the clock to one, and dumping the design state to a
+   [VCD file](/blog/2017/07/31/vcd.html) again.
+
+3. Setting the clock back to zero, and dumping the design state again.
+
+   This time, though, the
+   [VCD trace](/blog/2017/07/31/vcd.html)
+   is flushed to disk.
+
+4. The module is then allowed to read any inputs that may have changed,
+   and adjust any outputs that may need to be changed.
+
+5. Return to step one and repeat until the simulation is done.
+
+This works great for synchronous designs with only one clock.  Using this
+method I can not only test my own design, but also incorporate
+[co-simulation](https://en.wikipedia.org/wiki/Co-simulation)
+tests: Serial port, I2C, video, you name it, all of that can fit in this
+context.
+
+The problem is that this `tick()` method works great for designs with only
+one clock, but it is entirely insufficient when dealing with multiple clocks.
+It's not that [Verilator](https://www.veripool.org/wiki/verilator)
+is somehow insufficient.  It's not.
+[Verilator](https://www.veripool.org/wiki/verilator) can handle multiple clocks
+easily--as long as you can properly drive them.
+[Verilator](https://www.veripool.org/wiki/verilator)'s
+interface requires the caller to generate inputs at whatever rate they wish
+to do so.  This was what I needed to do.
+
+<TABLE align="center" style="float: none"><CAPTION>Fig 3: TBCLOCK enabled Verilator simulation structure</CAPTION><TR><TD><IMG SRC="/img/tbclock-sim-structure.svg" ALT="" WIDTH="640"></TD></TR></TABLE>
+
+My first step was to create a class to describe a clock to my test bench.
+I call this class
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h),
+or "test bench clock".  Its purpose is primarily to help me reason about time,
+and about one specific clock.  To understand the next step, let's first take a
+moment to understand [this
+class](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+and its methods.  We can then look at how 
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+can help us adjust our
+[TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+with multi-clock aware information.
+
+## TBCLOCK
+
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+has four basic methods: `time_to_edge`, returning the number of picoseconds to
+the next clock edge, `advance`, which advances the clock by some number of
+picoseconds, and `rising_edge` which can be used to tell if the clock is
+currently on its rising edge.  The fourth method, `falling_edge` is identical
+to `rising_edge`, but for falling edge clocks.
+
+Put together, these three methods work like this: the
+[TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+object queries the
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+objects to determine the amount of time to skip forward to get to the next
+clock edge.  This looks sort of like
+Fig 4 below.
+
+<TABLE align="center" style="float: none"><CAPTION>Fig 4: Time to next clock edge</CAPTION><TR><TD><IMG SRC="/img/tbclock-basic.svg" ALT="" WIDTH="640"></TD></TR></TABLE>
+
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+compares the current time to when the next edge will take place, and returns
+that amount of time in picoseconds.  (Why picoseconds?  It was an arbitrary
+decision based upon the reality that nanoseconds wasn't enough for the
+application(s) shown above, and femptoseconds were overkill.)
+
+The [TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+enhanced logic then advances all of the
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+objects to the time of this next edge, adjusts the clock input(s) and calls
+[Verilator](https://www.veripool.org/wiki/verilator)'s
+`eval()` function to update any logic dependent upon that clock.
+
+When viewed across three separate clocks, the result might look like Fig 5.
+
+<TABLE align="center" style="float: none"><CAPTION>Fig 5: Multiple clocks</CAPTION><TR><TD><IMG SRC="/img/tbclock-advance.svg" ALT="" WIDTH="640"></TD></TR></TABLE>
+
+You can see the resulting step sizes as events in the bottom trace in Fig 5.
+As a result, [Verilator](https://www.veripool.org/wiki/verilator)
+doesn't step forward uniformly by the minimum common denominator of all clock
+steps, but rather in a non-uniform fashion--so that it is only ever called to
+evaluate logic following a clock edge.
+
+Creating a 
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+is fairly straight forward.  Or, rather, it should be.  I got it wrong many
+times over while just trying to get the basics below right.  To create an
+object of this class, just declare one with the number of picoseconds
+per clock tick.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">class</span>	<span class="nc">TBCLOCK</span>	<span class="p">{</span>
+	<span class="c1">// ....
+</span><span class="nl">public:</span>
+	<span class="n">TBCLOCK</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">increment_ps</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// ....
+</span>	<span class="p">}</span></code></pre></figure>
+
+The initialization routine uses `increment_ps` to create an internal stepping
+interval `m_increment_ps` which is half of the original `increment_ps`.  This
+allows the [TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+object to reason about both positive and negative edge going clocks.
+
+The next capability the [test bench
+clock](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+offers is the ability to return the number of picoseconds until the next clock
+tick.  This was what Fig 4 was showing above.  We'll use this in the next
+section in our inner clock loop.  The
+next clock edge will come `m_increment_ps` picoseconds after the last clock
+edge.  If you subtract this future time from the current time, you'll get a
+value of how many picoseconds remain until the next clock edge.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">unsigned</span> <span class="kt">long</span>	<span class="nf">time_to_edge</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_last_posedge_ps</span> <span class="o">+</span> <span class="n">m_increment_ps</span> <span class="o">&gt;</span> <span class="n">m_now_ps</span><span class="p">)</span>
+			<span class="c1">// Next edge is a negative edge
+</span>			<span class="k">return</span> <span class="n">m_last_posedge_ps</span> <span class="o">+</span> <span class="n">m_increment_ps</span> <span class="o">-</span> <span class="n">m_now_ps</span><span class="p">;</span>
+		<span class="k">else</span> <span class="c1">// if (m_last_posedge_ps + 2*m_increment_ps &gt; m_now_ps)
+</span>			<span class="c1">// Next edge is a positive edge
+</span>			<span class="k">return</span> <span class="n">m_last_posedge_ps</span> <span class="o">+</span> <span class="mi">2</span><span class="o">*</span><span class="n">m_increment_ps</span> <span class="o">-</span> <span class="n">m_now_ps</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+Once the clock generator has been queried for the time to the next edge, the
+test-bench driver can then determine which clock edge comes next.
+From here, each clock can be advanced until that next edge.  That's the purpose
+of the `advance()` function: given a step size (in ps), advance the global
+clock time maintained within this [test bench support
+clock](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h).
+
+Well, not quite.  `advance()` has one other purpose.  It also returns the value
+of the clock, either `1` or `0`, at this new time instant.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">int</span>	<span class="nf">advance</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">itime</span><span class="p">)</span> <span class="p">{</span>
+
+		<span class="n">m_now_ps</span> <span class="o">+=</span> <span class="n">itime</span><span class="p">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_now_ps</span> <span class="o">&gt;=</span> <span class="n">m_last_posedge_ps</span> <span class="o">+</span> <span class="mi">2</span><span class="o">*</span><span class="n">m_increment_ps</span><span class="p">)</span> <span class="p">{</span>
+			<span class="c1">// Advance to the next positive edge, and return
+</span>			<span class="c1">// a positive valued clock
+</span>			<span class="n">m_last_posedge_ps</span> <span class="o">+=</span> <span class="mi">2</span><span class="o">*</span><span class="n">m_increment_ps</span><span class="p">;</span>
+			<span class="n">m_ticks</span><span class="o">++</span><span class="p">;</span>
+			<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">m_now_ps</span> <span class="o">&gt;=</span> <span class="n">m_last_posedge_ps</span> <span class="o">+</span> <span class="n">m_increment_ps</span><span class="p">)</span> <span class="p">{</span>
+			<span class="c1">// Negative half of the clock's duty cycle
+</span>			<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="p">}</span> <span class="k">else</span>
+			<span class="c1">// Positive half of the clock's duty cycle
+</span>			<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+In the next section, we'll use the result of `advance()` to set the
+clock input value to the main Verilog [test
+bench function](/blog/2017/06/21/looking-at-verilator.html).
+
+There are two other helper functions to determine if the current time is a
+rising or a falling edge, but that's the basics of the first part.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="c1">// Return true if this is a rising clock edge
+</span>	<span class="n">bool</span>	<span class="nf">rising_edge</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_now_ps</span> <span class="o">==</span> <span class="n">m_last_posedge_ps</span><span class="p">)</span>
+			<span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
+		<span class="k">return</span> <span class="nb">false</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="c1">// Return true if this is a falling clock edge
+</span>	<span class="n">bool</span>	<span class="nf">falling_edge</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_now_ps</span> <span class="o">==</span> <span class="n">m_last_posedge_ps</span> <span class="o">+</span> <span class="n">m_increment_ps</span><span class="p">)</span>
+			<span class="k">return</span> <span class="nb">true</span><span class="p">;</span>
+		<span class="k">return</span> <span class="nb">false</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+The primary work in this class is done within the `time_to_edge` method.
+We'll see how this helps in the next section.
+
+## Updating the inner testbench class, TESTB
+
+The
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+class we discussed above is only a *helper* in the scheme of things.  Most of
+the actual logic takes place within the updated `tick()` function found within
+the [test bench object,
+TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h),
+used to drive the [Verilator](https://www.veripool.org/wiki/verilator) inputs.
+
+[As you may
+recall](/blog/2017/06/21/looking-at-verilator.html),
+I started creating a [test bench class
+wrapper](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+once I noticed that I kept using the same code for every
+[Verilator](https://www.veripool.org/wiki/verilator)
+based test bench.  The code to open a
+[trace file](/blog/2017/07/31/vcd.html)
+was the same.  The code to capture data to that
+[trace file](/blog/2017/07/31/vcd.html)
+was the same.  The [code to toggle the
+clock](/blog/2017/06/21/looking-at-verilator.html)
+was the same.  I found myself copying these pieces of code from one simulation
+wrapper to another.  Rather than just duplicate the same code,
+[I created](/blog/2017/06/21/looking-at-verilator.html) the
+[test bench
+wrapper](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+class,
+[TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h).
+
+One of the primary functions of the [test bench
+wrapper](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+object is to advance the clock.
+[Verilator](https://www.veripool.org/wiki/verilator)
+requires that the clock toggle from low to high in order to call the
+positive edge logic within your design.  The clock needs to then return low,
+and all of these transitions require calls to the [Verilator tracing
+methods](/blog/2017/06/21/looking-at-verilator.html) if you
+want a [VCD file](/blog/2017/07/31/vcd.html) when you are
+done.
+
+I found this cumbersome, so I wrapped all of that logic with a `tick()` method.
+This is the same `tick()` method I discussed above.  The `tick()` method of
+[TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+would capture inputs to the core in a trace,
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span>	<span class="kt">void</span>	<span class="nf">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_tickcount</span><span class="o">++</span><span class="p">;</span>
+
+		<span class="c1">// Step one--don't skip this one!
+</span>		<span class="c1">// This step is necessary to make certain any combinatorial
+</span>		<span class="c1">// logic settles prior to the positive edge of the clock, and
+</span>		<span class="c1">// following any adjustments to design's inputs
+</span>		<span class="c1">//
+</span>		<span class="c1">// m_core-&gt;i_clk = 0; // (This is implied)
+</span>		<span class="n">eval</span><span class="p">();</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_trace</span><span class="p">)</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="o">-</span><span class="mi">2</span><span class="p">);</span></code></pre></figure>
+
+toggle the clock high,
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="c1">// Step two
+</span>		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">eval</span><span class="p">();</span></code></pre></figure>
+
+capture the results in a trace,
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">m_trace</span><span class="p">)</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="p">);</span></code></pre></figure>
+
+
+then toggle the clock low
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="c1">// Step three
+</span>		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">eval</span><span class="p">();</span></code></pre></figure>
+
+and capture the results in the trace again--this time flushing the trace file.
+(Flushing is important--I've had too many designs fail some C-assertion in their
+associated logic, and without the flush you may not get the state of your
+variables at that last clock.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">m_trace</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="o">+</span><span class="mi">5</span><span class="p">);</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">flush</span><span class="p">();</span>
+		<span class="p">}</span>
+	<span class="p">}</span></code></pre></figure>
+
+Before moving on, let me foot-stomp here that *all three calls to `eval()`
+are essential!*.  While it may look like the last step and the first step
+are identical since they both leave the clock at zero, they are not the same.
+Between these two steps,
+[co-simulation](https://en.wikipedia.org/wiki/Co-simulation)
+logic might change inputs to the design.  Unless you call `eval()` following
+any [co-simulation](https://en.wikipedia.org/wiki/Co-simulation) updates to
+design inputs, combinational logic depending upon these inputs may not
+settle.  This is a painful bug to search for, so I recommend you learn the
+lesson here.
+
+In this single clock paradigm outlined above, I could read any outputs and
+adjust any inputs after calling this one `tick()` method.  I could also call
+the C `assert` function if something had gone wrong--the `flush()` command
+above guaranteed that the relevant portion of the trace was in [the
+file](/blog/2017/07/31/vcd.html).  This approach was simple
+enough, and I've used this pattern for many of my designs.  (You can read more
+about it [here](/blog/2017/06/21/looking-at-verilator.html).)
+
+Sadly, this initial approach didn't work when dealing with multiple clocks.
+
+Instead, let's walk through how this `tick()` method can be updated to deal
+with multiple clocks.  In the example below, drawn from the [VideoZip
+project](https://github.com/ZipCPU/videozip),
+I have four clocks: `hdmi_out`.  `hdmi_in`, `net_rx_clk`, and my default `clk`.
+
+The first step when calling `tick()` is to check the number of picoseconds
+till the next clock edge.  This is the minimum time to the next edge among
+all clocks.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">virtual</span> <span class="kt">void</span>	<span class="nf">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// m_clk describes the system clock
+</span>		<span class="kt">unsigned</span>	<span class="n">mintime</span> <span class="o">=</span> <span class="n">m_clk</span><span class="p">.</span><span class="n">time_to_edge</span><span class="p">();</span>
+
+		<span class="c1">// m_hdmi_out_clk describes the HDMI output clock
+</span>		<span class="c1">// This is at 148.5MHz for this design
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">m_hdmi_out_clk</span><span class="p">.</span><span class="n">time_to_edge</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">mintime</span><span class="p">)</span>
+			<span class="n">mintime</span> <span class="o">=</span> <span class="n">m_hdmi_out_clk</span><span class="p">.</span><span class="n">time_to_edge</span><span class="p">();</span>
+
+		<span class="c1">// m_hdmi_in_clk describes the HDMI input clock
+</span>		<span class="c1">// This is identical to the HDMI output clock in this design
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">m_hdmi_in_clk</span><span class="p">.</span><span class="n">time_to_edge</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">mintime</span><span class="p">)</span>
+			<span class="n">mintime</span> <span class="o">=</span> <span class="n">m_hdmi_in_clk</span><span class="p">.</span><span class="n">time_to_edge</span><span class="p">();</span>
+
+		<span class="c1">// m_net_rx_clk describes the 125MHz ethernet RGMII interface
+</span>		<span class="c1">// clock
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">m_net_rx_clk</span><span class="p">.</span><span class="n">time_to_edge</span><span class="p">()</span> <span class="o">&lt;</span> <span class="n">mintime</span><span class="p">)</span>
+			<span class="n">mintime</span> <span class="o">=</span> <span class="n">m_net_rx_clk</span><span class="p">.</span><span class="n">time_to_edge</span><span class="p">();</span></code></pre></figure>
+
+Once we know this amount of time, we'll call `eval()` once out of an abundance
+of caution.  This makes sure, before any clock edges change, that all of the
+combinational logic associated with any potentially changed input wires has
+settled.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">eval</span><span class="p">();</span></code></pre></figure>
+
+Once done, each of the various clock objects may be advanced by this amount
+of time, and our global estimate of the current time can advance as well.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_hdmi_out_clk</span> <span class="o">=</span> <span class="n">m_hdmi_out_clk</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="n">mintime</span><span class="p">);</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_hdmi_in_clk</span> <span class="o">=</span> <span class="n">m_hdmi_in_clk</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="n">mintime</span><span class="p">);</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="n">m_clk</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="n">mintime</span><span class="p">);</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_net_rx_clk</span> <span class="o">=</span> <span class="n">m_net_rx_clk</span><span class="p">.</span><span class="n">advance</span><span class="p">(</span><span class="n">mintime</span><span class="p">);</span>
+
+		<span class="n">m_time_ps</span> <span class="o">+=</span> <span class="n">mintime</span><span class="p">;</span></code></pre></figure>
+
+Finally, using these new clock values, we can call
+[Verilator](/blog/2017/06/21/looking-at-verilator.html)
+to evaluate our design in this new interval--adjusting any edge triggered
+logic.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="n">eval</span><span class="p">();</span></code></pre></figure>
+
+If we are recording a trace at this time, we'll then call
+[Verilator](/blog/2017/06/21/looking-at-verilator.html)
+to dump the current state of the design to a
+[trace file](/blog/2017/07/31/vcd.html).
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">m_trace</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">(</span><span class="n">m_time_ps</span><span class="p">);</span>
+			<span class="n">m_trace</span><span class="o">-&gt;</span><span class="n">flush</span><span class="p">();</span>
+		<span class="p">}</span></code></pre></figure>
+
+Don't forget to flush it!  There's been more than one time when I've checked
+the outputs of a core after ticking the clock, decided their was a problem and
+aborted, only to find the relevant signals hadn't ended up in the
+[trace file](/blog/2017/07/31/vcd.html).
+
+Finally, we'll call any external simulation logic depending on clock edges.
+In my single clock designs, I do this about mid-way through the low period of
+the clock, so you can "see" the transformation.  I also did it between calls to
+`tick()`.  This doesn't work with multiple-clocks, since peripherals are often
+defined by the clock the logic is associated with.  For this reason,
+we'll have to call separate functions for each clock to allow these
+[co-simulations](https://en.wikipedia.org/wiki/Co-simulation)
+to update.  We'll do this on
+the falling edges of their respective clocks.  This includes possibly updating
+the [video simulation](https://github.com/ZipCPU/vgasim), checking for
+simulated network packets, and more.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">		<span class="k">if</span> <span class="p">(</span><span class="n">m_hdmi_out_clk</span><span class="p">.</span><span class="n">falling_edge</span><span class="p">())</span> <span class="p">{</span>
+			<span class="n">m_changed</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+			<span class="n">sim_hdmi_out_clk_tick</span><span class="p">();</span>
+		<span class="p">}</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_hdmi_in_clk</span><span class="p">.</span><span class="n">falling_edge</span><span class="p">())</span> <span class="p">{</span>
+			<span class="n">m_changed</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+			<span class="n">sim_hdmi_in_clk_tick</span><span class="p">();</span>
+		<span class="p">}</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_net_rx_clk</span><span class="p">.</span><span class="n">falling_edge</span><span class="p">())</span> <span class="p">{</span>
+			<span class="n">m_changed</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+			<span class="n">sim_clk_tick</span><span class="p">();</span>
+		<span class="p">}</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_clk</span><span class="p">.</span><span class="n">falling_edge</span><span class="p">())</span> <span class="p">{</span>
+			<span class="n">m_changed</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+			<span class="n">sim_clk_tick</span><span class="p">();</span>
+		<span class="p">}</span>
+	<span class="p">}</span></code></pre></figure>
+
+For example, in my [spectrogram demo
+project](https://github.com/ZipCPU/fftdemo), the `sim_clk_tick()` function
+advances the [A/D
+simulation](https://github.com/ZipCPU/fftdemo/blob/master/bench/cpp/micnco.cpp)
+and so updates `i_adc_miso`, and the `sim_pixclk_tick()` advances the
+[simulated video on the
+screen](https://github.com/ZipCPU/blob/master/bench/cpp/vgasim.cpp)
+using the outgoing pixel, and the various outgoing synch signals.
+([Ref](https://github.com/ZipCPU/blob/master/bench/cpp/main_tb.cpp))
+
+The conclusion here is that if you want to use this technique, you'll want to
+copy the
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+class (or build your own), and then create a
+[test bench wrapper](https://github.com/ZipCPU/videozip/blob/master/sim/verilated/testb.h)
+that references your
+[TBCLOCK](https://github.com/ZipCPU/zbasic/blob/master/sim/verilator/tbclock.h)
+objects and gets all the pieces right.
+
+Alternatively, you could use [AutoFPGA](https://github.com/ZipCPU/autofpga)
+to handle all of this busy work for you.
+
+## Using AutoFPGA to build the testbench
+
+If you are not familiar with [AutoFPGA](https://github.com/ZipCPU/autofpga),
+then in quick sum: it is Verilog-based code generator based upon a copy and
+paste concept with minimal substitution capability.  You specify the code
+snippets associated with each design component or peripheral in an
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+configuration file, and then when you call
+[AutoFPGA](https://github.com/ZipCPU/autofpga) specifying that configuration
+file (among many others),
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+will create your top level (device dependent) design, your main design
+(device independent) file, and several other bus related files associated with
+the peripherals you are making or using.
+
+If you are interested in this, consider reading about
+[AutoFPGA](https://github.com/ZipCPU/autofpga)'s
+[design goal's](/zipcpu/2017/10/05/autofpga-intro.html), 
+or the primer on [how to connect simple register-based components to a
+debugging bus](/zipcpu/2017/10/06/autofpga-dataword.html)
+using [AutoFPGA](https://github.com/ZipCPU/autofpga).
+
+The neat thing about using [AutoFPGA](https://github.com/ZipCPU/autofpga)
+for a purpose like this one, is that when you no longer need the extra
+clock or the logic that uses it, you can just remove the reference to the
+configuration file describing those components of your design from the
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+command line.  If you want to see how this works, consider examining a [project
+that uses](https://github.com/ZipCPU/zbasic)
+[AutoFPGA](https://github.com/ZipCPU/autofpga), and then looking in the 
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+[configuration file directory](https://github.com/ZipCPU/zbasic/tree/master/auto-data)
+for the [Makefile](https://github.com/ZipCPU/zbasic/blob/master/auto-data/Makefile).  In there, you'll find some lines similar to:
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nv">DATA</span> <span class="o">:=</span> global.txt bkram.txt buserr.txt clock.txt                       <span class="se">\</span>
+	dlyarbiter.txt flash.txt rtclight.txt   rtcdate.txt             <span class="se">\</span>
+	pic.txt pwrcount.txt                                            <span class="se">\</span>
+	version.txt busconsole.txt zipmaster.txt sdspi.txt
+
+<span class="nv">AUTOFPGA</span> <span class="o">:=</span> ../../../autofpga/trunk/sw/autofpga
+
+<span class="nl">.PHONY</span><span class="o">:</span> <span class="nf">data</span>
+<span class="nl">data</span><span class="o">:</span> <span class="nf">$(AUTOFPGA) $(DATA)</span>
+	<span class="nv">$(AUTOFPGA)</span> -o . <span class="nv">$(DATA)</span></code></pre></figure>
+
+This captures, in the `$(DATA)` variable a list of configuration files that
+are given to [AutoFPGA](https://github.com/ZipCPU/autofpga).
+
+Then in the main project
+[Makefile](https://github.com/ZipCPU/zbasic/blob/master/Makefile) the created
+code files will be copied to their various parts of the project tree if
+running [AutoFPGA](https://github.com/ZipCPU/autofpga) had changed them--but
+not otherwise.  As an
+[example](https://github.com/ZipCPU/zbasic/blob/master/Makefile) from
+[Zbasic](/zipcpu/2018/02/12/zbasic-intro.html), these
+[Makefile](https://github.com/ZipCPU/zbasic/blob/master/Makefile)
+lines would look like:
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="nl">.PHONY</span><span class="o">:</span> <span class="nf">autodata</span>
+<span class="nl">autodata</span><span class="o">:</span> <span class="nf">check-autofpga</span>
+	<span class="nv">$(MAKE)</span> --no-print-directory --directory<span class="o">=</span>auto-data
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/toplevel.v,rtl/toplevel.v<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/main.v,rtl/main.v<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/regdefs.h,sw/host/regdefs.h<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/regdefs.cpp,sw/host/regdefs.cpp<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/board.h,sw/zlib/board.h<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/board.ld,sw/board/board.ld<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/rtl.make.inc,rtl/make.inc<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/testb.h,sim/verilated/testb.h<span class="o">)</span>
+	<span class="err">$</span><span class="o">(</span>call copyif-changed,auto-data/main_tb.cpp,sim/verilated/main_tb.cpp<span class="o">)</span></code></pre></figure>
+
+and a little later, you'll see the definition of this `copyif-changed`
+function.
+
+<figure class="highlight"><pre><code class="language-makefile" data-lang="makefile"><span class="err">define</span>  <span class="err">copyif-changed</span>
+	<span class="err">@bash</span> <span class="err">-c</span> <span class="s1">'cmp $(1) $(2); if [[ $$? != 0 ]]; then echo "Copying $(1) to $(2)"; cp $(1) $(2); fi'</span>
+<span class="err">endef</span></code></pre></figure>
+
+Basically, if files `$(1)` and `$(2)` differ, then `$(1)` is copied on top of
+`$(2)`.  This keeps [make](https://www.gnu.org/software/make) from rebuilding
+things that depend upon files that haven't changed.
+
+But that's not my point here and now.
+
+What I want to share right now is how easy it is to teach
+[AutoFPGA](https://github.com/ZipCPU/autofpga) about your multiple clocks.
+
+First, you'll want to define each of your clocks.  A clock, in terms of
+[AutoFPGA](https://github.com/ZipCPU/autofpga), has three components:
+a name, the name of the wire that contains this clock, and the frequency of
+the clock in Hz.  For example, you might have a clock `clk` contained in the
+wire `i_clk`, that runs at 100MHz.  You'd then define this as:
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">CLOCK.NAME= clk
+CLOCK.WIRE= i_clk
+CLOCK.FREQUENCY= 100000000</code></pre></figure>
+
+This alone is all that is needed to create the clock in the
+[AutoFPGA](https://github.com/ZipCPU/autofpga) generated
+[TESTB](https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/testb.h)
+file.
+
+What about simulating a component requiring this clock?
+
+Let's consider simulating a video display.  You can find a video display
+simulator [here](https://github.com/ZipCPU/vgasim).  Let's assume your
+design has outputs `o_vga_vsync`, `o_vga_hsync`, `o_vga_red`, `o_vga_grn`,
+and `o_vga_blu`--such as this one does.  Then, you'd want to declare a [VGA
+simulator](https://github.com/ZipCPU/vgasim/blob/master/bench/cpp/vgasim.cpp)
+VGA simulator in your Verilog design component,
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">SIM</span><span class="p">.</span><span class="n">DEFNS</span><span class="o">=</span>
+	<span class="n">VGASIM</span>	<span class="o">*</span><span class="n">m_vga</span><span class="p">;</span></code></pre></figure>
+
+You'd then want to initialize this component.  Here, we'll set it up for an
+800x600 display mode.
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">SIM</span><span class="p">.</span><span class="n">INIT</span><span class="o">=</span>
+		<span class="n">m_vga</span> <span class="o">=</span> <span class="k">new</span> <span class="n">VGASIM</span><span class="p">(</span><span class="mi">800</span><span class="p">,</span><span class="mi">600</span><span class="p">);</span></code></pre></figure>
+
+We can then call this
+[co-simulation](https://en.wikipedia.org/wiki/Co-simulation)
+component on every clock tick, with,
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">SIM</span><span class="p">.</span><span class="n">TICK</span><span class="o">=</span>
+		<span class="p">(</span><span class="o">*</span><span class="n">m_vga</span><span class="p">)(</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_vsync</span><span class="p">,</span> <span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_hsync</span><span class="p">,</span>
+			<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_red</span><span class="p">,</span> <span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_grn</span><span class="p">,</span>
+			<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_blu</span><span class="p">);</span></code></pre></figure>
+
+Don't forget to define the clock!  For an `800x600` display mode, you'll need
+a `40MHz` clock.
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">CLOCK.NAME= pixclk
+CLOCK.WIRE= i_pixclk
+CLOCK.FREQUENCY= 40000000</code></pre></figure>
+
+Ideally, you could just add this updated configuration file to your design
+to add this component, or remove it from your design to remove the component.
+At this point, this would work for a
+[Verilator](https://www.veripool.org/wiki/verilator)
+simulation.  If you wanted to go beyond simulation, you'd
+need to actually add and configure the PLL in the toplevel design component.
+You'd use the `TOP.INSERT`
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+tag for that purpose.
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+would then copy the contents of that tag into your toplevel.v
+design file.  No [AutoFPGA](https://github.com/ZipCPU/autofpga)
+doesn't configure the PLL itself (yet)--you still have to give it the code
+for that (with the `TOP.INSERT`).  Still,
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+will put that code in place for you, making reconfiguration simpler.
+
+## Conclusion
+
+Perhaps that seems like a lot of work.  It's not really.  We're primarily
+talking about 20-40 lines of code in total.  It's just a different way of
+thinking.  The only sad and complicated part is that all of these lines of
+code take place over many design files.  Having
+[AutoFPGA](https://github.com/ZipCPU/autofpga)
+manage this for me has helped to keep all of the changes to support multiple
+clocks within one or two files only.
+
+In the end, we now have a
+[Verilator](https://www.veripool.org/wiki/verilator),
+based design that runs using multiple clocks.  Not only that, you can generate
+a [VCD file](/blog/2017/07/31/vcd.html)
+showing all of these various clocks and their respective traces.
+
+While this capability does not (yet) allow the generation of multiple clocks
+with a known phase relationship, such as one might use with an ISERDES or an
+OSERDES, upgrading the tools to do so would be fairly trivial.  I'm sure I'll
+get around to that when I have a need for it.
+
+Perhaps some of you are wondering to yourselves, "Verilog offers a capability
+to generate multiple clocks already.  Why aren't you using Verilog's test bench
+capability to do this?"
+
+My answer to that is simple: I know how to interface a C++ module with my
+computer's Windowing system using [GTKMM](https://www.gtkmm.org).
+I don't know the Verilog system call to do that.
+
+What can you use this for?  I've already mentioned
+[video](https://github.com/ZipCPU/vgasim), [Ethernet](https://en.wikipedia.org/wiki/Ethernet), and
+audio applications.  There's no reason why you can't use this for custom
+applications as well.  For example, I'm still looking forward to completing the
+[differential pmod challenge](https://forum.digilentinc.com/topic/2898-differential-pmod-challenge/)
+... but that's really another topic for another day.
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>And Jesus answered and said unto them, Elias truly shall first come, and restore all things. (Matt 17:11)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
