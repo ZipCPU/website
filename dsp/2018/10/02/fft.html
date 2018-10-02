@@ -1,0 +1,1866 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>An Open Source Pipelined FFT Generator</title>
+  <meta name="description" content="Have you ever tried to simulate a DSP algorithm using Verilator, only tothen realize that your design required anFFTand that all you had was a proprietaryFFT...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/dsp/2018/10/02/fft.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">An Open Source Pipelined FFT Generator</h1>
+    <p class="post-meta"><time datetime="2018-10-02T00:00:00-04:00" itemprop="datePublished">Oct 2, 2018</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Have you ever tried to simulate a <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a> algorithm using <a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>, only to
+then realize that your design required an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+and that all you had was a proprietary
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+implementation?  Perhaps you
+then looked for open source alternatives among the <a href="https://opencores.org/projects?expanded=DSP core">DSP
+cores</a> on
+<a href="https://opencores.org">OpenCores</a>, only to find that the particular
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+size you needed wasn’t supported, or that it required more
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>s
+than your board had?  Perhaps the open core you found didn’t work, and you
+were unable to either verify the core by re-running the formal verification
+or by running the test bench.</p>
+
+<p>This happened to me when I set out to build one of my first <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a> designs: a
+<a href="https://en.wikipedia.org/wiki/Global_Positioning_System">GPS</a> processing algorithm.  However, in my case, things were worse.  I needed an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+that could process two incoming samples per clock, or I would have
+no chance of applying my
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+based <a href="https://en.wikipedia.org/wiki/Global_Positioning_System">GPS</a>
+processing algorithm in real time.</p>
+
+<p>Since building this core, I’ve discovered how universally applicable an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+core is.  As a result, I’ve expanded the initial
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+capability that I had built in order to handle some of the
+more common use cases.  Not only does this
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+process a high speed input at
+two samples per clock, but it can now handle the typical case of one input
+sample per clock, or even half or a third of that rate.  Part of my hope
+with this change is to be able to easily process audio samples at rates
+much slower than the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+can handle.</p>
+
+<p>Why not implement a block
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+then?  That’s a good question.  For now, my simple is simply
+one project at a time.</p>
+
+<p>Today, I’d like to introduce <a href="https://github.com/ZipCPU/dblclockfft">this FFT core
+generator</a>, show you how to generate
+a <a href="https://github.com/ZipCPU/dblclockfft/tree/master/rtl">custom FFT core</a>
+for your own purposes, and then discuss how I’ve gone about
+formally verifying the components of the
+<a href="https://github.com/ZipCPU/dblclockfft">the core</a>.
+Yes, it has been formally verified–at least, most of it has.  But I’ll get
+to that in a moment.</p>
+
+<h2 id="what-is-an-fft">What is an FFT</h2>
+
+<table align="center" style="float: right"><caption>Fig 1. Spectral representation of speech</caption><tr><td><img src="/img/fft-echoes-burning-bush.svg" alt="" width="360" /></td></tr></table>
+
+<p>If you aren’t familiar with a <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>, then you
+should know that it is a very important part of <em>many</em> engineering applications.</p>
+
+<ol>
+  <li>
+    <p><a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s are
+an important part of any digital <a href="https://en.wikipedia.org/wiki/Spectrum_analyzer">spectrum
+analyzer</a>.
+You’re likely to find one of these in just about any good electronics lab.</p>
+  </li>
+  <li>
+    <p><a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s can
+also be used when implementing a
+<a href="https://en.wikipedia.org/wiki/Spectrogram">spectrogram</a>, such as the
+one shown in Fig 1. on the right, or Fig 2 below.  Such
+<a href="https://en.wikipedia.org/wiki/Spectrogram">spectrogram</a>s make
+it easier to understand artifacts of speech and other sounds, or even
+radio frequency waveforms, by visual inspection.</p>
+  </li>
+  <li>
+    <p>Second, <a href="https://en.wikipedia.org/wiki/Convolution">convolutions</a> and/or
+<a href="https://en.wikipedia.org/wiki/Cross-correlation">correlations</a> can often be
+implemented much faster and cheaper using an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> implementation
+of the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>.</p>
+
+    <p>This means that <a href="/dsp/2017/11/04/genfil-tb.html">digital
+filters</a> can be
+implemented with <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>
+enabled <a href="https://en.wikipedia.org/wiki/Convolution">convolutions</a>
+faster/better/cheaper.</p>
+  </li>
+  <li>
+    <p><a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+are used to understand and analyze <a href="https://en.wikipedia.org/wiki/Control_system">control
+systems</a>.</p>
+
+    <p>I was personally surprised at how easy it became to study and understand
+a <a href="/dsp/2017/12/14/logic-pll.html">PLL</a>s implementation
+once <a href="https://www.amazon.com/Phaselock-Techniques-Floyd-M-Gardner/dp/0471430633/">Gardner rewrote
+it</a>
+using the <a href="https://en.wikipedia.org/wiki/Z-transform">Z-transform</a>, a
+variant of an <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>.</p>
+  </li>
+  <li>
+    <p>Fifth, <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>s
+are used not only in <a href="/dsp/2017/11/04/genfil-tb.html">filter</a>
+implementations, but they are also used in the <a href="https://en.wikipedia.org/wiki/Parks-MccClellan_filter_design_algorithm">filter
+design</a>
+process.  We’ve
+<a href="/dsp/2017/11/04/genfil-tb.html">discussed this somewhat</a>
+already.</p>
+  </li>
+  <li>
+    <p>Finally, just like you can use <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a> to evaluate
+<a href="/dsp/2017/11/04/genfil-tb.html">filter</a>
+implementations, you can also use them to <a href="/dsp/2018/01/16/interpolation-is-convolution.html">evaluate and compare interpolator
+implementations</a>.</p>
+  </li>
+</ol>
+
+<p>Indeed, the <a href="https://en.wikipedia.org/wiki/Fourier_transform">transform</a>
+is so ubiquitous in <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">digital signal
+processing</a>
+that it can be hard to avoid: it is the <a href="/dsp/2017/11/22/fltr-response.html"><em>natural way of expressing a signal
+or linear operation in a time-independent fashion</em></a>.</p>
+
+<table align="center" style="float: left"><caption>Fig 2. An FSK decomposed with FFT based processing</caption><tr><td><img src="/img/fft-fsk.svg" alt="" width="360" /></td></tr></table>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform"><em>Fast</em> Fourier
+Transform (FFT)</a>
+is a specific implementation of the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>, that drastically
+reduces the cost of implementing the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a> Prior to the
+invention of the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, a
+<a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a> could only
+be calculated the hard way with <code class="highlighter-rouge">N^2</code> multiplication operations per transform
+of <code class="highlighter-rouge">N</code> points.  Since <a href="https://en.wikipedia.org/wiki/Cooley%E2%80%93Tukey_FFT_algorithm">Cooley and
+Tukey</a>
+<a href="http://www.ams.org/journals/mcom/1965-19-090/S0025-5718-1965-0178586-1/S0025-5718-1965-0178586-1.pdf">published</a>
+their algorithmic implementation of the <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>,
+they can now be calculated with <code class="highlighter-rouge">O(N log_2(N))</code> multiplies.</p>
+
+<p>Needless to say, the invention of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> immediately
+started to transform
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">signal processing</a>.
+But let’s back up and understand a little more about what a <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a> is first.</p>
+
+<p>A <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a> is
+a <a href="https://en.wikipedia.org/wiki/Linear_map">linear operator</a> that decomposes
+a signal from a representation in time, to a time-less representation in
+frequency.  This is done via a continuous-time <a href="https://en.wikipedia.org/wiki/Projection_(linear_algebra)">projection
+operator</a>
+applied across all time to an incoming signal,
+<a href="https://en.wikipedia.org/wiki/Projection_(linear_operator)">projecting</a>
+the incoming signal onto a set of <a href="https://en.wikipedia.org/wiki/Euler's_formula">complex
+exponential</a> <a href="https://en.wikipedia.org/wiki/Basis_function">basis
+functions</a>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-fourier-transform.png" alt="" width="280" /></td></tr></table>
+
+<p>This is the definition you will first come across when studying
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>.
+This form above is easy to work with mathematically with
+just pen and paper–as long as you don’t try to calculate the
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a>
+of <code class="highlighter-rouge">e^{j 2pi ft}</code> across all time–something which only
+<a href="https://en.wikipedia.org/wiki/Dirac_delta_function">questionably converges</a>.</p>
+
+<p>There are two problems with this nice mathematical definition when it comes
+to working with an engineering reality.</p>
+
+<p>The first problem is that digital algorithms don’t operate upon continuous
+signals very well.  Computers and other <a href="https://en.wikipedia.org/wiki/Digital_signal_processing">digital signal
+processors</a>
+do a much better job with
+<em><a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a></em>
+signals.  Hence, we’ll switch from discussing the
+pure <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a> shown above and examine the <a href="https://en.wikipedia.org/wiki/Discrete-time_Fourier_transform">Discrete-time Fourier
+transform</a>
+instead.  For this, we’ll switch from a continuous incoming signal,
+<code class="highlighter-rouge">x(t)</code>, to its
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a>
+representation, <code class="highlighter-rouge">x[n]</code>.  The <a href="https://en.wikipedia.org/wiki/Discrete-time_Fourier_transform">Discrete-time Fourier
+transform</a>
+can then be applied to our signal.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-discrete-fourier.png" alt="" width="327" /></td></tr></table>
+
+<p>While this <a href="https://en.wikipedia.org/wiki/Discrete-time_Fourier_transform">discrete-time
+transform</a>
+works very nicely for representing the response of certain
+<a href="/dsp/2017/11/22/fltr-response.html">digital filters</a>,
+it’s still not all that practical.</p>
+
+<p>This brings us to the second problem: Computers can’t handle an infinite
+number of <a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>,
+nor can they handle an infinite number potential frequencies.  Both of these
+need to be <a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a>
+and finite.</p>
+
+<p>Fixing this second problem brings us to the <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-fast-dft.png" alt="" width="291" /></td></tr></table>
+
+<p>Now, not only is the <code class="highlighter-rouge">x[n]</code> used in
+<a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">this transform</a>
+discrete, but the frequency index, <code class="highlighter-rouge">k/N</code>, is as well.</p>
+
+<p>All three of these representations are very tightly related.  Indeed, it can
+be argued that under certain conditions, such as those of a sufficiently
+band limited and time limited signal, each of these three operators
+can be said to be roughly equivalent.</p>
+
+<p>Ouch.  Did I just say that?  The
+mathematician within me is screaming that this statement is in gross error.
+Mathematically, there are major and significant differences between these
+transforms.  Practically, however, only this last transform can ever be
+computed digitally.  Therefore, the first two expressions of the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a> and then the
+<a href="https://en.wikipedia.org/wiki/Discrete-time_Fourier_transform">discrete time Fourier
+transform</a>
+can only ever be digitally approximated by the <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>.</p>
+
+<p>Perhaps I should just leave this point by saying these three representations
+are tightly related.</p>
+
+<p>It is this third representation of the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>, known as the
+<a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete
+Fourier transform</a>,
+that we’ll be discussing the implementation of today.  I’m also going to argue
+that this is the only representation of the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>
+that can be numerically computed for any
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sampled</a> finite
+sequence, but I’ll be glad to invite you to prove me wrong.</p>
+
+<p>If you look at the form above, you can see it takes as input <code class="highlighter-rouge">N</code> data
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>, <code class="highlighter-rouge">x[n]</code>,
+and calculates one summation across those inputs for every value of <code class="highlighter-rouge">k</code> to
+produce <code class="highlighter-rouge">N</code>
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+out, <code class="highlighter-rouge">X[k/N]</code>.  Given that there’s a complex multiplication
+required for every term in that summation of <code class="highlighter-rouge">N</code> numbers, and that there are
+<code class="highlighter-rouge">N</code> relevant outputs, this will cost <code class="highlighter-rouge">N^2</code> painful multiplications to calculate.</p>
+
+<p>If we just left things there,
+<a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">this transform</a>,
+would be so hard to calculate that no one would ever use it.</p>
+
+<p><a href="https://en.wikipedia.org/wiki/Cooley%E2%80%93Tukey_FFT_algorithm">Cooley and
+Tukey</a>,
+however, described a way that the <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>
+can be decomposed into two transforms, each of them being half the size of
+the original, for the cost of only <code class="highlighter-rouge">N</code> multiplies.  If you then repeat this
+<code class="highlighter-rouge">log_2(N)</code> times, you’ll get to a one point transform, for a total cost of
+<code class="highlighter-rouge">N log_2(N)</code> multiplies.  At this cost point, the <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>
+becomes relevant.  Indeed, it becomes a significant and fundamental
+<a href="https://en.wikipedia.org/wiki/Digital_signal_processing">DSP</a> operation.</p>
+
+<p>Let’s take a moment to scratch the surface of how this is done, using the
+“decimation in frequency” approach to decomposing the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+that is used within
+<a href="https://github.com/ZipCPU/dblclockfft">this core</a>.  It involves first
+splitting the summation into two parts, one containing the low numbered
+terms and one containing the higher numbered terms.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-bisum.png" alt="" width="566" /></td></tr></table>
+
+<p>The left term captures the first half of the summation, whereas the right term
+captures the second half.</p>
+
+<p>If you look at the two summation terms above, you’ll see that they share a
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>,
+<code class="highlighter-rouge">e^{-j2pi kn/N}</code>.  We can factor this common term out to the right.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-subfft.png" alt="" width="537" /></td></tr></table>
+
+<p>Once factored, this almost looks like the same summation we started with, only
+in a recursive form.  The difference is that we are now calculating a smaller
+<a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>, summing
+over only half as many points as before.  The big difference is a subtle
+modification to the inside.</p>
+
+<p>To draw this out, let us consider even and odd frequency bins, <code class="highlighter-rouge">2k</code> and <code class="highlighter-rouge">2k+1</code>.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dif-prebutterfly.png" alt="" width="711" /></td></tr></table>
+
+<p>We can simplify this further by the simple fact that <code class="highlighter-rouge">e</code> raised to any
+integer multiple of <code class="highlighter-rouge">2pi</code> will be one.  Similarly, <code class="highlighter-rouge">e</code> raised to any odd
+integer multiple of <code class="highlighter-rouge">pi</code> will be negative one.  This allows just a touch more
+simplification.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dif-butterfly.png" alt="" width="681" /></td></tr></table>
+
+<p>This means that with just a little bit of manipulation, we can split the
+calculation of one <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>
+into the calculation of two similar <a href="https://en.wikipedia.org/wiki/Discrete_Fourier_transform">Discrete Fourier
+transform</a>,
+each that are only half the size of the original.</p>
+
+<p>The frequency independent <a href="https://en.wikipedia.org/wiki/Euler's_formula">complex
+number</a> in the second line,
+<code class="highlighter-rouge">e^{-j 2pi n/N}</code> is commonly known as a
+<a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factor</a>.  The <a href="https://github.com/ZipCPU/dblclockfft/tree/master/rtl">generated
+pipeline FFT</a> will
+use a lookup table to avoid the need to calculate this on the fly.</p>
+
+<p>Reducing an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> by
+pairs of frequencies in this fashion is accomplished via what’s called a
+<a href="https://en.wikipedia.org/wiki/Butterfly_diagram">butterfly</a>.  In the code
+we’ll discuss below, we’ll use the term <a href="https://github.com/ZipCPU/dblclockfft/tree/master/rtl"><code class="highlighter-rouge">FFT
+stage</code></a> to reference
+decomposing an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> into
+two smaller <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s,
+and we’ll call the calculation of the values within the parenthesis above
+a <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v"><code class="highlighter-rouge">butterfly</code></a>.</p>
+
+<p>I said I was going to gloss over the gory details, so I’ll start doing so here.
+These details are readily available to anyone who wishes to look them up.</p>
+
+<p>However, there is one important detail associated with which
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+the <a href="https://en.wikipedia.org/wiki/Butterfly_diagram">butterflies</a>
+are applied to that I don’t want to skip.  From the equations above, you can
+see that the <a href="https://en.wikipedia.org/wiki/Butterfly_diagram">butterfly</a>
+will be applied to
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+<code class="highlighter-rouge">n</code> and <code class="highlighter-rouge">n+N/2</code>.  What’s not so obvious is that we can then repeat
+this same decomposition using
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+<code class="highlighter-rouge">n</code> and <code class="highlighter-rouge">n+N/4</code>, and we can then repeat the decomposition again.</p>
+
+<p>The other important detail in this process is that the result will be produced
+in a <em><a href="https://en.wikipedia.org/wiki/Bit-reversal_permutation">bit-reversed</a></em>
+order.  You can see some of that above.  Notice how the values <code class="highlighter-rouge">n</code> and <code class="highlighter-rouge">n+N/2</code>
+were used to calculate frequencies <code class="highlighter-rouge">2k</code> and <code class="highlighter-rouge">2k+1</code>.</p>
+
+<p>Well come back to some of these details in a bit when we discuss how
+<a href="https://github.com/ZipCPU/dblclockfft">this core</a>
+was verified.</p>
+
+<h2 id="running-the-core-generator">Running the Core Generator</h2>
+
+<p>If you want to try out the <a href="https://github.com/ZipCPU/dblclockfft">core
+generator</a>, you’ll need to download and
+build it first:</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>git clone https://github.com/ZipCPU/dblclockfft
+<span class="gp">$ </span>make</code></pre></figure>
+
+<p>I like to think that <a href="https://github.com/ZipCPU/dblclockfft">the project</a>
+doesn’t have any dependencies.  It would be more realistic to point out that
+it depends upon <a href="https://www.gnu.org/software/gcc">GCC</a> (or other C compiler),
+<a href="https://www.gnu.org/software/binutils/">binutils</a>,
+<a href="https://www.gnu.org/software/make/">make</a>, and a
+basic Linux environment.  (This is currently necessary for creating
+directories, etc.)  The various bench tests currently require
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>,
+though some require <a href="https://www.gnu.org/software/octave">Octave</a>
+as well, and the formal proofs of the various components require
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>
+and both the
+<a href="http://yices.csl.sri.com">yices</a> and
+<a href="https://boolector.github.io">boolector</a>
+engines.  Neither
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>,
+<a href="https://www.gnu.org/software/octave">Octave</a>,
+nor <a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>
+or the formal engines, are required to use the <a href="https://github.com/ZipCPU/dblclockfft">core
+generator</a>, however.  Feel free to
+correct me if there’s anything I’m missing here.</p>
+
+<p>Once the “<a href="https://www.gnu.org/software/make/">make</a>” command completes, you
+should have an <code class="highlighter-rouge">fftgen</code> program in the <code class="highlighter-rouge">sw/</code> subdirectory within the core.
+That’s what we’ll be working with.</p>
+
+<p>Need an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>?  Let’s get
+started using <a href="https://github.com/ZipCPU/dblclockfft">this coregen</a>!</p>
+
+<p>Suppose you want a 128-pt
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  You can
+simply run</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>./fftgen -f 128</code></pre></figure>
+
+<p>This will create a directory <code class="highlighter-rouge">fft-core</code>, into which it will place the Verilog
+code for this <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, and
+the various hex files for the <a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle
+factor</a>s.</p>
+
+<p>Of course, in any
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>,
+bit size is closely related to <a href="/blog/2017/06/12/minimizing-luts.html">logic
+usage</a> within
+<a href="https://github.com/ZipCPU/dblclockfft/tree/master/rtl">the core</a>,
+and so it can be very important to control bit size.  The example above will
+create an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> with a
+default input bit-width of 16-bits per input.  Not only that, but this width
+will grow at one bit for every two stages.</p>
+
+<p>Would you rather have an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> with a 12-bit
+input width?</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>./fftgen -f 128 -n 12</code></pre></figure>
+
+<p>This will create a 128-pt
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+with 12-bit inputs and 16-bit outputs.</p>
+
+<p>What if you only wanted a 12-bit output?  You could limit the internal bit
+growth, and hence the output size, to only 12-bits by adding <code class="highlighter-rouge">-m 12</code> to your
+command line.</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>./fftgen -f 128 -n 12 -m 12</code></pre></figure>
+
+<p>By default, this will use <a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle
+factor</a>s
+(constant approximations of those
+<a href="https://en.wikipedia.org/wiki/Euler's_formula">complex exponential</a>s)
+of 12-bits–the same size as the input bit width.</p>
+
+<p>What if that’s not enough?  An
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> with
+<a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factor</a>s
+the same width as the data will suffer from some amount of <a href="/dsp/2017/09/27/quantization.html">truncation
+error</a>.  We can
+increase the number of bits used by these <a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle
+factor</a>s to help reduce this
+<a href="/dsp/2017/09/27/quantization.html">truncation error</a>.
+Let’s increase them by making them two bits longer than the data at every stage.
+To do this, we’ll add <code class="highlighter-rouge">-x 2</code> to our command line.</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>./fftgen -f 128 -n 12 -m 12 -x 2</code></pre></figure>
+
+<p>This will reduce the <a href="/dsp/2017/09/27/quantization.html">internal truncation
+error</a> associated with
+calculating the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.
+This <a href="/dsp/2017/09/27/quantization.html">truncation error</a>
+will decrease until about <code class="highlighter-rouge">-x 4</code> or so, after which adding additional bits
+bits is not likely to yield any significant additional improvements.</p>
+
+<p>Voila!  A wonderful <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>!</p>
+
+<p>Well, not quite.  The big problem with this
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+is that we’ve used <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">hand-generated shift-add multiplication
+logic</a> for
+many stages.  These soft-multiplies are expensive, and may well consume all
+of the logic within your
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.
+If you are instead using an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a> that
+provides hardware accelerated multiplies (i.e.
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> elements),
+then you can authorize the core to use some limited number of these
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> elements.</p>
+
+<p>For example, let’s build an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+using no more than 15
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> by adding
+<code class="highlighter-rouge">-p 15</code> to our command line.</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>./fftgen -f 128 -n 12 -m 12 -x 2 -p 15</code></pre></figure>
+
+<p>At this point, all of the multiplies within five of the seven stages of our
+128-pt <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> will now use
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">hardware multipliers</a>,
+at three multiplies per stage.  The last two stages don’t use any multiplies,
+since they can be accomplished simply using additions and subtractions.</p>
+
+<p>On the other hand, if your signal will come into the core at no more than one
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+every other clock cycle, then you can drop the number of multiplies
+used per stage from three down to two.</p>
+
+<p>This is the <code class="highlighter-rouge">-k</code> parameter.  <code class="highlighter-rouge">-k 2</code> will cause the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+to assume that you’ll never give it two
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+on adjacent clocks.</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>./fftgen -f 128 -n 12 -m 12 -x 2 -p 15 -k 2</code></pre></figure>
+
+<p>This will now use <code class="highlighter-rouge">2(N-2)</code> multiplies for a <code class="highlighter-rouge">2^N</code> point
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, of which
+no more than 15 of these (<code class="highlighter-rouge">-p 15</code>) will use your
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>’s
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> elements.</p>
+
+<p>Need to use fewer
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> elements?
+Suppose no more than every third value required
+a multiply?  Then we could do <code class="highlighter-rouge">-k 3</code>, and use no more than one multiply per
+stage.</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">$ </span>./fftgen -f 128 -n 12 -m 12 -x 2 -p 15 -k 3</code></pre></figure>
+
+<p>This could be very valuable when processing an audio signal, for example, that
+only ever has less than one
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+every thousand clock ticks.</p>
+
+<p>Other options of interest include <code class="highlighter-rouge">-i</code> to generate an inverse
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> (conjugates the
+<a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factor</a>s),
+<code class="highlighter-rouge">-2</code> to generate an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+that can ingest two
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+per clock, and so on.</p>
+
+<p>Indeed, you can just run <code class="highlighter-rouge">fftgen -h</code> to get a list of all of the options <a href="https://github.com/ZipCPU/dblclockfft">this
+FFT core generator</a> will support.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">$ ./fftgen -h
+USAGE:	fftgen [-f &lt;size&gt;] [-d dir] [-c cbits] [-n nbits] [-m mxbits] [-s]
+	-1	Build a normal FFT, running at one clock per complex sample, or
+		(for a real FFT) at one clock per two real input samples.
+	-a &lt;hdrname&gt;  Create a header of information describing the built-in
+		parameters, useful for module-level testing with Verilator
+	-c &lt;cbits&gt;	Causes all internal complex coefficients to be
+		longer than the corresponding data bits, to help avoid
+		coefficient truncation errors.  The default is 4 bits longer
+		than the data bits.
+	-d &lt;dir&gt;  Places all of the generated verilog files into &lt;dir&gt;.
+		The default is a subdirectory of the current directory
+		named fft-core.
+	-f &lt;size&gt;  Sets the size of the FFT as the number of complex
+		samples input to the transform.  (No default value, this is
+		a required parameter.)
+	-i	An inverse FFT, meaning that the coefficients are
+		given by e^{ j 2 pi k/N n }.  The default is a forward FFT, with
+		coefficients given by e^{ -j 2 pi k/N n }.
+	-k #	Sets # clocks per sample, used to minimize multiplies.  Also
+		sets one sample in per i_ce clock (opt -1)
+	-m &lt;mxbits&gt;	Sets the maximum bit width that the FFT should ever
+		produce.  Internal values greater than this value will be
+		truncated to this value.  (The default value grows the input
+		size by one bit for every two FFT stages.)
+	-n &lt;nbits&gt;	Sets the bitwidth for values coming into the (i)FFT.
+		The default is 16 bits input for each component of the two
+		complex values into the FFT.
+	-p &lt;nmpy&gt;  Sets the number of hardware multiplies (DSPs) to use, versus
+		shift-add emulation.  The default is not to use any hardware
+		multipliers.
+	-s	Skip the final bit reversal stage.  This is useful in
+		algorithms that need to apply a filter without needing to do
+		bin shifting, as these algorithms can, with this option, just
+		multiply by a bit reversed correlation sequence and then
+		inverse FFT the (still bit reversed) result.  (You would need
+		a decimation in time inverse to do this, which this program does
+		not yet provide.)
+	-S	Include the final bit reversal stage (default).
+	-x &lt;xtrabits&gt;	Use this many extra bits internally, before any final
+		rounding or truncation of the answer to the final number of
+		bits.  The default is to use 0 extra bits internally.
+$</code></pre></figure>
+
+<p>I’ll admit this <a href="https://github.com/ZipCPU/dblclockfft">FFT generator
+project</a> remains a bit of a work
+in progress, there’s just so much more I’d like to do!  For example, it
+currently only calculates a complex
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  There’s a
+real-to-complex stage that needs to be implemented in order to do real
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>’s.  I’d also like
+to implement a <a href="https://en.wikipedia.org/wiki/Cooley%E2%80%93Tukey_FFT_algorithm">decimation in
+time</a>
+algorithm, since having both will allow me to (optionally, under some
+pass-through implementations) remove the <a href="https://github.com/ZipCPU/dblclock/blob/master/rtl/bitreverse.html">bit reversal
+stage</a>.
+Eventually, I’d love to build a block processing
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> as well.
+All of these items are on my to-do list for
+<a href="https://github.com/ZipCPU/dblclockfft/tree/master/rtl">this core</a>,
+they just haven’t been done yet.</p>
+
+<p>Still, it currently works as advertised.  Care to try it?</p>
+
+<h2 id="interfacing-with-the-fft-core">Interfacing with the FFT Core</h2>
+
+<p>Once you’ve generated an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>,
+it’s then time to try it out.  To do that, you’ll need to connect it up to
+your design.  The generated core has a couple of basic input ports, shown
+below and in Fig 3.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span> <span class="n">fftmain</span><span class="p">(</span><span class="n">i_clk</span><span class="o">,</span> <span class="n">i_reset</span><span class="o">,</span> <span class="n">i_ce</span><span class="o">,</span>
+		<span class="n">i_sample</span><span class="o">,</span> <span class="n">o_result</span><span class="o">,</span> <span class="n">o_sync</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<table align="center" style="float: right"><caption>Fig 3. Basic Pipelined FFT Ports</caption><tr><td><img src="/img/fft-ports.svg" alt="" width="320" /></td></tr></table>
+
+<p>These basic ports are:</p>
+
+<ul>
+  <li>
+    <p><code class="highlighter-rouge">i_clk</code> should be self explanatory.  This core consists of synchronous logic
+only, and everything is synchronous to the clock input.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">i_reset</code> is a positive edge synchronous reset signal.  If you would rather
+an asynchronous reset, there’s a <code class="highlighter-rouge">-A</code> option to generate logic using
+asynchronous negative edge resets.  However, since I tend not to use them,
+I haven’t tested this option much.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">i_ce</code> is a global CE signal.  It is set to <code class="highlighter-rouge">1</code> on every clock where a valid
+new <a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+is available on the input.  It’s very useful for processing signal
+that may be at a rate slower than the system clock, such as <a href="/blog/2017/08/14/strategies-for-pipelining.html">we discussed
+some time
+ago</a>.
+Once <code class="highlighter-rouge">o_sync</code> becomes true, one data
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+will come out of the core and be valid on every clock cycle that
+<code class="highlighter-rouge">i_ce</code> is high.</p>
+
+    <p>If you use the <code class="highlighter-rouge">-k 2</code> or <code class="highlighter-rouge">-k 3</code> options, you’ll need to guarantee that
+<code class="highlighter-rouge">i_ce</code> is never true twice in two
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+or twice in three
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+respectively, to allow the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> a chance to compute the data.</p>
+
+    <p>While this breaks the <a href="/blog/2017/08/14/strategies-for-pipelining.html">assumptions I described earlier for the global CE
+signal</a>,
+specifically that nothing should act if <code class="highlighter-rouge">i_ce</code> is false, doing so allows the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> to share multiplication elements when possible.</p>
+
+    <p>One final note here: if you want or need to control when the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> starts
+processing, or specifically which
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a> is the
+first <a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a> of
+the frame, you can use the <code class="highlighter-rouge">i_reset</code> input for that purpose.  The first
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a> value
+where <code class="highlighter-rouge">i_ce</code> is true and <code class="highlighter-rouge">i_reset</code> is false will be the first value into
+the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">i_sample</code> is actually a pair of values, both real and imaginary, stuffed
+into one signal bus.  The real portion is placed in the upper bits, and the
+imaginary portion is placed in the lower or least significant bits.  Both
+values are in traditional twos complement format, just stuffed together into
+a single input.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_result</code> is the output of one <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> bin from the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  It is in the exact
+same format as <code class="highlighter-rouge">i_sample</code>, save only that the output bit-widths used in
+<code class="highlighter-rouge">o_result</code> may be different from the input bit-widths used in <code class="highlighter-rouge">i_sample</code>.</p>
+
+    <p>If you can’t remember what bitwidths the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> was generated for, just check
+the <code class="highlighter-rouge">IWIDTH</code> (input width) and <code class="highlighter-rouge">OWIDTH</code> (output width) local parameters in
+the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/fftmain.v">main, or toplevel, FFT core
+file</a>.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_sync</code> is the last output in the port list.  This signal will be true
+when <code class="highlighter-rouge">o_result</code> contains the first output bin coming out of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  This will be
+the zero frequency bin.  The <code class="highlighter-rouge">o_sync</code> signal is provided to allow any
+following logic to synchronize to the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> frame structure.</p>
+
+    <p>The core does not produce an input synchronization signal to signal the first
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+of the frame.</p>
+  </li>
+</ul>
+
+<p>If the core is configured to handle two
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+per clock, the data ports and port names are subtly adjusted.  The new
+ports are:</p>
+
+<table align="center" style="float: left; padding: 24px"><caption>Fig 4. Pipelined FFT Ports, two samples per clock</caption><tr><td><img src="/img/fft-dblports.svg" alt="" width="320" /></td></tr></table>
+
+<ul>
+  <li>
+    <p><code class="highlighter-rouge">i_left</code> and <code class="highlighter-rouge">i_right</code> replace <code class="highlighter-rouge">i_sample</code> when/if you want an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> that processes two
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+per clock.  They have the same format as <code class="highlighter-rouge">i_sample</code>.
+The difference is that <code class="highlighter-rouge">i_left</code> is processed as though it came before
+<code class="highlighter-rouge">i_right</code>.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_left</code> and <code class="highlighter-rouge">o_right</code> are the output values that replace <code class="highlighter-rouge">o_result</code>.
+As with the two-sample per clock <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> inputs, <code class="highlighter-rouge">i_left</code> and <code class="highlighter-rouge">i_right</code>,
+<code class="highlighter-rouge">o_left</code> is the “first” output of the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> and <code class="highlighter-rouge">o_right</code> is the second
+one.  Hence, if you include the bit reversal step then <code class="highlighter-rouge">o_left</code> will
+refer to an even output bin, and <code class="highlighter-rouge">o_right</code> will only ever carry information
+for odd output bins.</p>
+  </li>
+</ul>
+
+<p>The particular core generated by <code class="highlighter-rouge">fftgen</code> is a
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, rather than a
+block <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  This means
+that the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> is always
+busy after accepting the first
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>.
+Once the first <code class="highlighter-rouge">o_sync</code> is true, then
+valid data is coming out of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  On every
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+thereafter where <code class="highlighter-rouge">i_ce</code> is true, the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+will produce another output
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>.</p>
+
+<p>You may be familiar with another
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> implementation,
+that of a block <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+implementation.  In a block
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, a single block of
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+would be provided to the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> engine, after which
+the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> engine would
+become busy and not accept any other
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>.  Once a
+block <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> finishes
+processing the
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+given to it, then it becomes ready for a second block.  As a
+result, a block <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> may
+have other external signals beyond the ones shown above.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> implementation
+I am discussing today, however, is only a straight
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.</p>
+
+<h2 id="verifying-an-fft">Verifying an FFT</h2>
+
+<p>This blog <a href="/about/about.html">remains dedicated</a> to keeping
+students out of <a href="/blog/2017/05/19/fpga-hell.html">FPGA Hell</a>.
+So, how did I make certain that <a href="https://github.com/ZipCPU/dblclockfft">this FFT
+implementation</a> worked?</p>
+
+<p>Let me begin by saying that
+“<a href="/blog/2017/05/19/fpga-hell.html">FPGA Hell</a>”
+gains a new meaning when working with an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s are difficult
+to understand internally, particularly because it can be difficult to validate
+the data midway through.  Yes, I’ve written multiple
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+implementations, both in software and now in hardware.  Yes, I’ve gone through
+the mathematics.  That doesn’t mean they are simple.  Even with full access
+to every internal signal within an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+they can still be a bear to debug.  Indeed, I still get surprised at the end
+of this rather complex transform when signals suddenly pass through it properly.</p>
+
+<p>Now that I’ve said all that, it should come as no surprise that debugging the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> is really a story
+in itself.  Let me try telling what I can of it.</p>
+
+<p>When I first built the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>,
+it was to support a
+<a href="https://en.wikipedia.org/wiki/Global_Positioning_System">GPS</a> processing
+accelerator.  I had a hard time limit that the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> needed to meet,
+or the accelerated operation wouldn’t meet real time requirements.  I became
+concerned during this process that the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> wouldn’t be
+fast enough, so I built an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> that could process
+two <a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">samples</a>
+per clock.</p>
+
+<p>To verify this initial
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, I created <a href="https://github.com/ZipCPU/dblclockfft/tree/master/bench/cpp">test
+benches</a>
+for all of the components.  The test bench would work by running data
+through each component of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  At the same time,
+I would double check the output values within the C++ driver of my various
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+<a href="https://github.com/ZipCPU/dblclockfft/tree/master/bench/cpp">test benches</a>.
+At first, the data was carefully chosen to find specific potential flaws
+within the various <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+components.  Later tests then threw random data through the component(s) to
+prove their functionality.</p>
+
+<p>Perhaps walking through an example might help explain this.</p>
+
+<h3 id="initial-butterfly-verification">Initial Butterfly Verification</h3>
+
+<table align="center" style="float: right"><caption>Fig 5. A Decimation in Frequency Butterfly</caption><tr><td><img src="/img/fft-butterfly.svg" alt="" width="360" /></td></tr></table>
+
+<p>As an example of this initial functional verification method, let’s consider the
+implementation of the butterfly shown on the right.  This should look
+familiar to you, as we discussed the equation for this earlier.  It’s
+known as a “radix-2” decimation in frequency <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> butterfly, and it’s a
+primary component within the design.  Indeed, the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> is formed around
+calculating this operation repeatedly.</p>
+
+<p>If we let</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-twiddle.png" alt="W = e^{-j2pi n/N}" width="145" /></td></tr></table>
+
+<p>Then we can represent this butterfly as,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-butterfly-implementation.png" alt="" width="217" /></td></tr></table>
+
+<p>Where <code class="highlighter-rouge">x0</code> and <code class="highlighter-rouge">x1</code> are <em>complex</em> inputs to the butterfly, <code class="highlighter-rouge">W</code> is a complex
+exponential constant coefficient, and <code class="highlighter-rouge">y0</code> and <code class="highlighter-rouge">y1</code> are complex outputs.</p>
+
+<p>We can break this operation down further, and write</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-butterfly-real.png" alt="" width="347" /></td></tr></table>
+
+<p>If this looks complicated while reading it, relax.  It’s much more complicated
+in its actual implementation.</p>
+
+<p>There are several problems with implementing this equation that aren’t
+immediately apparent from just reading it.  The least of these problems are the
+four multiplies.  Because multiplication is so expensive, I used a three
+multiply alternative in the actual implementation.  But I digress.</p>
+
+<p>Originally, the test bench would just create one line of text output per clock.
+This line would include the time step, then the inputs to the module, and
+finally the outputs from the module–all on the same line.  Sometimes, I’d even
+place intermediate values on the line as well.  The trick to making this work
+was to halt as soon as an invalid value was returned from the core, so that
+value could be examined.  The disadvantage with this approach is that there
+are only so many values that can fit on a line that can be reasonably
+comprehended.</p>
+
+<p>Eventually, I enabled <a href="/blog/2017/07/31/vcd.html">VCD file</a>
+generation as well, and then began examining output files via
+<a href="http://gtkwave.sourceforge.net">GTKWave</a>
+in addition to the textual output.</p>
+
+<p>To test the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">butterfly
+module</a>, I
+provided initial inputs where all values but one were zero.  I then provided
+inputs to
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">this module</a>
+where the coefficients were plus or minus one or plus or minus Pi.</p>
+
+<p>To verify the proper functionality of the
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">butterfly</a>,
+I repeated the calculation within C++ inside my
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a> <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/butterfly_tb.cpp">test
+bench</a>.
+I then judged that, if the two matched, then the
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">butterfly</a>
+worked.</p>
+
+<p>Once I tested all of the basic inputs outlined above, I then moved on to
+throwing random values at the
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">butterfly</a>
+to “prove” that it worked.  In reality,
+this approach never “proved” anything, but it does help to provide some
+assurance.  Eventually, I modified the
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">butterfly</a>
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/butterfly_tb.cpp">test bench</a>
+so that it would
+completely exhaust the entire space of possibilities.  Be aware, though, such
+an exhaust can send massive amounts of text to your output stream, and fill
+up 42GB (or more) of <a href="/blog/2017/07/31/vcd.html">VCD trace
+files</a>.</p>
+
+<p>The annoying problem with this approach to debugging is the sheer size of the
+data that needs to be searched through and processed once a bug is detected.
+A recent run, as an example, generated 42GB of
+<a href="/blog/2017/07/31/vcd.html">VCD data</a>.
+Ouch!  That can be hard to process with
+<a href="http://gtkwave.sourceforge.net">GTKWave</a>,
+and generating file size that large has been known to impact the user
+response time of my computer.  I know I’ve wondered at times if my CPU needs to
+be given a hard reset, or just left to continue.</p>
+
+<p>Still, this is a good example of how <a href="https://github.com/ZipCPU/dblclockfft">this FFT
+core</a> was originally tested.  Indeed,
+<a href="https://github.com/ZipCPU/dblclockfft/tree/master/bench/cpp">these bench tests</a>
+remain within <a href="https://github.com/ZipCPU/dblclockfft">the repository</a>.
+There are test benches for the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/butterfly_tb.cpp">regular
+butterflies</a>,
+for the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/hwbfly_tb.cpp">hardware assisted
+butterflies</a>
+(those using <a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>s),
+for the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/fftstage_tb.cpp">basic FFT radix-2
+stages</a>,
+the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/qtrstage_tb.cpp">penultimate FFT
+stage</a>
+and the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/butterfly_tb.cpp">final FFT
+stage</a>.
+There’s also a test bench for the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/bitreverse_tb.cpp">bit reversal
+stage</a>
+and the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/fft_tb.cpp">FFT as a
+whole</a>.
+These <a href="https://github.com/ZipCPU/dblclockfft/tree/master/bench/cpp">test benches</a>
+still work, and they are available for inspection and test within <a href="https://github.com/ZipCPU/dblclockfft">the
+repository</a>.</p>
+
+<h3 id="making-the-fft-general-purpose">Making the FFT General Purpose</h3>
+
+<p>Recently, I came back to <a href="https://github.com/ZipCPU/dblclockfft">this FFT core
+generator</a> to see if I could make turn it
+into a general purpose
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipelined</a>
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, instead of one
+that could only operate in a two-sample per clock mode.  Two big things
+changed in this process.</p>
+
+<p>First, in hind sight, I realized many of the “special modules” of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+could be parameterized into a few simple Verilog modules.  For example, the
+2048 point radix-2 stage was fundamentally identical to the 64-point radix-2
+stage with only a few differences that could be captured by parameters.<br />
+Likewise, the inverse
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+code was identical to the forward
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> code, save
+only that the <a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factor</a>s
+needed to be conjugated.  In the end, only the top level component and the
+coefficient files truly needed the core generator approach.</p>
+
+<p>The second big change was that I wanted to support three versions of all of the
+butterflies, both <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">the one using the soft
+multiplies</a>
+and the one using the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v">hard
+multiplies</a>.
+I needed one version of each that would handle one operation
+per clock, one that would multiplex the three multiplies across two
+multiplication elements, and a third implementation that would multiplex the
+three multiplies across three multiplication elements.</p>
+
+<p>There were other minor changes as well.  For example, the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/bitreverse.v">bit reversal
+stage</a>
+needed to be rewritten to handle one value per clock, as did the
+final radix-2 stage of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.  Further, the
+core components had initially been written without setting the <code class="highlighter-rouge">default_nettype</code>
+to <code class="highlighter-rouge">none</code>, and without using <code class="highlighter-rouge">verilator -Wall</code>.</p>
+
+<p>As a result, the minor change of adding support for three types of single
+<a href="https://en.wikipedia.org/wiki/Sampling_(signal_processing)">sample</a>
+at a time streams turned into a major rewrite of the entire
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.</p>
+
+<p>That also meant that everything needed to be reverified.  Test benches
+needed to be updated and … searching through GB of files for bugs that
+might or might not show up was becoming <em>really</em> annoying.</p>
+
+<p>So, I switched to using
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+to verify this <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.
+Once I had proved that the simple modules of <a href="https://github.com/ZipCPU/dblclockfft">the
+FFT</a> worked, there were only a few
+modules left.  That’s when it became personal: would it be possible to
+<a href="/blog/2017/10/19/formal-intro.html">formally verify</a> the
+entire <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>?</p>
+
+<p>Hold that thought.</p>
+
+<p>For now, let’s walk through a quick discussion of how each section was verified.</p>
+
+<h4 id="bit-reversal">Bit-Reversal</h4>
+
+<p>The bit reversal stage works by first writing a full
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> output into a piece
+of block RAM memory.  When the second
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> output starts
+coming into <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/bitreverse.v">the bit-reversal
+core</a>, <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/bitreverse.v">the
+core</a>
+then switches to writing this new
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> into a second
+block RAM area.  Then as more data comes in,
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/bitreverse.v">the core</a>
+ping-pong’s between the two sections of memory.</p>
+
+<p>Now, at the same time the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/bitreverse.v">bit reversal
+stage</a>
+is writing incoming data into one memory area, it is also reading out
+from the other memory in a bit-reversed order.</p>
+
+<table align="center" style="float: right"><caption>Fig 6. The bit-reversal stage</caption><tr><td><img src="/img/fft-bitreverse.svg" alt="" width="360" /></td></tr></table>
+
+<p>To formally verify the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/bitreverse.v">bit reversal
+stage</a>,
+I let the formal tool pick an
+arbitrary address (and memory area) , and then applied the
+<a href="/zipcpu/2018/07/13/memories.html">basic memory proof</a>
+to that address.  Further, any time a value is written into this
+special address, I assert that it wasn’t full before.  When this special value
+is read out of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>,
+I also assert that the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> is outputting the
+right value.  In between, I assert that the memory contains my value of
+interest.  It’s the <a href="/zipcpu/2018/07/13/memories.html">same three basic properties we’ve already
+discussed</a>, and it worked
+quite well in this context.</p>
+
+<h4 id="last-stage">Last-Stage</h4>
+
+<table align="center" style="float: right"><caption>Fig 7. The butterfly to the last stage</caption><tr><td><img src="/img/fft-laststage.svg" alt="" width="360" /></td></tr></table>
+
+<p>The <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/laststage.v">last
+stage</a>
+of the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> is special.
+It implements the same radix-2 butterfly
+as any other stage, save that 1) it operates on adjacent pairs of data and
+2) the complex exponential evaluates to either plus or minus one.  That
+means all the work can be done using adds and subtracts–no multiplies are
+required.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-laststage.png" alt="" width="196" /></td></tr></table>
+
+<p>When I struggled to get this simple operation right, I groaned at having to
+build another test bench.  I just wanted this thing to work and building and
+maintaining all those test benches were getting painful.  Couldn’t I just
+<a href="/blog/2017/10/19/formal-intro.html">prove</a> that <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/laststage.v">my
+code</a>
+would work first using <a href="/blog/2017/10/19/formal-intro.html">formal
+methods</a>?</p>
+
+<p>So I created a formal properties section in the laststage.v, and recorded
+a copy of the data that came into the core within that section.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>	<span class="kt">signed</span>	<span class="p">[</span><span class="n">IWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_piped_real</span>	<span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">3</span><span class="p">]</span><span class="o">;</span>
+	<span class="kt">reg</span>	<span class="kt">signed</span>	<span class="p">[</span><span class="n">IWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_piped_imag</span>	<span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">3</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">f_piped_real</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">i_val</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">IWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">IWIDTH</span><span class="p">]</span><span class="o">;</span>
+		<span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">i_val</span><span class="p">[</span>  <span class="n">IWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+
+		<span class="n">f_piped_real</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+		<span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+
+		<span class="n">f_piped_real</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">;</span>
+		<span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">;</span>
+
+		<span class="n">f_piped_real</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">;</span>
+		<span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>I could then verify that the data going out matched the known
+butterfly
+equations.  First, there was the output that was the sum of the two inputs.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_state</span> <span class="o">==</span> <span class="mb">1'b1</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_syncd</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_r</span> <span class="o">==</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_i</span> <span class="o">==</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Then there was the output that was their difference.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_state</span> <span class="o">==</span> <span class="mb">1'b0</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_syncd</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_sync</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_r</span> <span class="o">==</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">-</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_i</span> <span class="o">==</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">-</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>There’s a couple important things to note here.  First, I didn’t use
+<code class="highlighter-rouge">$past()</code> to capture the incoming data.  <code class="highlighter-rouge">$past()</code> works great for expressing
+values for one (or more) clocks ago.  The problem with this implementation
+was the <code class="highlighter-rouge">i_ce</code> value.  Were this value always <code class="highlighter-rouge">1'b1</code>, or even always alternating
+<code class="highlighter-rouge">1'b1</code> and <code class="highlighter-rouge">1'b0</code>, <code class="highlighter-rouge">$past()</code> might have been useful.  However, I needed to make
+certain that the formal proof properly checked whether <code class="highlighter-rouge">i_ce</code> was used
+properly.  That meant I had to allow the formal solver to pick when <code class="highlighter-rouge">i_ce</code>
+was high and when it wasn’t.  Hence, the output value, <code class="highlighter-rouge">o_val = {o_r,o_i}</code>
+might depend upon <code class="highlighter-rouge">$past(i_val,2)</code>, <code class="highlighter-rouge">$past(i_val,3)</code>, <code class="highlighter-rouge">$past(i_val,4)</code>,
+or … you get the idea.</p>
+
+<p>A little more logic was required to make certain I knew which of the two
+values to output at any given time, <code class="highlighter-rouge">y0</code> or <code class="highlighter-rouge">y1</code>, but no more logic than
+that was required.</p>
+
+<p>At this point, I started to get excited by the idea of
+<a href="/blog/2017/10/19/formal-intro.html">formally verifying</a>
+parts and pieces of <a href="https://github.com/ZipCPU/dblclockfft">this FFT</a>.
+Assertions like this weren’t that hard, and they could be easily made.</p>
+
+<p>So I moved on to the next module, the <code class="highlighter-rouge">qtrstgae.v</code>.</p>
+
+<h4 id="the-penultimate-fft-stage">The Penultimate FFT Stage</h4>
+
+<p>I call the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/qtrstage.v">second to the last FFT stage the quarter
+stage</a>,
+<code class="highlighter-rouge">qtrstage</code>.  This is the stage that applies two radix-2 butterflies to pairs
+within every set of four points.  There were points 0 and 2, and points 1 and 3.</p>
+
+<p>Like the <code class="highlighter-rouge">laststage</code>,
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/qtrstage.v">this stage</a>
+also required only additions and subtractions
+to implement the necessary multiplies required by the butterfly.  Unlike the
+<code class="highlighter-rouge">laststage</code>, the
+<a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factors</a>
+in this penultimate stage required multiplication by <code class="highlighter-rouge">1</code>, <code class="highlighter-rouge">j</code>, <code class="highlighter-rouge">-1</code>, or <code class="highlighter-rouge">-j</code>.
+This can still be implemented with additions and subtractions–I just needed
+to keep track of which values these additions and subtractions were applied to.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-qtrstage.png" alt="" width="258" /></td></tr></table>
+
+<p>If you expand the last equation into its complex components, you’ll see
+that it truly can be represented by just additions and subtractions.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/eqn-dft-qtrstage-mpy.png" alt="" width="251" /></td></tr></table>
+
+<p>For this stage, I tried the same basic proof approach as the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/laststage.v">prior
+stage</a>.
+I created the sum and difference values, and verified that these indeed
+matched as they were supposed to.  This logic was no more difficult than
+before.  Aside from breaking the output into its real and imaginary
+portions,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">wire</span>	<span class="kt">signed</span> <span class="p">[</span><span class="n">OWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_o_real</span><span class="o">,</span> <span class="n">f_o_imag</span><span class="o">;</span>
+	<span class="k">assign</span>			<span class="n">f_o_real</span> <span class="o">=</span> <span class="n">o_data</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">OWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">OWIDTH</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">assign</span>			<span class="n">f_o_imag</span> <span class="o">=</span> <span class="n">o_data</span><span class="p">[</span>  <span class="n">OWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>I could then verify each of the various output real and imaginary values,
+depending upon which state, <code class="highlighter-rouge">f_state</code>, the core was in.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_state</span> <span class="o">==</span> <span class="mb">2'b00</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_syncd</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_sync</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_o_real</span> <span class="o">==</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">7</span><span class="p">]</span> <span class="o">-</span> <span class="n">f_piped_real</span><span class="p">[</span><span class="mi">5</span><span class="p">])</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_o_imag</span> <span class="o">==</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">7</span><span class="p">]</span> <span class="o">-</span> <span class="n">f_piped_imag</span><span class="p">[</span><span class="mi">5</span><span class="p">])</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>These were the three easy proofs, <code class="highlighter-rouge">bitreverse</code>, <code class="highlighter-rouge">laststage</code>, and <code class="highlighter-rouge">qtrstage</code>.
+How was I going to then prove the butterflies?  Those depended upon a
+multiply, and formal tools tend to <em>really</em> struggle with multiplies.</p>
+
+<h4 id="the-hardware-assisted-butterfly">The Hardware Assisted Butterfly</h4>
+
+<table align="center" style="float: right"><caption>Fig 8. A Decimation in Frequency Butterfly</caption><tr><td><img src="/img/fft-butterfly.svg" alt="" width="360" /></td></tr></table>
+
+<p><a href="https://github.com/ZipCPU/dblclockfft">This FFT core generator</a>
+uses two separate types of butterfly implementations.
+The <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v">first</a>
+uses the <a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> elements
+within those
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>s
+that have them.  The core simply makes the assumption that <code class="highlighter-rouge">A * B</code> can
+be implemented by the synthesizer in hardware.  The <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">second butterfly
+implementation</a>
+uses a <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">logic
+multiply</a>
+implementation built specifically for this core.
+Each of the two butterfly implementations has it’s own Verilog file, so we’ll
+discuss them separately.  In this section, we’ll discuss the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v">hardware assisted
+butterfly</a>
+that uses the <a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>
+elements.</p>
+
+<p>When I started this major update, I had a working <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v">hardware assisted butterfly
+implementation</a>.
+In that original implementation, everything moved forward anytime <code class="highlighter-rouge">i_ce</code> was
+true, and it required three hardware assisted multiplication elements
+(<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> blocks)
+to complete.</p>
+
+<p>However, if you are using an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a> with only
+90 <a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>s that need to
+be shared between other operations (i.e. <a href="/dsp/2017/09/15/fastfir.html">high speed
+filters</a>), those
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>s
+can become very precious.  How precious?  When I built my first asynchronous
+sample rate converter, I quickly ran out of
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>
+elements before finishing.
+Were I to use an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+in addition to such a poor design (it’s since been fixed), I might not have
+enough <a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>s to make
+it work.</p>
+
+<p>So I looked again at this algorithm to see if I could spare some multiplies.
+What if the signal didn’t arrive at the rate of one sample every clock?
+What if I could instead insist that the incoming data was less than half that 
+speed, so there would always be an idle cycle between any two clock periods
+where <code class="highlighter-rouge">i_ce</code> was true?  If that were the case, I could then share one
+multiplication element between two of the three multiplies I needed to compute.</p>
+
+<p>Alternatively, what if the signal didn’t arrive at a rate of every other clock,
+but would arrive no faster than every third clock?  I might then share the
+hardware multiply between the three separate multiplies I needed to calculate.</p>
+
+<p>You can see the possibilities in Fig 9 on the right.</p>
+<table align="center" style="float: right"><caption>Fig 9. Multiplies per FFT stage</caption><tr><td><img src="/img/fft-dsp-cost.png" alt="541" width="360" /></td></tr></table>
+
+<p>This required modifying my <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v">hardware butterfly
+implementation</a>.</p>
+
+<p>I managed to do this without too much fanfare, and without much work I modified
+my bench test and could get the hardware
+<a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a> to pass.  I did
+the same for the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">regular (non-hardware assisted)
+butterfly</a>
+as well.  The problem was that the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+kept failing in practice.  It passed the component bench testing step,
+but yet still failed.</p>
+
+<p>In frustration, I switched verification methods to
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>.</p>
+
+<p>I hadn’t wanted to do this at first.  I am painfully aware that
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+really struggle to handle multiplies, and these butterfly implementations both
+depended heavily upon the multiply.  How could I test an algorithm that
+required multiplies, without running into this trouble?</p>
+
+<p>The solution for me came from the
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+concept of abstraction, something I have yet to discuss on this blog.
+(It’s a part of my
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+<a href="/projects.html">class</a>,
+and on my to do list for the blog.)</p>
+
+<p>We’ll start with the basics.  Here was the code I wanted to verify.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// Third clock, pipeline = 3
+</span>			<span class="c1">//   As desired, each of these lines infers a DSP48
+</span>			<span class="n">rp_one</span>   <span class="o">&lt;=</span> <span class="n">p1c_in</span> <span class="o">*</span> <span class="n">p1d_in</span><span class="o">;</span>
+			<span class="n">rp_two</span>   <span class="o">&lt;=</span> <span class="n">p2c_in</span> <span class="o">*</span> <span class="n">p2d_in</span><span class="o">;</span>
+			<span class="n">rp_three</span> <span class="o">&lt;=</span> <span class="n">p3c_in</span> <span class="o">*</span> <span class="n">p3d_in</span><span class="o">;</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>From processing the previous two modules, I knew how to set up a verification
+test of the result: I’d copy the inputs into a memory delay line on every
+<code class="highlighter-rouge">i_ce</code>, and then verify the result at the end given the incoming values.</p>
+
+<p>I also knew that the hard multiply implementation “worked”.  This was the one
+using the <a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>’s.
+Hence I didn’t need to verify that the multiply worked.  Any tool that
+allowed me to do this was one where the multiply was supported and worked.
+I was willing to trust my tools.</p>
+
+<p>I wasn’t willing to trust <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">my own multiplication
+implementation</a>–but
+we’ll come back to that in a moment.</p>
+
+<p>So I replaced the hardware multiplies with something that was nearly equivalent,
+an abstraction.  In <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/formal/abs_mpy.v">this
+abstraction</a>,
+the results were allowed to be any value,
+chosen by the tools, but meeting three criteria: 1) zero times anything is
+zero, 2) one times anything preserves the initial value, 3) negative one
+times anything negates the other operand, and 4) the same concept, but
+applied to higher powers of two instead of just one.  <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/formal/abs_mpy.v">This
+abstraction</a>
+isn’t really a multiply, it just maintains some of the properties of
+multiplication.</p>
+
+<p>You can examine it here in the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/formal/abs_mpy.v"><code class="highlighter-rouge">abs_mpy.v</code>
+file</a>
+if you would like.</p>
+
+<p>So, I replaced my multiplies with this abstraction.  Here it is for the
+highest speed case where a data value could come in at any time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">wire</span>	<span class="kt">signed</span>	<span class="p">[((</span><span class="n">IWIDTH</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">+</span><span class="p">(</span><span class="n">CWIDTH</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">pre_rp_one</span><span class="o">,</span> <span class="n">pre_rp_two</span><span class="o">;</span>
+	<span class="kt">wire</span>	<span class="kt">signed</span>	<span class="p">[((</span><span class="n">IWIDTH</span><span class="o">+</span><span class="mi">2</span><span class="p">)</span><span class="o">+</span><span class="p">(</span><span class="n">CWIDTH</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">pre_rp_three</span><span class="o">;</span>
+
+	<span class="n">abs_mpy</span> <span class="p">#(</span><span class="n">CWIDTH</span><span class="o">,</span><span class="n">IWIDTH</span><span class="o">+</span><span class="mi">1</span><span class="o">,</span><span class="mb">1'b1</span><span class="p">)</span>
+		<span class="n">onei</span><span class="p">(</span><span class="n">p1c_in</span><span class="o">,</span> <span class="n">p1d_in</span><span class="o">,</span> <span class="n">pre_rp_one</span><span class="p">)</span><span class="o">;</span>
+	<span class="n">abs_mpy</span> <span class="p">#(</span><span class="n">CWIDTH</span><span class="o">,</span><span class="n">IWIDTH</span><span class="o">+</span><span class="mi">1</span><span class="o">,</span><span class="mb">1'b1</span><span class="p">)</span>
+		<span class="n">twoi</span><span class="p">(</span><span class="n">p2c_in</span><span class="o">,</span> <span class="n">p2d_in</span><span class="o">,</span> <span class="n">pre_rp_two</span><span class="p">)</span><span class="o">;</span>
+	<span class="n">abs_mpy</span> <span class="p">#(</span><span class="n">CWIDTH</span><span class="o">+</span><span class="mi">1</span><span class="o">,</span><span class="n">IWIDTH</span><span class="o">+</span><span class="mi">2</span><span class="o">,</span><span class="mb">1'b1</span><span class="p">)</span>
+		<span class="n">threei</span><span class="p">(</span><span class="n">p3c_in</span><span class="o">,</span> <span class="n">p3d_in</span><span class="o">,</span> <span class="n">pre_rp_three</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">rp_one</span>   <span class="o">=</span> <span class="n">pre_rp_one</span><span class="o">;</span>
+		<span class="n">rp_two</span>   <span class="o">=</span> <span class="n">pre_rp_two</span><span class="o">;</span>
+		<span class="n">rp_three</span> <span class="o">=</span> <span class="n">pre_rp_three</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Then later, within the formal property section of the code, I allowed the
+formal tool to pick what data would come into the core and what coefficient
+(<a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factor</a>)
+would come in.  I insisted upon my rules of multiplication
+with one and zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="c1">// Start by double checking that our delay line is valid,
+</span>	<span class="c1">// similar to f_past_valid
+</span>	<span class="k">if</span> <span class="p">(</span><span class="n">f_startup_counter</span> <span class="o">&gt;</span> <span class="n">F_D</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">left_sr</span> <span class="o">==</span> <span class="n">f_sumrx</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">left_si</span> <span class="o">==</span> <span class="n">f_sumix</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">aux_s</span> <span class="o">==</span> <span class="n">f_dlyaux</span><span class="p">[</span><span class="n">F_D</span><span class="p">])</span><span class="o">;</span>
+
+		<span class="k">if</span> <span class="p">((</span><span class="n">f_difr</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_difi</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_r</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_i</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">f_dlycoeff_r</span><span class="p">[</span><span class="n">F_D</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+				<span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_dlycoeff_i</span><span class="p">[</span><span class="n">F_D</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_r</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_i</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">if</span> <span class="p">((</span><span class="n">f_dlycoeff_r</span><span class="p">[</span><span class="n">F_D</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_dlycoeff_i</span><span class="p">[</span><span class="n">F_D</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_r</span> <span class="o">==</span> <span class="n">f_difrx</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_i</span> <span class="o">==</span> <span class="n">f_difix</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">if</span> <span class="p">((</span><span class="n">f_dlycoeff_r</span><span class="p">[</span><span class="n">F_D</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_dlycoeff_i</span><span class="p">[</span><span class="n">F_D</span><span class="p">]</span> <span class="o">==</span> <span class="mi">1</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_r</span> <span class="o">==</span> <span class="o">-</span><span class="n">f_difix</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_i</span> <span class="o">==</span>  <span class="n">f_difrx</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">if</span> <span class="p">((</span><span class="n">f_difr</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_difi</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_r</span> <span class="o">==</span> <span class="n">f_widecoeff_r</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_i</span> <span class="o">==</span> <span class="n">f_widecoeff_i</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">if</span> <span class="p">((</span><span class="n">f_difr</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_difi</span> <span class="o">==</span> <span class="mi">1</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_r</span> <span class="o">==</span> <span class="o">-</span><span class="n">f_widecoeff_i</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mpy_i</span> <span class="o">==</span>  <span class="n">f_widecoeff_r</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>I found an amazing number of bugs in this fashion.</p>
+
+<p>Even better, the proof completes.</p>
+
+<p>The only problem was, at this point in my development, the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> still didn’t
+work.</p>
+
+<p>So I kept working.</p>
+
+<h4 id="the-soft-butterfly">The Soft Butterfly</h4>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> has a <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v">second
+butterfly implementation</a>,
+one that uses no hardware
+accelerated multiplies.  Instead, it uses a <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">(rather poor) multiplication
+implementation</a>
+in logic.  I say <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">this
+implementation</a>
+is rather poor simply because I haven’t yet optimized it, and because I know
+that <a href="https://github.com/ZipCPU/fwmpy">better implementations</a> exist.
+In my case, I wanted a single multiplication implementation that could be
+parameterized and yet apply to all bit-widths.  Worse, that implementation
+needs to know what it’s own processing delay is.  My bare-bones,
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">basic implementation</a>
+does all of the above, it just could be better.  <a href="https://github.com/ZipCPU/fwmpy">My own optimmized
+multiplication implementations</a> doesn’t meet
+this criteria.</p>
+
+<p>In the story of this
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+development, it was this part of the implementation
+that was most problematic for me.  I didn’t dare replace the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">hand-built
+multiply</a>
+within it with some abstraction, primarily because I didn’t trust it: I was
+always concerned there was a latent bug within the multiply.  For
+example, what if I didn’t get the delay right?</p>
+
+<p>This was also the stage that was responsible for several bugs that were a pain
+to chase down.</p>
+
+<p>I ran <a href="https://github.com/ZipCPU/dblclockfft/tree/master/bench/cpp">bench tests</a>
+on this stage in all three modes: continuous <code class="highlighter-rouge">i_ce</code>’s,
+one clock between <code class="highlighter-rouge">i_ce</code>’s, and two clocks between <code class="highlighter-rouge">i_ce</code>’s.  When the design
+failed, I adjusted each of these three elements to randomly include another
+clock step with <code class="highlighter-rouge">i_ce</code> false.  The tests would pass, and the design would fail.</p>
+
+<p>The bug, as it turns out, was quite subtle.</p>
+
+<p>Because the delay within my <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">hand-made
+soft-multiply</a>
+was dependent upon the bit width, and because this was captured by
+a parameter, and because the way I set up my
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+tests only one parameter set was getting tested despite multiple parameters
+(and hence multiply delays) being used by the full
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, the
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/butterfly_tb.cpp">bench test</a>
+might pass for one set of multiplication bit-widths
+and fail for the set that wasn’t bench tested.</p>
+
+<p>I didn’t find this bug until I started using
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>,
+although technically my
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+approach suffers from the same problem of only testing some multiplication
+bit-widths.</p>
+
+<p>For this <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">soft
+butterfly</a>,
+I call it <code class="highlighter-rouge">butterfly.v</code>, I created the same basic
+properties I had been using for the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/hwbfly.v">hardware assisted
+butterfly</a>.</p>
+
+<p>To my immense relief, <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">this
+butterfly</a>
+ failed to pass
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+(initially).  Indeed, it failed very quickly.  Why was this to my relief?
+Because I had been struggling to find the bug.  It turns out, the bug was
+associated with the remainder of the multiplication delay divided by two
+or three–depending upon the mode.  A subtly different timing implementation
+was required for each remainder, and I found that by using
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>.</p>
+
+<p>Yes, I could’ve found this using my test bench as well.  I just had two problems
+when using it: First, I didn’t trust that it would try the right input
+combination to trigger the bug.  Second, I was getting really tired of working
+through GB <a href="/blog/2017/07/31/vcd.html">traces</a>.</p>
+
+<p>Now that I know what the problem was, the proof requires proving the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> for multiple
+different potential parameter sets.
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a> handles this nicely
+using tasks–something I haven’t discussed much on the blog.  You can see the
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/formal/butterfly.sby">script I used here</a>,
+which includes the multiple task definitions if you are interested.</p>
+
+<p>My problem with this proof is that while it quickly found my bugs in minutes,
+it struggled to prove that there are no bugs.  By “struggled” I mean the took
+multiple days–so long that I never let it finish.</p>
+
+<p>So I dug back into the proof.  I set up criteria within every stage of the
+multiply to guide the proof: if multiplying by zero, the result in the middle
+should be zero, if by one, etc.  I could then verify that the multiply
+would truly return zero on a zero input, or return the same value on a one
+input.</p>
+
+<p>This still took forever.</p>
+
+<p>The difficulty of this proof is also why this article took so long to write.
+I had the essential proofs working early on, but this one proof just seemed
+to take forever.</p>
+
+<p>Part of the issue here is, how long are you willing to wait for a proof to
+return?  I personally want my proofs to all return within about fifteen minutes.
+I’ll tolerate two to three hours, but not without grumping about it.  However,
+this proof was taking over 72 hrs+ before I’d kill it.  This is unacceptable.</p>
+
+<table align="center" style="float: right"><caption>Fig 10. Butterfly RTL components</caption><tr><td><img src="/img/fft-butterfly-hierarchy.svg" width="360" /></td></tr></table>
+
+<p>To understand the problem, consider Fig. 10.  I had verified the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">long binary
+multiply implementation, <code class="highlighter-rouge">longbimpy</code></a>.
+I just wanted to prove some simple properties about the result, based upon the
+initial values given to the
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/butterfly.v">butterfly</a>.
+I wanted to verify that my estimate of the number of clocks
+required by the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">long binary
+multiply</a>
+ matched the length of my FIFO.  I wanted
+to verify that the coefficients and inputs still matched the outputs, and that
+one coefficient wasn’t getting confused with another piece of data.</p>
+
+<p>To do this, I insisted that a zero coefficient must result in a zero result.
+A one coefficient must duplicate the data, and vice versa for the data.  These
+are bare simple multiplication properties, but though they are simplistic
+they are sufficient for verifying if the right inputs are given to the
+multiplies, and if the matching results are drawn from them.</p>
+
+<p>After about two weeks of running 48+ hrs proofs that I’d never allow to
+complete, I finally figured out how to bring the solution time down to
+something more reasonable.  The trick?  Asserting that the inputs to the
+multiply matched the butterflies copy of what those inputs were.  This last
+assertion connected the proofs taking place within the multiply, with the
+proofs that were about to take place on the multiply’s outputs.</p>
+
+<p>This necessitated a change to the portlist of the multiply, a change that
+only needs to be made for the formal proof and not otherwise.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span>	<span class="n">longbimpy</span><span class="p">(</span><span class="n">i_clk</span><span class="o">,</span> <span class="n">i_ce</span><span class="o">,</span> <span class="n">i_a_unsorted</span><span class="o">,</span> <span class="n">i_b_unsorted</span><span class="o">,</span> <span class="n">o_r</span>
+<span class="cp">`ifdef</span>	<span class="n">FORMAL</span>
+	<span class="o">,</span> <span class="n">f_past_a_unsorted</span><span class="o">,</span> <span class="n">f_past_b_unsorted</span>
+<span class="cp">`endif</span>
+		<span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The <code class="highlighter-rouge">unsorted</code> post-fix above references the number of bits in the values <code class="highlighter-rouge">i_a</code>
+and <code class="highlighter-rouge">i_b</code>.  The algorithm internally sorts these two values so that the values
+with the most bits is in <code class="highlighter-rouge">i_b</code>.  The <code class="highlighter-rouge">*_unsorted</code> values just describe the
+values before the bitwidth sort.</p>
+
+<p>Then, internal to the butterfly itself, I assert that the <code class="highlighter-rouge">f_past_a_unsorted</code>
+and <code class="highlighter-rouge">f_past_b_unsorted</code> values match the ones within the module.  There’s a
+bit of unwinding that needs to take effect, though, since the those values can
+refer to any of the multiplies inputs depending upon the time step.  That
+places these values into <code class="highlighter-rouge">fp_*_ic</code> for the coefficient and <code class="highlighter-rouge">fp_*_id</code> for
+the data.</p>
+
+<p>The last step is to verify these two values match, for all three of the
+multiplication input sets.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_startup_counter</span> <span class="o">&gt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">F_D</span> <span class="o">}</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">fp_one_ic</span> <span class="o">==</span> <span class="o">{</span> <span class="n">f_dlycoeff_r</span><span class="p">[</span><span class="n">F_D</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="n">CWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">,</span>
+				<span class="n">f_dlycoeff_r</span><span class="p">[</span><span class="n">F_D</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="n">CWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">fp_two_ic</span> <span class="o">==</span> <span class="o">{</span> <span class="n">f_dlycoeff_i</span><span class="p">[</span><span class="n">F_D</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="n">CWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">,</span>
+				<span class="n">f_dlycoeff_i</span><span class="p">[</span><span class="n">F_D</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="n">CWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">fp_one_id</span> <span class="o">==</span> <span class="o">{</span> <span class="n">f_predifr</span><span class="p">[</span><span class="n">IWIDTH</span><span class="p">]</span><span class="o">,</span> <span class="n">f_predifr</span> <span class="o">}</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">fp_two_id</span> <span class="o">==</span> <span class="o">{</span> <span class="n">f_predifi</span><span class="p">[</span><span class="n">IWIDTH</span><span class="p">]</span><span class="o">,</span> <span class="n">f_predifi</span> <span class="o">}</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">fp_three_ic</span> <span class="o">==</span> <span class="n">f_p3c_in</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">fp_three_id</span> <span class="o">==</span> <span class="n">f_p3d_in</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That assertion was sufficient to bring the proof time down from days to hours.</p>
+
+<p>I can handle hours.  I can’t handle days.</p>
+
+<h4 id="full-fft-stages">Full FFT Stages</h4>
+
+<table align="center" style="float: right"><caption>Fig 11. A Decimation in Frequency Butterfly</caption><tr><td><img src="/img/fft-fftstage.svg" alt="" width="360" /></td></tr></table>
+
+<p>Because the butterflies were so hard to prove, I hadn’t spend much time
+trying to formally verify the separate <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> stages.  I had just tested and
+verified that these worked using the traditional bench testing method–using
+carefully chosen and random inputs.</p>
+
+<p>Then, later, I got to thinking: this FFT implementation is <em>so</em> close to having
+a full formal verification proof, why not just add this last piece to the
+set?  So I dug into the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> stage component.</p>
+
+<p>In the language of this core generator, the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> stage is that portion of the
+core that accepts inputs and feeds a single radix-2 butterfly.  This
+means, for an <code class="highlighter-rouge">N</code>-point FFT stage, the core needs to read <code class="highlighter-rouge">N/2</code> values into
+memory, and then apply these values, the next <code class="highlighter-rouge">N/2</code> input values, and a stored
+ROM coefficient to the butterfly core.  This butterfly core will return a pair
+of values some number of clocks later.  The data then need to be separated
+again.  One output value from the butterfly needs to go immediately to the
+output, the other value must go into memory.  Once <code class="highlighter-rouge">N/2</code> values are output,
+the butterfly becomes idle and the stored <code class="highlighter-rouge">N/2</code> values can be returned.</p>
+
+<p>Could this piece be <a href="/blog/2017/10/19/formal-intro.html">formally
+verified</a>?</p>
+
+<p>Yes, it can.  To do this, though, I replaced the butterfly implementation
+with a similar abstract implementation–like I had with the hardware multiply
+when verifying the <a href="https://en.wikipedia.org/wiki/Logic_block#Hard_blocks">DSP</a>-enabled butterflies.
+This abstract butterfly implementation returned arbitrary values selected by
+the formal engine.  It also had a multiplication delay within it that would
+be chosen by the formal engine, so that one proof could be made independent
+of the final butterfly implementation and multiplier delay.</p>
+
+<p>Once done, the basic proof simply followed the <a href="/zipcpu/2018/07/13/memories.html">three basic memory
+properties</a>.
+That is, I allowed the formal engine to pick an arbitrary address to the input
+to the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/fftstage.v">FFT
+stage</a>,
+and then created a property to describe the inputs to the butterfly
+on the clock of this address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="p">(</span><span class="o">*</span> <span class="n">anyconst</span> <span class="o">*</span><span class="p">)</span>	<span class="kt">reg</span>	<span class="p">[</span><span class="n">LGSPAN</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_addr</span><span class="o">;</span>
+	<span class="kt">reg</span>	<span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">IWIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>			<span class="n">f_left</span><span class="o">,</span> <span class="n">f_right</span><span class="o">;</span>
+	<span class="kt">wire</span>	<span class="p">[</span><span class="n">LGSPAN</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>			<span class="n">f_next_addr</span><span class="o">;</span></code></pre></figure>
+
+<p>Any time the first value
+to the butterfly showed up and got placed into memory, I’d capture that
+value and assert that it remained in memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">f_addr</span><span class="p">[</span><span class="n">LGSPAN</span><span class="p">]</span><span class="o">==</span><span class="mb">1'b0</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">i_ce</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">iaddr</span><span class="p">[</span><span class="n">LGSPAN</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">))</span>
+		<span class="n">f_left</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>I did the same on the second piece of data to enter the core.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">((</span><span class="n">i_ce</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">iaddr</span> <span class="o">==</span> <span class="o">{</span> <span class="mb">1'b1</span><span class="o">,</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">LGSPAN</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">}</span><span class="p">))</span>
+	<span class="n">f_right</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>I then asserted that these values would be sent to the butterfly one
+<code class="highlighter-rouge">i_ce</code> later.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="kt">wire</span>	<span class="p">[</span><span class="n">LGSPAN</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_last_addr</span> <span class="o">=</span> <span class="n">iaddr</span> <span class="o">-</span> <span class="mb">1'b1</span><span class="o">;</span>
+
+<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">((</span><span class="n">i_ce</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">wait_for_sync</span><span class="p">)</span>
+		<span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_last_addr</span> <span class="o">==</span> <span class="o">{</span> <span class="mb">1'b1</span><span class="o">,</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">LGSPAN</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">}</span><span class="p">))</span>
+<span class="k">begin</span>
+	<span class="k">assert</span><span class="p">(</span><span class="n">ib_a</span> <span class="o">==</span> <span class="n">f_left</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">assert</span><span class="p">(</span><span class="n">ib_b</span> <span class="o">==</span> <span class="n">f_right</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">assert</span><span class="p">(</span><span class="n">ib_c</span> <span class="o">==</span> <span class="n">cmem</span><span class="p">[</span><span class="n">f_addr</span><span class="p">[</span><span class="n">LGSPAN</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]])</span><span class="o">;</span>
+<span class="k">end</span></code></pre></figure>
+
+<p>Did you notice how I checked that the coefficient, <code class="highlighter-rouge">ib_c</code>, matched the ROM
+memory, <code class="highlighter-rouge">cmem</code>, for this value?  This is all the proof required for the
+<a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factor</a>.</p>
+
+<p>I then used roughly the <a href="/zipcpu/2018/07/13/memories.html">same set of properties
+properties</a>
+on the other side of the butterfly.</p>
+
+<p>While I’d like to say that formally verifying this
+<a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/fftstage.v">FFT stage</a>
+helped me find some latent bug, that wasn’t the case this time.  Once
+I debugged the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+properties, this part of the core “just worked.”</p>
+
+<p>The only thing was, I noticed that the block RAM read on the output path
+wasn’t optimized for all block RAM implementations.  (Some internal RAM
+reads require the result be registered.)  Because of the
+formal properties, when I changed this implementation to something
+more portable and better, I could make this change with confidence.</p>
+
+<h4 id="how-much-was-verified">How much was verified?</h4>
+
+<p>I like to say that I have formally verified the entire FFT.  You might even
+hear me boasting of this.  This isn’t quite true.  I only verified <em>most</em>
+of the FFT.  (Queue the Princess Bride “mostly
+dead quote here …)  I didn’t formally verify that the
+<a href="https://en.wikipedia.org/wiki/Twiddle_factor">twiddle factors</a>
+were right, that the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">soft multiply
+worked</a>,
+or that the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/fftmain.v">top
+level</a> was
+properly wired together.</p>
+
+<table align="center" style="float: left"><caption>Fig 12. Proven components of the Butterfly</caption><tr><td><img src="/img/fft-proven.svg" alt="" width="480" /></td></tr></table>
+
+<p>To see how much was
+formally verified, consider Fig 12 on the left.  Everything
+but the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">long binary multiply,
+<code class="highlighter-rouge">longbimpy</code></a>,
+and the <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/fftmain.v">toplevel,
+<code class="highlighter-rouge">fftmain</code></a>,
+has been <a href="/blog/2017/10/19/formal-intro.html">formally
+verified</a></p>
+
+<p>I also only verified the components for particular parameter settings, not
+necessarily the settings used within the generated design.</p>
+
+<p>The <a href="https://github.com/ZipCPU/dblclockfft/blob/master/rtl/longbimpy.v">soft binary multiply,
+longbimpy</a>,
+was <em>functionally</em> verified (i.e. verified by <a href="https://github.com/ZipCPU/dblclockfft/blob/master/bench/cpp/mpy_tb.v">test
+bench</a>),
+in an exhaustive sense.  By that I mean that for a particular number of
+coefficient bits, I tested every single multiply input looking for
+problems.  While this may be overkill,
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+was fast enough to do this in less than a minute.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Does your design need an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>?
+Please consider
+<a href="https://github.com/ZipCPU/dblclockfft">this core generator</a>
+for that purpose.  Using
+<a href="https://github.com/ZipCPU/dblclockfft">this core generator</a>,
+you can create roughly any
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipelined</a>
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> implementation.
+Even better, because the core is completely open source, you can use this
+implementation within a
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+simulation in a way you’d never be able to do with a proprietary
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> core generator.</p>
+
+<p>The second point I’d like to draw from this
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> discussion is that,
+yes,
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>
+is up to an industrial formal verification task.  It can be applied to very
+complex designs (no pun intended), piece by piece, just like we did with <a href="https://github.com/ZipCPU/dblclockfft">this
+FFT core generator</a>.</p>
+
+<p>You may also note that we didn’t formally verify
+the entire <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+at once.  Neither did we formally verify that known input test vectors would
+produce known output vectors.  If we did our job right, this will be a
+consequence.  Somehow I just still didn’t trust the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+until running known data signals through it.  Hence, I still used
+simulation to ultimately verify that the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+as a whole was working.</p>
+
+<p>Finally, if you’ve checked out my <a href="https://github.com/ZipCPU/fftdemo">FFT-Demo</a>
+at all, you’ll see that an entire design using both co-simulated A/D,
+<a href="https://github.com/ZipCPU/fftdemo/blob/master/rtl/subfildown.v">downsampling
+filter</a>,
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, and
+VGA output can all be simulated together.  In that case, all of the
+components have been verified, but the full simulation of the entire
+design is still very valuable.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>He that withholdeth corn, the people shall curse him: but blessing shall be upon the head of him that selleth it. (Prov 11:26)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
