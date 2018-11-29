@@ -1,0 +1,1399 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a video controller: it's just a pair of counters</title>
+  <meta name="description" content="When I first started working withFPGAs on myown, the board I started with was aBasys3board.As a new student of FPGA design, and particularly one on a budget,...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2018/11/29/llvga.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a video controller: it's just a pair of counters</h1>
+    <p class="post-meta"><time datetime="2018-11-29T00:00:00-05:00" itemprop="datePublished">Nov 29, 2018</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>When I first started working with
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>s on my
+own, the board I started with was a
+<a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users">Basys3</a>
+board.
+As a new student of <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a> design, and particularly one on a budget, I wanted to create a series of
+designs that would eventually use all of the hardware ports of that board.
+You know, get the most for your money?  Hence the question, how best should I
+use the <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> port?</p>
+
+<p>My original though to use the <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a>
+port was to create a
+<a href="https://en.wikipedia.org/wiki/Framebuffer">screen buffer</a>, and then
+to display that buffer.  The only problem was that a
+<a href="https://en.wikipedia.org/wiki/Framebuffer">screen buffer</a>
+big enough to hold a <code class="highlighter-rouge">640*480</code> screen requires 307kB of buffer space, and the
+<a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users">Basys3</a>
+board didn’t have any external RAM memory, and the Artix-735T
+sold on the
+<a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users">Basys3</a>
+board didn’t have enough block RAM for such a buffer.</p>
+
+<p>How to solve this?</p>
+
+<p>Eventually, I settled on an approach that used a 25MHz pixel clock and
+<a href="https://en.wikipedia.org/wiki/Flash_memory">flash memory</a>.  Of course, the
+<a href="https://en.wikipedia.org/wiki/Flash_memory">flash memory</a>
+wasn’t fast enough to drive the 25MHz
+pixel clock, so I instead run-length encoded the image data and dropped the
+bits per pixel down to a four bit value that could then used in a color table
+lookup to get full 12’bit color which was all that the
+<a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users">Basys3</a>
+board supported.</p>
+
+<p>If you’ve worked with
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>s
+for a while, you’ll quickly recognize that every step in this increasingly
+complex processing chain is an opportunity for things to break.  The
+<a href="https://en.wikipedia.org/wiki/Flash_memory">flash</a> controller
+needs to work perfectly, the memory reader that feeds the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+needs to work perfectly, and then the decoder needs to work perfectly.
+One missed pixel and the entire decompression chain will produce a garbage
+output for the rest of the frame.</p>
+
+<p>Oh, and did I mention the <a href="/about/zipcpu.html">ZipCPU</a>
+was also trying to use the memory on this little board at the same time?</p>
+
+<p>The traditional way I’ve seen others decode things like this in the past is to
+use some form of scope applied to the horizontal and vertical sync’s of the
+video image.  This would confirm that the video sync signals were being
+properly sent to the screen.  The problem with this approach is that you’ll
+never have enough fingers to get a trace from all of the video wires and,
+worse, even if you did you’d struggle to decipher the traces without any other
+context.</p>
+
+<p>As I’m sure you can imagine, this approach didn’t work for me.</p>
+
+<p>The reason it didn’t work is that the image might decode nicely for half the
+screen, and then somehow get off cut and then it would degrade into
+decompressed chaos.  Well, that and I didn’t own an oscilloscope until much
+later.</p>
+
+<p>Instead, I chose a different approach:
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+based video simulation.  Using a video simulator, I could slow things down and
+even stop the simulation anytime something “wrong” showed up on the screen and
+go back and debug whatever the problem was.</p>
+
+<p>Today, let’s talk about how <a href="https://github.com/ZipCPU/vgasim">the simulator
+works</a>, and then walk through a
+demonstration design that will draw some
+<a href="https://en.wikipedia.org/wiki/Test_card">color bars</a>
+onto a simulated video screen.</p>
+
+<h2 id="the-vga-simulator">The VGA Simulator</h2>
+
+<p>If you’ve never tried <a href="https://github.com/ZipCPU/vgasim">this VGA simulator</a>
+before, you can <a href="https://github.com/ZipCPU/vgasim">find it on
+github</a>, separated into its own repository.
+The <a href="https://github.com/ZipCPU/vgasim">simulator</a> depends upon the gtkmm-3.0
+library, and so on the libgtkmm-3.0-dev Ubuntu package.  (It might even run
+on Windows under <a href="/blog/2017/07/28/cygwin-fpga.html">Cygwin</a>,
+I just haven’t tried it.)  If you have both
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+and this library installed, you should be able to run the demo by typing:</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">% </span>git clone https://github.com/ZipCPU/vgasim
+<span class="gp">% </span><span class="nb">cd </span>vgasim
+<span class="gp">% </span>make
+<span class="gp">% </span><span class="nb">cd </span>bench/cpp
+<span class="gp">% </span>./main_tb -g 640x480</code></pre></figure>
+
+<table align="center" style="float: right"><caption>Fig 1. VGA Simulation Test Color Bars</caption><tr><td><a href="/img/llvga-testimg.png"><img src="/img/llvga-testimg.png" alt="" width="320" /></a></td></tr></table>
+
+<p>If all goes well, you should see the image at the right within a window on your
+screen.  You can kill the program by either typing control-C in your bash
+window, or by clicking on the close box of the window it creates.</p>
+
+<p>Let’s examine this image for a moment.</p>
+
+<p>First, the image in Figure 1 very carefully has a white box around the border
+of the image.  This box denotes the first and last pixel of every line,
+as well as the first and last line of every frame.  It’s an important test for
+this reason first: it shows if you’ve lost any pixels due to timing, as these
+will otherwise fall off the screen.</p>
+
+<p>Second, the image explores the color space of your video output.  Notice the
+many shades of red, green, blue, and gray at the bottom of the image.</p>
+
+<p>Third, but perhaps not so obvious, no image would be possible without creating
+a proper <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> signal.  This means
+that behind the scenes, there needed to be horizontal and vertical sync channels
+as well as three serial streams of data that all had to line up properly
+together.</p>
+
+<p>Finally, it just <em>looks</em> like an <a href="https://en.wikipedia.org/wiki/Test_card">old fashioned TV test
+image</a>.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 2. Framebuffer Demo</caption><tr><td><a href="/img/llvga-fulldemo.png"><img src="/img/llvga-fulldemo.png" alt="" width="320" /></a></td></tr></table>
+
+<p>If this isn’t enough to get your interest, then let me offer some other
+capabilities found within the repository.  First, if you have the screen space
+to run the <a href="https://github.com/ZipCPU/vgasim">simulator</a> with a sub-window of
+1280x1024 (<code class="highlighter-rouge">main_tb</code> with no arguments), you can see the results of a more
+typical <a href="https://en.wikipedia.org/wiki/Framebuffer">frame buffer</a>
+implementation, shown (shrunken) in Fig. 2 on the left.</p>
+
+<p>The third demonstration within the <a href="https://github.com/ZipCPU/vgasim">VGA
+simulation</a> repository is that of a
+<a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> input
+simulator, such as might come from a camera.  This simulation is built as the
+<code class="highlighter-rouge">simcheck</code> executable within the same <code class="highlighter-rouge">bench/cpp</code> directory.  To run it,
+simply type:</p>
+
+<figure class="highlight"><pre><code class="language-bash" data-lang="bash"><span class="gp">% </span>simcheck</code></pre></figure>
+
+<p>As before, you can kill this simulation by either Ctrl-C or clicking the close
+button on the window.</p>
+
+<p>What does this input/camera simulator do?  It creates a
+<a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> inputs to a design.  It
+creates these inputs from a input image obtained from the top left corner
+of your screen.  You can then process that input within your
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilated</a>
+Verilog design to your hearts content.
+Alternatively, you can send the inputs from the <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> input simulator directly
+into the regular <a href="https://github.com/ZipCPU/vgasim">VGA simulator</a> to
+see it on the screen.</p>
+
+<p>What’s really fun about this camera simulator is when you overlap the output
+window with the camera “input” area, you can get some really neat effects,
+such as are shown in Fig 3. below.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. The output from the VGA input simulator fed directly into the simulation window</caption><tr><td><a href="/img/llvga-camsim.png"><img src="/img/llvga-camsim.png" alt="" width="780" /></a></td></tr></table>
+
+<p>In this image, the window at the top left is the same
+<a href="https://github.com/ZipCPU/vgasim">VGA simulation</a> output display program
+shown in Fig. 1.  What’s different is the second window just to the right and
+below it.  This is the <a href="https://github.com/ZipCPU/vgasim">VGA simulation</a>
+output that just reflects the source information to the simulated output.
+The third “window” showing further to the right is the recursive effect
+I was just mentioning.  In reality, there’s no “window” there, but just a
+recreation of the top left 640x480 pixels of the image.</p>
+
+<p>Shall we dig into the <a href="https://github.com/ZipCPU/vgasim">simulator</a> a bit
+and see how to use it?</p>
+
+<h2 id="the-wiring">The Wiring</h2>
+
+<p>The <a href="https://github.com/ZipCPU/vgasim">VGA simulator</a> is based around the <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> signaling standard.  Yes, I know this
+is an older standard, but it’s also an easy one to learn from.  I do have an
+HDMI simulator lying around that is very likely to eventually join this
+repository …</p>
+
+<p>But back to <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a>.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> standard consists of five signals.</p>
+
+<ul>
+  <li>
+    <p><code class="highlighter-rouge">o_vga_vsync</code>, the Vertical sync (pronounced “sink”), 1’bit</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_vga_hsync</code>, the Horizontal sync (pronounced “sink”), 1’bit</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_vga_red</code>, Red pixel component, up to 8’bits</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_vga_grn</code>, Green, etc.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_vga_blu</code>, Blue, etc.</p>
+  </li>
+</ul>
+
+<p>The simulator accepts any color depth up to 8-bits per pixel.  Anything over 8-bits,
+and it just pays attention to the top 8-bits.</p>
+
+<p>To use the simulator with your design, you need to build a
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+<a href="https://github.com/ZipCPU/vgasim/blob/master/bench/cpp/main_tb.cpp">test-bench wrapper</a> around the design, tell the test bench what resolution
+you want the window to have, and then call the video subsystem to pay attention
+to video events while running your design.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="c1">// ...
+</span><span class="cp">#include &lt;verilated.h&gt;
+#include "Vyourdesign.h"
+</span><span class="c1">//
+</span><span class="cp">#include "testb.h"
+#include "vgasim.h"
+</span><span class="c1">// ....
+</span><span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">Gtk</span><span class="o">::</span><span class="n">Main</span>	<span class="n">main_instance</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">);</span>
+	<span class="n">Verilated</span><span class="o">::</span><span class="n">commandArgs</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">);</span>
+	<span class="n">bool</span>	<span class="n">test_data</span> <span class="o">=</span> <span class="nb">false</span><span class="p">,</span> <span class="n">verbose_flag</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;;</span>
+	<span class="kt">char</span>	<span class="o">*</span><span class="n">ptr</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+	<span class="kt">int</span>	<span class="n">hres</span> <span class="o">=</span> <span class="mi">1280</span><span class="p">,</span> <span class="n">vres</span> <span class="o">=</span> <span class="mi">1024</span><span class="p">;</span>
+
+	<span class="c1">// ...
+</span>
+	<span class="n">tb</span> <span class="o">=</span> <span class="k">new</span> <span class="n">TESTBENCH</span><span class="p">(</span><span class="n">hres</span><span class="p">,</span> <span class="n">vres</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test_input</span><span class="p">(</span><span class="n">test_data</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">reset</span><span class="p">();</span>
+
+	<span class="c1">// tb-&gt;opentrace("vga.vcd");
+</span>	<span class="n">Gtk</span><span class="o">::</span><span class="n">Main</span><span class="o">::</span><span class="n">run</span><span class="p">(</span><span class="n">tb</span><span class="o">-&gt;</span><span class="n">m_vga</span><span class="p">);</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>Then, within the <a href="/blog/2017/06/21/looking-at-verilator.html"><code class="highlighter-rouge">tick()</code> method of this test
+bench</a>,
+the simulator is called with the output values from your
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a> core:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+
+		<span class="n">m_vga</span><span class="p">((</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_vsync</span><span class="p">)</span><span class="o">?</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_hsync</span><span class="p">)</span><span class="o">?</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">,</span>
+			<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_red</span><span class="p">,</span>
+			<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_grn</span><span class="p">,</span>
+			<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_vga_blu</span><span class="p">);</span>
+
+		<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">Vyourdesign</span><span class="o">&gt;::</span><span class="n">tick</span><span class="p">();</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>That’s how you hook up your design, but what do those various signals
+carry?</p>
+
+<p>Let’s consider the <code class="highlighter-rouge">o_vga_hsync</code>, or horizontal sync, signal first.  In an old
+fashioned cathode ray-tube monitor, this <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> signal would tell the underlying
+ray subsystem when to quickly move back from the right side to the left side
+of the screen.</p>
+
+<p>The signal itself is an active low signal, as shown in Fig. 4 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. The Horizontal Synch Signal</caption><tr><td><img src="/img/llvga-hsync.svg" alt="" width="780" /></td></tr></table>
+
+<p>The signal should be high at all times except during the Horizontal Synch
+pulse, where it is low.  Between the sync pulse and the data is the “back
+porch”, and then again on the other side between the data and the sync is
+a “front porch”.  While these may seem to be just idle clock periods, they
+are actually carefully timed and required by the video subsystem.</p>
+
+<p><a href="https://github.com/ZipCPU/vgasim">The simulator</a> needs to be told what these
+time periods are.  This is done within the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/bench/cpp/videomode.h">videomode.h</a>
+file, a portion of which is shown below:</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="n">VIDEOMODE</span><span class="p">(</span><span class="k">const</span> <span class="kt">int</span> <span class="n">h</span><span class="p">,</span> <span class="k">const</span> <span class="kt">int</span> <span class="n">v</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_err</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+		<span class="k">if</span> <span class="p">((</span><span class="n">h</span><span class="o">==</span><span class="mi">640</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">v</span><span class="o">==</span><span class="mi">480</span><span class="p">))</span> <span class="p">{</span>
+			<span class="c1">// 640 664 736 760 480 482 488 525
+</span>			<span class="n">setline</span><span class="p">(</span><span class="n">m_h</span><span class="p">,</span> <span class="s">"640 656 752 800"</span><span class="p">);</span>
+			<span class="n">setline</span><span class="p">(</span><span class="n">m_v</span><span class="p">,</span> <span class="s">"480 490 492 521"</span><span class="p">);</span>
+		<span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">h</span><span class="o">==</span><span class="mi">720</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">v</span> <span class="o">==</span> <span class="mi">480</span><span class="p">))</span> <span class="p">{</span>
+			<span class="n">setline</span><span class="p">(</span><span class="n">m_h</span><span class="p">,</span> <span class="s">"720 760 816 856"</span><span class="p">);</span>
+			<span class="n">setline</span><span class="p">(</span><span class="n">m_v</span><span class="p">,</span> <span class="s">"480 482 488 525"</span><span class="p">);</span>
+		<span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">h</span><span class="o">==</span><span class="mi">768</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">v</span> <span class="o">==</span> <span class="mi">483</span><span class="p">))</span> <span class="p">{</span>
+			<span class="n">setline</span><span class="p">(</span><span class="n">m_h</span><span class="p">,</span> <span class="s">"768 808 864 912"</span><span class="p">);</span>
+			<span class="n">setline</span><span class="p">(</span><span class="n">m_v</span><span class="p">,</span> <span class="s">"483 485 491 525"</span><span class="p">);</span>
+		<span class="c1">// ...
+</span>		<span class="p">}</span> <span class="k">else</span> <span class="n">m_err</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Here you’ll see that, internal to the simple WIDTHxHEIGHT video mode call,
+horizontal and vertical video mode lines are set according to the old <a href="https://en.wikipedia.org/wiki/XFree86_Modeline">XFree86
+modeline</a> “standard”,
+as illustrated in Fig. 5 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 5. The four numbers within a mode line</caption><tr><td><img src="/img/llvga-counter.svg" alt="" width="780" /></td></tr></table>
+
+<p>The first number is the number of valid pixels in the line, it counts from the
+left to the width of the line.  Don’t be confused by Fig. 5 trying to show
+the relationship of the sync line to the valid pixel data, the sync line
+is high during this period.  The second number includes the additional
+width of the front porch, but remains measured from the left edge.  The
+third number adds the width of the sync, while the fourth number
+is the total number of pixel clock intervals before the pattern repeats.</p>
+
+<table align="center" style="float: right"><caption>Fig 6. A basic video image, showing both horizontal and vertical sync regions</caption><tr><td><img src="/img/llvga-twin-syncs.svg" alt="" width="420" /></td></tr></table>
+
+<p>The vertical sync mode is similar.  It also consists of the same intervals:
+valid pixel (line) data, back porch, sync, and front porch.
+The big difference is that instead of counting pixel clocks, the vertical mode
+line counts horizontal lines.  Further, these horizontal lines are counted
+from the beginning of the horizontal sync interval.  This yields to the
+apparent discontinuity shown in Fig 6. on the right.  This discontinuity only
+exists, however, because we’ve chosen to place the image at the top-left
+of our coordinate system.  Had we started at the beginning of the horizontal
+and video sync joint intervals, there would be no apparent discontinuity.</p>
+
+<p>Fig. 6 should also give you a good idea of how to start building a basic video
+system: with horizontal and vertical position counters.  Let’s try that,
+and see how far we can get!</p>
+
+<h2 id="the-concept">The Concept</h2>
+
+<p>The <a href="https://github.com/ZipCPU/vgasim/blob/master/bench/rtl/design.v">demonstration
+design</a>
+within this <a href="https://github.com/ZipCPU/vgasim">VGA
+simulation repository</a> consists of
+a couple basic components, as shown in Fig. 7.</p>
+
+<table align="center" style="float: none"><caption>Fig 7. Demonstration Video Design Components</caption><tr><td><img src="/img/llvga-demofiles.svg" alt="" width="780" /></td></tr></table>
+
+<p>Let’s quickly walk through the pieces of this design, and then spend some
+time digging into the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">llvga.v</a> and
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">vgatestsrc.v</a>
+components.</p>
+
+<p>The overall design consists of both a <a href="https://github.com/ZipCPU/vgasim/blob/master/bench/rtl/memdev.v">memory
+device</a>
+and a <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/wbvgaframe.v">video frame
+controller</a>.
+We’ve <a href="/zipcpu/2018/07/13/memories.html">discussed this memory device
+before</a>, so we need not
+discuss it again here.  The
+<a href="/zipcpu/2018/07/13/memories.html">memory</a>
+is controlled by a
+<a href="/zipcpu/2017/11/07/wb-formal.html">wishbone</a>
+<a href="/blog/2017/06/08/simple-wb-master.html">master</a>
+and video controller,
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/wbvgaframe.v">wbvgaframe.v</a>.
+Within this controller, there’s
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/imgfifo.v">a component</a>
+to read frame-data from the memory using the memory/bus clock,
+and then to cross clocks via an
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>
+to the pixel clock domain.  Once in the pixel clock domain, pixels
+are then fed to the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">low level VGA signal
+generator</a>.
+Internal to this <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">lower level VGA signal
+generator</a>
+is the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">test-source
+generator</a>
+that produced the image shown in Fig 1 above.</p>
+
+<p>While we’ve discussed many of these components on the blog before,
+such as the
+<a href="/zipcpu/2018/07/13/memories.html">memory</a>, the
+<a href="/zipcpu/2017/11/07/wb-formal.html">wishbone bus</a>,
+and the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>,
+there are several components of this design that we haven’t discussed before.
+Today, let’s examine the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">lower-level VGA
+generator</a>
+and the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">test-bar signal
+generator</a>.</p>
+
+<table align="center" style="float: right"><caption>Fig 8: Lower Level VGA Controller Ports</caption><tr><td><img src="/img/llvga-ports.svg" alt="" width="360" /></td></tr></table>
+
+<p>The <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">lower-level VGA signal
+generator</a>
+is designed to interact with the pixel generation subsystem
+(<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/wbvgaframe.v">wbvgaframe.v</a>),
+and to produce the necessary video signal outputs in order to generate the
+images above.  Here you can see in Fig. 8 the ports necessary to do this.
+We’ve already discussed the ports on the right above, albeit under slightly
+different names.  The new ports are those on the left.  While the reset
+port might be obvious, the others might need a bit more explaining.</p>
+
+<ol>
+  <li>
+    <p><code class="highlighter-rouge">i_pixclk</code>  I normally name all my incoming clock signals <code class="highlighter-rouge">i_clk</code>.  This
+has become habit forming to me.  Not so with this module.  In the case
+of many video signals, the pixel clock runs at a different rate from the
+main system clock.  Hence, I’ve reserved <code class="highlighter-rouge">i_clk</code> for other parts of my
+design.  This component acts upon the pixel clock, <code class="highlighter-rouge">i_pixclk</code>, alone.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">i_test</code> is a flag that I use to tell the controller to produce the
+<a href="https://en.wikipedia.org/wiki/Test_card">test bars output</a>
+I demonstrated in Fig 1. above.  If <code class="highlighter-rouge">i_test</code> is not set, the controller
+will source its pixels externally from <code class="highlighter-rouge">i_rgb_pix</code>, otherwise it will
+source the pixels from the internal <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">VGA test source
+generator</a>.</p>
+  </li>
+  <li>
+    <p><code class="highlighter-rouge">o_rd</code> is the first of three pipeline control signals used to help the
+pixel generator, either
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/imgfifo.v">imgfifo.v</a> or
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">vgatestsrc.v</a>
+in this design, know when to generate to pixels.
+It functions very much like the <code class="highlighter-rouge">!stall</code> signal in the “simple
+handshake” <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline strategy we presented
+earlier</a>.</p>
+
+    <p>Only, this signal is a little trickier than a negated stall signal.  The
+pixel generator is expected to set up a pipeline filled with pixels
+and then wait for this signal to go high.  Once this signal goes high,
+pixel data will flow.  The pixel generator needs to be careful to <em>never</em>
+let the pixel feed buffer empty, or catestrophic things may happen.
+(i.e., the display won’t show the image we want)</p>
+  </li>
+  <li>
+    <p>The <code class="highlighter-rouge">o_newline</code> signal is used to indicate that the last pixel in the
+row has been consumed, and the pixel generator is free to flush any
+line buffers and start over if it wishes to.</p>
+
+    <p>In this <a href="https://github.com/ZipCPU/vgasim/blob/master/bench/rtl/demo.v">demonstration
+design</a>,
+the <code class="highlighter-rouge">o_newline</code> signal is only used by the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">test image
+generator</a>.
+We’ll look at that further down.</p>
+  </li>
+  <li>
+    <p>The last pipeline indication signal is the <code class="highlighter-rouge">o_newframe</code> signal.  This
+signal is very much like the <code class="highlighter-rouge">o_newline</code> signal, save that it indicates the
+end of the frame as well as the end of the line.  This signal is to be
+true on the last pixel of the frame, and then only.  The <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/imgfifo.v">demonstration frame
+buffer</a>
+uses this signal to flush its buffers and start reading from the top of the
+image.</p>
+
+    <p>In the old arcade days, this signal might create a “vertical refresh”
+interrupt to signal the start of the vertical refresh period.  This
+was a time when screen memory was not being read and so software
+could quickly draw to the screen in a way that wouldn’t flicker.
+Such “<a href="https://en.wikipedia.org/wiki/Flicker_(screen)#Software_artifacts">Flickering</a>”
+can be caused by a software update to the <a href="https://en.wikipedia.org/wiki/Framebuffer">frame
+buffer</a>, typically consisting
+of both an erase operation and a redraw, taking place during the active
+portion of the image, so that the user sees alternately the “erased”
+portion and the newly drawn portion.  This can be fixed by
+<a href="https://en.wikipedia.org/wiki/Multiple_buffering#Double_buffering_in_computer_graphics">double
+buffering</a>,
+so that the partially drawn image never ends up in the
+live <a href="https://en.wikipedia.org/wiki/Framebuffer">frame buffer</a>.
+Doing so requires knowing when to swap buffers, and the <code class="highlighter-rouge">o_newframe</code>
+signal will facilitate that request.</p>
+  </li>
+</ol>
+
+<p>This <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">lower-level VGA
+generator</a> may be
+the simplest component of the entire display system:  <em>It’s just a pair of
+counters!</em>  So, let’s see how much this <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">low-level VGA
+controller</a>
+can accomplish from two separate counters.</p>
+
+<p>First, let’s accept as inputs all of the various components of the two
+<a href="https://en.wikipedia.org/wiki/XFree86_Modeline">video mode lines</a>.
+These are simply passed through from the top-level
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+<a href="https://github.com/ZipCPU/vgasim/blob/master/bench/cpp/main_tb.cpp">simulation</a>,</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="kt">void</span>	<span class="nf">init</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_hm_width</span>  <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">width</span><span class="p">();</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_hm_porch</span>  <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">hporch</span><span class="p">();</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_hm_synch</span>  <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">hsync</span><span class="p">();</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_hm_raw</span>    <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">raw_width</span><span class="p">();</span>
+		<span class="c1">//
+</span>		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_vm_height</span> <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">height</span><span class="p">();</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_vm_porch</span>  <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">vporch</span><span class="p">();</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_vm_synch</span>  <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">vsync</span><span class="p">();</span>
+		<span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_vm_raw</span>    <span class="o">=</span> <span class="n">m_vga</span><span class="p">.</span><span class="n">raw_height</span><span class="p">();</span>
+		<span class="c1">//
+</span>		<span class="c1">// ...
+</span>	<span class="p">}</span></code></pre></figure>
+
+<p>as inputs to the <a href="https://github.com/ZipCPU/vgasim/blob/master/bench/rtl/demo.v">top level
+design</a>, and
+then down on to this <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">lower level
+controller</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="n">HW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>		<span class="n">i_hm_width</span><span class="o">,</span> <span class="n">i_hm_porch</span><span class="o">,</span>
+						<span class="n">i_hm_synch</span><span class="o">,</span> <span class="n">i_hm_raw</span><span class="o">;</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="n">VW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>		<span class="n">i_vm_height</span><span class="o">,</span> <span class="n">i_vm_porch</span><span class="o">,</span>
+						<span class="n">i_vm_synch</span><span class="o">,</span> <span class="n">i_vm_raw</span><span class="o">;</span></code></pre></figure>
+
+<p>While we are going to allow these values to be practically anything within
+this <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">lower level
+controller</a>,
+they do require a particular order between them.  Specifically, they need
+to be strictly increasing,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">i_hm_width  &lt; i_hm_porch &lt; i_hm_synch &lt; i_hm_raw, and
+i_vm_height &lt; i_vm_porch &lt; i_vm_synch &lt; i_vm_raw</code></pre></figure>
+
+<p>and there is a minimum width and height.  When we get to
+<a href="/blog/2017/10/19/formal-intro.html">formal verification</a>,
+we can use the following assumption to capture this required ordering.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">assume</span><span class="p">(</span><span class="mh">12'h10</span> <span class="o">&lt;</span> <span class="n">i_hm_width</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_hm_width</span> <span class="o">&lt;</span> <span class="n">i_hm_porch</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_hm_porch</span> <span class="o">&lt;</span> <span class="n">i_hm_synch</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_hm_synch</span> <span class="o">&lt;</span> <span class="n">i_hm_raw</span><span class="p">)</span><span class="o">;</span>
+
+		<span class="k">assume</span><span class="p">(</span><span class="mh">12'h10</span> <span class="o">&lt;</span> <span class="n">i_vm_height</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_vm_height</span> <span class="o">&lt;</span> <span class="n">i_vm_porch</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_vm_porch</span>  <span class="o">&lt;</span> <span class="n">i_vm_synch</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_vm_synch</span>  <span class="o">&lt;</span> <span class="n">i_vm_raw</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This will force the width to be at least ten pixels wide, likewise for
+vertical.  The other three numbers of each mode line are also required
+to be in strict increasing order.</p>
+
+<p>This allows us to create a simple counter to keep track of our horizontal
+position.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">hpos</span>       <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_raw</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span>
+		<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="n">hpos</span> <span class="o">+</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>A similar counter can be used to keep track of our vertical position.</p>
+
+<p>Well, it’s not quite that simple.  We also need to generate the horizontal
+sync signal as well as our pipeline control signals.  The obvious signal
+we could set within this same loop is the <code class="highlighter-rouge">o_newline</code> signal.  As discussed
+above, this signal is true for one-clock only at the very last pixel of any
+line.</p>
+
+<p>The next item to create in this block is a little less obvious.  This is the
+<code class="highlighter-rouge">hrd</code> signal.  We’ll use this in a bit to indicate a valid pixel, but we’ll
+need to couple it with a simple <code class="highlighter-rouge">vrd</code> signal from the vertical direction first.</p>
+
+<p>Put together, this expands our logic a bit more, but it’s still fundamentally
+a counter–we just set two other signals within this block as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">hpos</span>       <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">o_newline</span>  <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">o_hsync</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">hrd</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">o_newline</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="n">o_hsync</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="n">hrd</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span> <span class="c1">// First pixel is always valid
+</span>	<span class="k">end</span> <span class="k">else</span>
+	<span class="k">begin</span>
+		<span class="n">hrd</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_width</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span>
+				<span class="o">||</span><span class="p">(</span><span class="n">hpos</span> <span class="o">&gt;=</span> <span class="n">i_hm_raw</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_raw</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span>
+			<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="n">hpos</span> <span class="o">+</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">o_newline</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">==</span> <span class="n">i_hm_width</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">;</span>
+		<span class="n">o_hsync</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_porch</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">hpos</span> <span class="o">&gt;=</span> <span class="n">i_hm_synch</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Can you still see the basic <code class="highlighter-rouge">hpos</code> counter within there?</p>
+
+<p>Fig. 9 below shows a trace of this simple logic, focused at the end of the line.
+For this trace, the line width was set to 640 pixels, hence <code class="highlighter-rouge">o_newline</code>
+is true on pixel <code class="highlighter-rouge">639</code>, and <code class="highlighter-rouge">o_rd</code> drops on the first non-pixel: <code class="highlighter-rouge">640</code>.</p>
+
+<table align="center" style="float: center"><caption>Fig 9: End-of-line logic trace</caption><tr><td><a href="/img/llvga-hpostrace1.png"><img src="/img/llvga-hpostrace1.png" alt="" width="954" /></a></td></tr></table>
+
+<p>In a similar fashion, Fig. 10 below shows the same trace, but zoomed out far
+enough so that you can see a full between-line interval.</p>
+
+<table align="center" style="float: center"><caption>Fig 10: Horizontal Sync trace</caption><tr><td><a href="/img/llvga-hpostrace2.png"><img src="/img/llvga-hpostrace2.png" alt="" width="956" /></a></td></tr></table>
+
+<p>During this interval,
+you may notice that our valid pixel signal, <code class="highlighter-rouge">o_rd</code>, goes low before the
+horizontal sync becomes active (low), and stays low for some period after
+the sync becomes inactive again but before the valid pixels start up again.</p>
+
+<p>The vertical counter is similar.  The biggest difference is that the
+vertical counter changes at the end of the horizontal front porch, just as
+the horizontal sync signal becomes active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">vpos</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">o_vsync</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">vpos</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">o_vsync</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">==</span> <span class="n">i_hm_porch</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">vpos</span> <span class="o">&lt;</span> <span class="n">i_vm_raw</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span>
+			<span class="n">vpos</span> <span class="o">&lt;=</span> <span class="n">vpos</span> <span class="o">+</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">vpos</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="c1">// Realistically, the new frame begins at the top
+</span>		<span class="c1">// of the next frame.  Here, we define it as the end
+</span>		<span class="c1">// last valid row.  That gives any software depending
+</span>		<span class="c1">// upon this the entire time of the front and back
+</span>		<span class="c1">// porches, together with the sync pulse width time,
+</span>		<span class="c1">// to prepare to actually draw on this new frame before
+</span>		<span class="c1">// the first pixel clock is valid.
+</span>		<span class="n">o_vsync</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">vpos</span> <span class="o">&lt;</span> <span class="n">i_vm_porch</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">vpos</span><span class="o">&gt;=</span><span class="n">i_vm_synch</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Perhaps you noticed that we didn’t set <code class="highlighter-rouge">vrd</code> above.  Since this signal is
+so simple, it can quietly fit into its own block.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">vrd</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+		<span class="n">vrd</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">vpos</span> <span class="o">&lt;</span> <span class="n">i_vm_height</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Now, <code class="highlighter-rouge">vrd &amp;&amp; hrd</code> will always be true one clock before a valid pixel, as marked
+by <code class="highlighter-rouge">o_rd</code>.  We’ll call this pre-signal <code class="highlighter-rouge">w_rd</code>, to indicate that we are using
+combinatorial logic (i.e. a wire) for this purpose.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">wire</span>	<span class="n">w_rd</span><span class="o">;</span>
+	<span class="k">assign</span>	<span class="n">w_rd</span> <span class="o">=</span> <span class="p">(</span><span class="n">hrd</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">vrd</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">first_frame</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>We’ll except the very <code class="highlighter-rouge">first frame</code> from this calculation, just to make
+certain we’ve given the pixel generator a chance to see the <code class="highlighter-rouge">o_newframe</code>
+signal before starting.  Creating the <code class="highlighter-rouge">o_rd</code> signal is then just as simple
+as registering this <code class="highlighter-rouge">w_rd</code> signal on the next pixel clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">o_rd</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="n">o_rd</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">o_rd</span> <span class="o">&lt;=</span> <span class="n">w_rd</span><span class="o">;</span></code></pre></figure>
+
+<p>In a fashion similar to our <code class="highlighter-rouge">o_newline</code> signal, we’ll create an
+<code class="highlighter-rouge">o_newframe</code> signal in case our pixel generation logic needs to do some
+work to prepare for the next frame.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">o_newframe</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">hpos</span> <span class="o">==</span> <span class="n">i_hm_width</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">vpos</span> <span class="o">==</span> <span class="n">i_vm_height</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+		<span class="n">o_newframe</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">o_newframe</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>You can see these vertical signals together with our horizontal signals in
+Fig. 11 below.</p>
+
+<table align="center" style="float: center"><caption>Fig 11: Vertical Sync trace</caption><tr><td><a href="/img/llvga-vpostrace1.png"><img src="/img/llvga-vpostrace1.png" alt="" width="954" /></a></td></tr></table>
+
+<p>Notice that <code class="highlighter-rouge">o_newframe</code> will only ever be true when <code class="highlighter-rouge">o_newline</code> is also
+true: both are true on the last pixel of a line.  The difference, of course,
+is that <code class="highlighter-rouge">o_newframe</code> is only true on the last pixel of the last line.
+We’ll use this property later to
+<a href="/blog/2017/10/19/formal-intro.html">formally constrain</a>
+<code class="highlighter-rouge">o_newline</code>.</p>
+
+<p>Likewise, Fig 12 shows the same trace, but only zoomed out so that we can
+see many lines at once.</p>
+
+<table align="center" style="float: center"><caption>Fig 12: Vertical Sync trace, showing many lines</caption><tr><td><a href="/img/llvga-vpostrace2.png"><img src="/img/llvga-vpostrace2.png" alt="" width="956" /></a></td></tr></table>
+
+<p>Not only can we see many lines at once, but Fig 12 also shows a full vertical
+blanking interval, including the front porch, sync, and back porch.  You can
+recognize these by noticing the relationship of <code class="highlighter-rouge">o_vsync</code> to the valid data
+marked by <code class="highlighter-rouge">o_rd</code>.  You can also see where the <code class="highlighter-rouge">o_newframe</code> signal is placed
+relative to the rest of the intervals: right at the last pixel of the entire
+frame.</p>
+
+<p>If you’ve never dealt with video before, it really is just this simple: the
+synchronization portion is nothing more than a pair of counters!  We’ve
+added additional signals to indicate when line endings and frame endings
+take place, but that’s really all there is to it.</p>
+
+<p>Since this is just that simple, verifying this component is also very simple.
+Let’s discuss that next.</p>
+
+<h2 id="formally-verifying-our-counters">Formally Verifying our Counters</h2>
+
+<p>When I
+<a href="/blog/2017/10/19/formal-intro.html">formally verify</a>
+a module, I like to think of that module in terms
+of a “contract”.  This “contract” is sort of a black box description of
+what I expect from the module.  In many ways the study of
+<a href="/blog/2017/10/19/formal-intro.html">formally verification</a>
+then becomes the study of how to answer the question, “what sort of <em>contract</em>
+is appropriate for what I’m building”?</p>
+
+<p>In this case, I’d first want to verify that I am creating the synchronization
+signals as required.</p>
+
+<p>We can start with the horizontal sync.  Before the end of the front porch,
+the sync should be inactive (high).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)))</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_porch</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_hsync</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Then between the end of the front porch and the end of the synchronization
+section, the horizontal sync should be active (low).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_synch</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_hsync</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, between the end of the synchronization period and the end of the
+line period, the synchronization should be inactive (high).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_hsync</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>This exact same logic applies to the vertical synchronization period as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Same thing for vertical
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">vpos</span> <span class="o">&lt;</span> <span class="n">i_vm_porch</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_vsync</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">vpos</span> <span class="o">&lt;</span> <span class="n">i_vm_synch</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_vsync</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_vsync</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Wow, how simple could that be?</p>
+
+<p>Have we fully constrained our video controller?  Not quite.</p>
+
+<p>We still need to make certain that the horizontal position is properly
+incrementing.  (But the code says it is …)  For this, let’s just check the
+past value and contrain the current one based upon that.  If the past value
+is at or beyond the last pixel of the line, then we should be starting on
+a new line on this clock.  Otherwise, we should be incrementing our horizontal
+pointer.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">hpos</span> <span class="o">&gt;=</span> <span class="n">i_hm_raw</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">))</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">hpos</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">hpos</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">hpos</span><span class="p">)</span><span class="o">+</span><span class="mb">1'b1</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The vertical counter is similar, save that it only increments at the beginning
+edge of the horizontal sync period, otherwise it should be the same in all
+cases.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">==</span> <span class="n">i_hm_porch</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">vpos</span> <span class="o">&gt;=</span> <span class="n">i_vm_raw</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">))</span>
+				<span class="k">assert</span><span class="p">(</span><span class="n">vpos</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">else</span>
+				<span class="k">assert</span><span class="p">(</span><span class="n">vpos</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">vpos</span><span class="p">)</span><span class="o">+</span><span class="mb">1'b1</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span> <span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">vpos</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">vpos</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>These two constraints, however, aren’t enough to keep the two counters within
+their limits.  To do that, we need to insist that they are less than the
+proper raw widths.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">assert</span><span class="p">(</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_raw</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">vpos</span> <span class="o">&lt;</span> <span class="n">i_vm_raw</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Without these last two assertions, the
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+<a href="/blog/2018/03/10/induction-exercise.html">induction step</a>
+might start our design way out of bounds.  Indeed, you should always
+assert that any state variables are within bounds!  That’s the purpose of
+these last two assertions.</p>
+
+<p>At this point, we’ve created enough assertions to guarantee that a monitor
+capable of synchronizing to this signal will do so.</p>
+
+<p>Everything else is icing on the cake.</p>
+
+<p>We first have our <code class="highlighter-rouge">o_rd</code> value which will signal to the part of the design
+that sends us pixels that we just accepted a pixel.  This value should be
+true during any valid pixel period.  We can check this simply with,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">((</span><span class="n">hpos</span> <span class="o">&lt;</span> <span class="n">i_hm_width</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">vpos</span> <span class="o">&lt;</span> <span class="n">i_vm_height</span><span class="p">)</span>
+				<span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">first_frame</span><span class="p">))</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_rd</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_rd</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>That leaves two other signals: the newline signal and the new frame
+signal.  The newline signal is true on the last clock period of any line.
+We can assert that here.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">==</span> <span class="n">i_hm_width</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_newline</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_newline</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, the <code class="highlighter-rouge">o_newframe</code> signal needs to be true at the same time as
+<code class="highlighter-rouge">o_newline</code>, but only on the last valid line.  Otherwise this should be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">((</span><span class="n">vpos</span> <span class="o">==</span> <span class="n">i_vm_height</span><span class="o">-</span><span class="mb">1'b1</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">o_newline</span><span class="p">))</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_newframe</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_newframe</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>There is one catch in all of this simplicity: our assertions above will
+fail if the video mode is changed.  This I found annoying, since I had
+written the code above to be self correcting upon any mode changes, yet I
+struggled to find a way to
+<a href="/blog/2017/10/19/formal-intro.html">formally verify</a>
+this code as self correcting–the
+solver just kept changing the mode line every chance it could.  As a
+compromise, I only check the above properties if the video frame is
+stable.  To do that, I capture the video mode for the last clock, both
+horizontal and vertical mode signals,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">wire</span>	<span class="p">[</span><span class="mi">47</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_vmode</span><span class="o">,</span> <span class="n">f_hmode</span><span class="o">;</span>
+	<span class="k">assign</span>	<span class="n">f_hmode</span> <span class="o">=</span> <span class="o">{</span> <span class="n">i_hm_width</span><span class="o">,</span>  <span class="n">i_hm_porch</span><span class="o">,</span> <span class="n">i_hm_synch</span><span class="o">,</span> <span class="n">i_hm_raw</span> <span class="o">};</span>
+	<span class="k">assign</span>	<span class="n">f_vmode</span> <span class="o">=</span> <span class="o">{</span> <span class="n">i_vm_height</span><span class="o">,</span> <span class="n">i_vm_porch</span><span class="o">,</span> <span class="n">i_vm_synch</span><span class="o">,</span> <span class="n">i_vm_raw</span> <span class="o">};</span>
+
+	<span class="kt">reg</span>	<span class="p">[</span><span class="mi">47</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_last_vmode</span><span class="o">,</span> <span class="n">f_last_hmode</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+		<span class="n">f_last_vmode</span> <span class="o">&lt;=</span> <span class="n">f_vmode</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+		<span class="n">f_last_hmode</span> <span class="o">&lt;=</span> <span class="n">f_hmode</span><span class="o">;</span></code></pre></figure>
+
+<p>I know these are stable when their values are the same as they were one clock
+ago.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>	<span class="n">f_stable_mode</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">f_stable_mode</span> <span class="o">=</span> <span class="p">(</span><span class="n">f_last_vmode</span> <span class="o">==</span> <span class="n">f_vmode</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">f_last_hmode</span> <span class="o">==</span> <span class="n">f_hmode</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>While I could assume that the mode was always stable, I would like to make
+this design able to change modes.  (The simulator cannot change modes, but
+this portion of the design can.)  For this, I just insist that the modes
+are identical unless the reset line is high.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">f_stable_mode</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>I can also hear some of you asking, why did I create <code class="highlighter-rouge">f_last_hmode</code> and
+<code class="highlighter-rouge">f_last_vmode</code>?  Why not just use the <code class="highlighter-rouge">$past()</code> operator?  Even better, the
+<code class="highlighter-rouge">$stable()</code> operator, short hand for <code class="highlighter-rouge">X == $past(X)</code>, would perfectly describe
+our situation.  Why not just say instead,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(($</span><span class="nb">stable</span><span class="p">(</span><span class="n">f_hmode</span><span class="p">))</span><span class="o">&amp;&amp;</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">f_vmode</span><span class="p">)))</span><span class="o">;</span></code></pre></figure>
+
+<p>The answer is subtle, and reveals a bit about how
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a> works.
+The <code class="highlighter-rouge">$past(X)</code> operator, though, requires
+a clock.  Because of that, it isn’t evaluated until the next clock edge.
+(This is why assertion failures for clocked blocks appear at the penultimate
+clock edge.)</p>
+
+<p>Where this becomes a problem is when the design fails at the final clock
+edge, because the assumption hasn’t taken effect yet.  By creating our own
+version of <code class="highlighter-rouge">$stable()</code> above using <code class="highlighter-rouge">f_last_hmode</code> and <code class="highlighter-rouge">f_last_vmode</code>, we can
+force the mode to be stable on the last cycle–even before the rising edge
+would evaluate a <code class="highlighter-rouge">$stable(X)</code> operator.</p>
+
+<h2 id="the-test-pattern-generator">The Test Pattern Generator</h2>
+
+<table align="center" style="float: right"><caption>Fig 13: Calculating a best color</caption><tr><td><img src="/img/llvga-srcmux.svg" alt="" width="360" /></td></tr></table>
+
+<p>Let’s now turn our attention to creating the test pattern.  This
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">generator</a>
+works by calculating a color for each line, and then selecting the right
+color from among all of the line colors as shown in Fig. 13 on the right.</p>
+
+<p>Well, not quite.  Selecting from among 480+ line colors might be more logic
+than I’d want to use for a simple <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">test pattern
+generator</a>.
+Here’s the secret: colors are generated in bands.</p>
+
+<p>What may not be obvious is that the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">test pattern
+generator</a>
+segments the
+screen into 16x16 sections.  Determining what color to generate is mostly
+just a matter of determining which 16x16 location the current pixel is within.
+Note that these may not have been the proportions of the <a href="https://en.wikipedia.org/wiki/Test_card">original test
+cards</a>
+from which these images are (loosely) drawn–but they make the math easy for us
+and so we use them here.</p>
+
+<p>Calculating the section at issue comes back to the same issue of counters
+again.  The <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">test pattern
+generator</a>
+uses one counter for horizontal position, and another for vertical–just like
+the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/llvga.v">low-level
+controller</a>
+we just examined above.</p>
+
+<p>Let’s start by following the horizontal counter, <code class="highlighter-rouge">hpos</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">i_reset</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">i_newline</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">hbar</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">hedge</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mh">4'h0</span><span class="o">,</span> <span class="n">i_width</span><span class="p">[(</span><span class="n">HW</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">4</span><span class="p">]</span> <span class="o">};</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_rd</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">hpos</span> <span class="o">&lt;=</span> <span class="n">hpos</span> <span class="o">+</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">&gt;=</span> <span class="n">hedge</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">hbar</span> <span class="o">&lt;=</span> <span class="n">hbar</span> <span class="o">+</span> <span class="mb">1'b1</span><span class="o">;</span>
+			<span class="n">hedge</span> <span class="o">&lt;=</span> <span class="n">hedge</span> <span class="o">+</span> <span class="o">{</span> <span class="mh">4'h0</span><span class="o">,</span> <span class="n">i_width</span><span class="p">[(</span><span class="n">HW</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">4</span><span class="p">]</span> <span class="o">};</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>On every new line, this counter resets to zero.  Further, on every valid
+pixel, the counter moves forward.  There’s no checking whether or not the
+counter has reached the full width, since that is done via the <code class="highlighter-rouge">i_newline</code>
+flag.</p>
+
+<p>What may be curious, though, are the two values <code class="highlighter-rouge">hbar</code> and <code class="highlighter-rouge">hedge</code>.
+These variables are associated with dividing the screen into sixteen horizontal
+regions.  Specifically, the idea is that <code class="highlighter-rouge">hbar</code> is the current horizontal pixel
+location times 16 and divided by the width.</p>
+
+<p>The problem is division within an <a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a> is hard.  How can it be avoided?</p>
+
+<p>The first step towards avoiding this is to divide the width by sixteen.
+This is easily done by right shifting the screen width by four.  We can
+then count bins across the screen, where <code class="highlighter-rouge">hedge</code> is the end of the next bin.</p>
+
+<p>If you look at Fig. 14 below, you can see how well our division matched
+the screen.</p>
+
+<table align="center" style="float: center"><caption>Fig. 14: Dividing the image width into 16</caption><tr><td><img src="/img/llvga-testhdiva.svg" alt="" width="480" /></td></tr></table>
+
+<p>We can now calculate the colors for the long top bars using a basic case
+statment.  If we are in the first position, output a black, otherwise if
+we are in the second position, etc.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">case</span><span class="p">(</span><span class="n">hbar</span><span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span>
+	<span class="mh">4'h0</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h1</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_white</span><span class="o">;</span>
+	<span class="mh">4'h2</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_white</span><span class="o">;</span>
+	<span class="mh">4'h3</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_yellow</span><span class="o">;</span>
+	<span class="mh">4'h4</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_yellow</span><span class="o">;</span>
+	<span class="mh">4'h5</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_cyan</span><span class="o">;</span>
+	<span class="mh">4'h6</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_cyan</span><span class="o">;</span>
+	<span class="mh">4'h7</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_green</span><span class="o">;</span>
+	<span class="mh">4'h8</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_green</span><span class="o">;</span>
+	<span class="mh">4'h9</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_magenta</span><span class="o">;</span>
+	<span class="mh">4'ha</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_magenta</span><span class="o">;</span>
+	<span class="mh">4'hb</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_red</span><span class="o">;</span>
+	<span class="mh">4'hc</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_red</span><span class="o">;</span>
+	<span class="mh">4'hd</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_blue</span><span class="o">;</span>
+	<span class="mh">4'he</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">mid_blue</span><span class="o">;</span>
+	<span class="mh">4'hf</span><span class="o">:</span> <span class="n">topbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>The actual colors are defined as constants earlier in the file.</p>
+
+<p>After the main bars at the top,
+the alternate colored bars beneath them and lining up with them,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">case</span><span class="p">(</span><span class="n">hbar</span><span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span>
+	<span class="mh">4'h0</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h1</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_blue</span><span class="o">;</span>
+	<span class="mh">4'h2</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_blue</span><span class="o">;</span>
+	<span class="mh">4'h3</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h4</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h5</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_magenta</span><span class="o">;</span>
+	<span class="mh">4'h6</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_magenta</span><span class="o">;</span>
+	<span class="mh">4'h7</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h8</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h9</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_cyan</span><span class="o">;</span>
+	<span class="mh">4'ha</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_cyan</span><span class="o">;</span>
+	<span class="mh">4'hb</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'hc</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'hd</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_white</span><span class="o">;</span>
+	<span class="mh">4'he</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">mid_white</span><span class="o">;</span>
+	<span class="mh">4'hf</span><span class="o">:</span> <span class="n">midbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>as well as the thicker and wider bars underneath those.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">case</span><span class="p">(</span><span class="n">hbar</span><span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span>
+	<span class="mh">4'h0</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h1</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">purplish_blue</span><span class="o">;</span>
+	<span class="mh">4'h2</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">purplish_blue</span><span class="o">;</span>
+	<span class="mh">4'h3</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">purplish_blue</span><span class="o">;</span>
+	<span class="mh">4'h4</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span>	<span class="n">white</span><span class="o">;</span>
+	<span class="mh">4'h5</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">white</span><span class="o">;</span>
+	<span class="mh">4'h6</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">white</span><span class="o">;</span>
+	<span class="mh">4'h7</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">purple</span><span class="o">;</span>
+	<span class="mh">4'h8</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">purple</span><span class="o">;</span>
+	<span class="mh">4'h9</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">purple</span><span class="o">;</span>
+	<span class="mh">4'ha</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">darkest_gray</span><span class="o">;</span>
+	<span class="mh">4'hb</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'hc</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">dark_gray</span><span class="o">;</span>
+	<span class="mh">4'hd</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">darkest_gray</span><span class="o">;</span>
+	<span class="mh">4'he</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'hf</span><span class="o">:</span> <span class="n">fatbar</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>The logic for all three sections is identical at this point.</p>
+
+<p>You may also wish to note that, just like we did with the ALU, we are
+calculating color bars even when we’ll be outputting the color from a
+different bar.  We’ll do a downselect in a moment to get the right color
+for each row.</p>
+
+<p>Indeed, when it comes to generating row information, the logic is very
+similar to the horizontal logic above.  We divide the screen by sixteen,
+and keep track of which sixteenth of the screen we are within at any
+given time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>	<span class="n">dline</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">i_reset</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">i_newframe</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">i_newline</span><span class="p">))</span>
+		<span class="n">dline</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_rd</span><span class="p">)</span>
+		<span class="n">dline</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">i_reset</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">i_newframe</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="n">ypos</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">yline</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">yedge</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mh">4'h0</span><span class="o">,</span> <span class="n">i_height</span><span class="p">[(</span><span class="n">VW</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">4</span><span class="p">]</span> <span class="o">};</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_newline</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">ypos</span> <span class="o">&lt;=</span> <span class="n">ypos</span> <span class="o">+</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="n">VW</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">{</span><span class="mh">1'h0</span><span class="o">}},</span> <span class="n">dline</span> <span class="o">};</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">ypos</span> <span class="o">&gt;=</span> <span class="n">yedge</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">yline</span> <span class="o">&lt;=</span> <span class="n">yline</span> <span class="o">+</span> <span class="mb">1'b1</span><span class="o">;</span>
+			<span class="n">yedge</span> <span class="o">&lt;=</span> <span class="n">yedge</span> <span class="o">+</span> <span class="o">{</span> <span class="mh">4'h0</span><span class="o">,</span> <span class="n">i_height</span><span class="p">[(</span><span class="n">VW</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">4</span><span class="p">]</span> <span class="o">};</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>The biggest difference between this logic and the horizontal logic is the
+<code class="highlighter-rouge">dline</code> item.  This is used to keep the <code class="highlighter-rouge">i_newline</code> signals following the
+<code class="highlighter-rouge">i_newframe</code>, but before the first line of the image, from adjusting our
+counter.  Perhaps you’ll recall from Fig. 12 above that the horizontal sync’s,
+and so the <code class="highlighter-rouge">o_newline</code> signal, continued even during the vertical blanking
+period.  <code class="highlighter-rouge">dline</code> above helps us avoid counting lines during this period.</p>
+
+<p>You can see how well we did this in Fig. 15 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 15: Dividing the image vertically into 16 parts</caption><tr><td><img src="/img/llvga-testvdiv.svg" alt="" width="360" /></td></tr></table>
+
+<p>We can then determine the final outgoing pixel by selecting on which sixteenth
+of the image vertically we are on.  This is captured by the <code class="highlighter-rouge">yline</code> value
+we just calculated above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">case</span><span class="p">(</span><span class="n">yline</span><span class="p">)</span>
+	<span class="mh">4'h0</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'h1</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span> <span class="c1">// Long top bar
+</span>	<span class="mh">4'h2</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span>
+	<span class="mh">4'h3</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span>
+	<span class="mh">4'h4</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span>
+	<span class="mh">4'h5</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span>
+	<span class="mh">4'h6</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span>
+	<span class="mh">4'h7</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span>
+	<span class="mh">4'h8</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">topbar</span><span class="o">;</span>
+	<span class="mh">4'h9</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">midbar</span><span class="o">;</span> <span class="c1">// Narrow mid bar
+</span>	<span class="mh">4'ha</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">fatbar</span><span class="o">;</span> <span class="c1">// Thick/wide bars
+</span>	<span class="mh">4'hb</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">fatbar</span><span class="o">;</span>
+	<span class="mh">4'hc</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">fatbar</span><span class="o">;</span>
+	<span class="mh">4'hd</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="mh">4'he</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">gradient</span><span class="o">;</span> <span class="c1">// Gradient line
+</span>	<span class="mh">4'hf</span><span class="o">:</span> <span class="n">pattern</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>As a final step, we place a white border around our image.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_newline</span><span class="p">)</span>
+		<span class="n">o_pixel</span> <span class="o">&lt;=</span> <span class="n">white</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_rd</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">hpos</span> <span class="o">==</span> <span class="n">i_width</span><span class="o">-</span><span class="mi">12'd3</span><span class="p">)</span>
+			<span class="n">o_pixel</span> <span class="o">&lt;=</span> <span class="n">white</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">ypos</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">ypos</span> <span class="o">==</span> <span class="n">i_height</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+			<span class="n">o_pixel</span> <span class="o">&lt;=</span> <span class="n">white</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">o_pixel</span> <span class="o">&lt;=</span> <span class="n">pattern</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That just about explains everything!  The only thing we’ve left out is the
+gradient sections.</p>
+
+<p>The gradient sections were a bit more challenging.  To do them properly, the
+image needed to be fully divided, so that a variable <code class="highlighter-rouge">hfrac</code> would smoothly
+go from zero to overflow as it crossed from one edge of the image to another.
+This means that we need to add to <code class="highlighter-rouge">hfrac</code> a value equal to one divided by the
+image width on every clock tick.  Well call this the step size, <code class="highlighter-rouge">h_step</code>.</p>
+
+<p>If we knew what <code class="highlighter-rouge">h_step</code> was, the logic would be as simple as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">i_reset</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">i_newline</span><span class="p">))</span>
+		<span class="n">hfrac</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_rd</span><span class="p">)</span>
+		<span class="n">hfrac</span> <span class="o">&lt;=</span> <span class="n">hfrac</span> <span class="o">+</span> <span class="n">h_step</span><span class="o">;</span></code></pre></figure>
+
+<p>If <code class="highlighter-rouge">hfrac</code> is <code class="highlighter-rouge">FRACB</code> bits in width, then <code class="highlighter-rouge">h_step</code> needs to be
+set to <code class="highlighter-rouge">2^FRACB / width</code>.</p>
+
+<p>Ouch!  Divides are hard in digital logic.  Do we really have to do a divide?</p>
+
+<p>Can we cheat instead?  In this case, we certainly can!</p>
+
+<p>Let’s check at the end of every line how close we came.  If we went too far,
+then let’s lower <code class="highlighter-rouge">h_step</code>, otherwise if <code class="highlighter-rouge">hfrac</code> didn’t go far enough, we’ll
+increase <code class="highlighter-rouge">h_step</code>.  It’s a basic control loop solution, and it will take
+roughly <code class="highlighter-rouge">2^FRACB/width</code> lines to converge (remember, there are <code class="highlighter-rouge">FRACB</code> bits
+in our <code class="highlighter-rouge">hfrac</code> and <code class="highlighter-rouge">h_step</code>.  In other words, we’ll converge within about a
+hundred lines for 640x480 resolution, or about 64 lines for a 1280x1024
+resolution..  This is usually enough to hide the fact that the divide hasn’t
+converged until the time that the value is needed.</p>
+
+<table align="center" style="float: none"><caption>Fig 16: Dividing the image horizontally in 16</caption><tr><td><img src="/img/llvga-testhdivb.svg" alt="" width="480" /></td></tr></table>
+
+<p>So, here’s the code for the divide:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">i_reset</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">i_width</span> <span class="o">!=</span> <span class="n">last_width</span><span class="p">))</span>
+		<span class="c1">// Start over if the width changes
+</span>		<span class="n">h_step</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">i_newline</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">hfrac</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="c1">// On the newline, our hfrac value is whatever it ended up
+</span>		<span class="c1">// getting to at the end of the last line
+</span>		<span class="c1">//
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">hfrac</span> <span class="o">&lt;</span> <span class="o">{</span><span class="p">(</span><span class="n">FRACB</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b1</span><span class="o">}}</span> <span class="o">-</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="n">HW</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}},</span> <span class="n">i_width</span> <span class="o">}</span><span class="p">)</span>
+			<span class="c1">// If we didn't get far enough to the other side,
+</span>			<span class="c1">// go faster next time.
+</span>			<span class="n">h_step</span> <span class="o">&lt;=</span> <span class="n">h_step</span> <span class="o">+</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">hfrac</span> <span class="o">&lt;</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="n">HW</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}},</span> <span class="n">i_width</span> <span class="o">}</span><span class="p">)</span>
+			<span class="c1">// If we went too far, and so wrapped around
+</span>			<span class="c1">// then don't go as far next time
+</span>			<span class="n">h_step</span> <span class="o">&lt;=</span> <span class="n">h_step</span> <span class="o">-</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Notice how we just increment or decrement <code class="highlighter-rouge">h_step</code> based upon how close
+we got to the right answer at the end of the line.</p>
+
+<p>Now that we have this fractional counter that wraps at the line width,
+we can calculate gradient values for our gradient sections.  We’ll set the
+output (again) depending upon which sixteenth of the horizontal we are in.
+Only this time, we’ll use the top four bits of this fractional counter
+to determine the section.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_pixclk</span><span class="p">)</span>
+	<span class="k">case</span><span class="p">(</span><span class="n">hfrac</span><span class="p">[</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">4</span><span class="p">])</span>
+	<span class="mh">4'h0</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span></code></pre></figure>
+
+<p>Once you get past this <code class="highlighter-rouge">FRACB-4</code> bit, everything should be incrementing
+nicely from the left of the interval to the right.</p>
+
+<p>Our first actual section is red.  For this color, we want red pixels ranging
+from zero to maximum, and then no blue or grean.  (<code class="highlighter-rouge">mid_off</code> is an <code class="highlighter-rouge">8'h0</code>).
+During this section, we also know that <code class="highlighter-rouge">hfrac[FRACB-5:0]</code> will be slowly
+counting from zero to overflow as well.  If we add a higher order bit,
+we can get this gradual counter to gently cross two intervals.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Red
+</span>	<span class="c1">// First gradient starts with a 1'b0
+</span>	<span class="mh">4'h1</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">3</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span><span class="o">,</span> <span class="o">{</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="n">mid_off</span><span class="o">}}</span> <span class="o">};</span>
+	<span class="c1">// Second repeats, but starting with a 1'b1
+</span>	<span class="mh">4'h2</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b1</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">3</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span><span class="o">,</span> <span class="o">{</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="n">mid_off</span><span class="o">}}</span> <span class="o">};</span></code></pre></figure>
+
+<p>(<code class="highlighter-rouge">BPC</code> here is the number of “bits-per-pixel”)</p>
+
+<p>A black section, one sixteenth width in length, separates the gradient
+sections.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mh">4'h3</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span></code></pre></figure>
+
+<p>Green is roughly the same as red, save only that the first color (red) and the
+last color (blue) are set to zero.  Blue is set similarly.  Indeed, if you
+understand how we did red above, these last two colors are really just the
+same thing repeated for a different color.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Green
+</span>	<span class="mh">4'h4</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">mid_off</span><span class="o">,</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">3</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span><span class="o">,</span> <span class="n">mid_off</span> <span class="o">};</span>
+	<span class="mh">4'h5</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">mid_off</span><span class="o">,</span> <span class="mb">1'b1</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">3</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span><span class="o">,</span> <span class="n">mid_off</span> <span class="o">};</span>
+	<span class="mh">4'h6</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="c1">// Blue
+</span>	<span class="mh">4'h7</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="n">mid_off</span><span class="o">}},</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">3</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span> <span class="o">};</span>
+	<span class="mh">4'h8</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="n">mid_off</span><span class="o">}},</span> <span class="mb">1'b1</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">3</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span> <span class="o">};</span>
+	<span class="mh">4'h9</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span></code></pre></figure>
+
+<p>The final section is the gray gradient.  This one follows the same logic,
+only we wish to spread it across four regions instead of two.  Hence, we’ll
+force the top two bits to increment across four steps, and use what’s
+left of the fractional counter to gradually increment.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Gray
+</span>	<span class="mh">4'ha</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">{</span> <span class="mb">2'b00</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">2</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span> <span class="o">}};</span>
+	<span class="mh">4'hb</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">{</span> <span class="mb">2'b01</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">2</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span> <span class="o">}};</span>
+	<span class="mh">4'hc</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">{</span> <span class="mb">2'b10</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">2</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span> <span class="o">}};</span>
+	<span class="mh">4'hd</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">{</span> <span class="mb">2'b11</span><span class="o">,</span> <span class="n">hfrac</span><span class="p">[(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">5</span><span class="p">)</span><span class="o">:</span><span class="p">(</span><span class="n">FRACB</span><span class="o">-</span><span class="mi">2</span><span class="o">-</span><span class="n">BPC</span><span class="p">)]</span> <span class="o">}};</span>
+	<span class="mh">4'he</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="c1">//
+</span>	<span class="mh">4'hf</span><span class="o">:</span> <span class="n">gradient</span> <span class="o">&lt;=</span> <span class="n">black</span><span class="o">;</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>That’s it for the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vgatestsrc.v">test
+design</a>.
+Did you notice the format of the logic?
+In general, everything but the <code class="highlighter-rouge">y</code> cordinate based variables reset on an
+<code class="highlighter-rouge">i_newline</code>.  Colors were then chosen for each horizontal region, and then a
+(nearly final) color choice was made by examining which vertical region
+we were in.  The last step was to add a white border around the screen,
+just to make certain we have our timing right.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Success with video really depends upon your ability to debug your logic.
+The <a href="https://github.com/ZipCPU/vgasim">VGA simulator</a> can make that easier,
+by allowing you to “see” how your logic actually creates images.  Not only
+that, but because it is a simulation, you can get access to every wire
+and every flip-flop within it.  Want to see how fast the division
+converges?  Want to see what the various video signals look like in
+practice?  Or stop halt a simulation on an error?  The <a href="https://github.com/ZipCPU/vgasim">VGA
+simulator</a> can do all that and more.</p>
+
+<p>We also walked through several pieces of a demonstration video design.
+We discussed the generation of the various video signals, and even
+walked through how they could be used to create a video test-signal.
+That said, in many ways we didn’t walk through the critical piece of code
+required for any <a href="https://en.wikipedia.org/wiki/Framebuffer">frame buffer</a> based
+design–<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/imgfifo.v">the code</a>
+that reads from the 
+<a href="https://en.wikipedia.org/wiki/Framebuffer">frame buffer</a> in memory
+and sends a valid pixel to our low level controller.  This, however,
+we’ll need to leave for next time.</p>
+
+<p>I know that some have said that
+<a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a> is an outdated standard.
+Everything is moving to <a href="https://en.wikipedia.org/wiki/HDMI">HDMI</a> and beyond.
+Unlike <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a>,
+<a href="https://en.wikipedia.org/wiki/HDMI">HDMI</a> is a bit more difficult
+to generate and work with.  There are more steps to it and more protocol
+missteps that can be made.  That said, when I get to the point where I’m ready
+to post the HDMI simulator, you’ll see that it isn’t all that much more
+complicated than the <a href="https://en.wikipedia.org/wiki/VGA_connector">VGA</a>
+simulator we’ve just looked through.  Indeed, the same could be
+said of the MIPI based CSI-2 simulator I have …</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>For now we see through a glass, darkly; but then face to face: now I know in part; but then shall I know even as also I am known. (1Cor 13:12)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
