@@ -1,0 +1,1092 @@
+\newif\ifanswers\answerstrue
+\documentclass[style=gt,mode=present,paper=screen]{powerdot}
+\pdsetup{%
+	logohook=tl,logopos={0.02\slideheight,0.98\slideheight},
+	logocmd={\includegraphics[height=0.09\slideheight]{gfx/GT.eps}}
+}
+\definecolor{dkblue}{rgb}{0,0,0.6}
+% \definecolor{dkblue}{rgb}{0,0,0.85}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=dkblue}
+\title{8. Using Block RAM}
+\author{Dan Gisselquist, Ph.D.}
+\newcommand{\sbycmd}[1]{$[$#1$]$}
+\date{\today}
+%
+\usepackage{fvcharts}
+\usepackage{zshell}
+\usepackage[normalem]{ulem}
+\usepackage{tikz-timing}
+\usetikztiminglibrary[rising arrows]{clockarrows}
+\usepackage{enumitem}
+\definecolor{waveletgray}{gray}{0.85}
+\newcommand{\answer}[1]{\textcolor{blue}{#1}}
+\include{title}
+\newcommand{\zhref}[2]{\href{#1}{\textcolor{dkblue}{#2}}}
+\begin{document}
+%
+\lsntitle{8. Using Block RAM}
+%
+\begin{slide}{Lesson Overview}
+Three types of FPGA memory
+\begin{itemize}
+\item Flip-flops
+\item Distributed RAM
+\item Block RAM
+\end{itemize}
+Block RAM is special within an FPGA
+\begin{itemize}
+\item It is fast and abundant
+\item Requires one clock to access
+\item Can only be initialized at startup
+\item Yet there are some logic requirements to use it
+\end{itemize}
+
+Objectives
+\begin{itemize}
+\item Be able to create block RAM resources
+\item Understand the requirements of block RAMs
+\item Learn how to verify a component containing a block RAM
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Lesson Overview}
+Let's also take a quick look at synchronous resets
+\begin{itemize}
+\item Learn the two types of resets
+\item Reset logic follows one of two forms
+\end{itemize}
+
+Extra Objectives
+\begin{itemize}
+\item Know the two forms of synchronous reset logic
+\item Know how to verify a design with a synchronous reset
+\end{itemize}
+\end{slide}
+%
+%
+%
+\begin{slide}[method=direct]{Design Goal}
+Let's rebuild our hello world design, but make the message longer
+\begin{itemize}
+\item We'll use a memory to capture our longer message
+\includegraphics[width=0.65\slidewidth]{gfx/memtx-psone.eps}
+\item Then read from this memory, and \ldots
+\item Transmit it out the serial port
+\end{itemize}
+\end{slide}
+%
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Goal Design}
+Here's a basic block diagram
+\begin{center}
+{\def\svgwidth{0.5\slidewidth}\input{gfx/memtx.tex}}
+\end{center}
+\begin{itemize}
+\item We'll re-use the serial port transmitter, \binline{txuart.v}
+\item We'll capture our message in a block RAM, and \ldots
+\item We'll use a top level module to coordinate it all, \binline{memtx.v}
+\begin{itemize}
+	\item We'll infer the block RAM within our \binline{memtx.v} design
+\end{itemize}
+\end{itemize}
+But what is on-chip RAM and how shall we declare and use it?
+\end{slide}
+%
+%
+%
+\begin{slide}[toc={On-chip RAM},method=direct]{On-Chip Memory}
+There's a special type of declaration for memory in Verilog:
+\begin{zformal}
+reg	[W-1:0]	ram	[0:MEMLN-1];
+\end{zformal}
+\begin{itemize}
+\item This defines a memory of \zinline{MEMLN} elements,
+	\begin{itemize}
+	\item[] where each element is \zinline{W} bits long
+	\end{itemize}
+\item Verilog allows \zinline{MEMLN} to be anything
+\item Practically, \zinline{MEMLN} must only ever be a power of two, $2^N$,
+	in order to avoid simulation/hardware mismatch
+\item I tend to define my memories as
+\begin{zformal}
+reg	[W-1:0]	ram	[0:(1<<LGMEMSZ)-1];
+\end{zformal}
+	\begin{itemize}
+	\item This forces the power of two requirement
+	\item \zinline{LGMEMSZ} can also be used as the width of the address
+	\end{itemize}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Declaring On-Chip Memory}
+There's a special type of declaration for memory in Verilog:
+\begin{zformal}
+reg	[W-1:0]	ram	[0:(1<<LGMEMSZ)-1];
+\end{zformal}
+The synthesis tool will decide how to implement this
+\begin{itemize}
+\item Flip-Flops
+	\begin{itemize}
+	\item Useful for small numbers of bits
+	\item Very inefficient for implementing memory on an FPGA
+	\end{itemize}
+\item Distributed RAM
+	\begin{itemize}
+	\item Useful for small, localized RAM needs
+	\item Typically allocated one-bit at a time for memory sizes of $2^6$
+		elements (Ex. Xilinx's SLICEM)
+	\end{itemize}
+\item Block RAM
+	\begin{itemize}
+	\item Useful for larger and wider RAM needs
+	\item Using block RAM requires that you follow special rules
+	\end{itemize}
+\end{itemize}
+\end{slide}
+%
+%
+\newcommand{\ruleone}{Any RAM access should be contained in its own always block}
+\newcommand{\ruletwo}{RAM can only be initialized once}
+\newcommand{\rulethree}{Don't put a RAM access in a cascaded if}
+\newcommand{\rulefour}{Don't put a RAM in a port list}
+\newcommand{\rulefive}{Don't put a RAM in a block with other things}
+%
+%
+%
+\begin{slide}[method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\begin{zformal}
+always @(posedge i_clk)
+if (write)
+	ram[write_addr] <= write_value;
+
+always @(posedge i_clk)
+if (read)
+	read_value <= ram[read_addr];
+\end{zformal}
+\end{enumerate}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\begin{zformal}
+always @(posedge i_clk)
+if (i_reset)
+begin
+	// This is illegal!  Block
+	// RAM cannot be re-initialized
+	for(i=0; i<ramsize; i=i+1)
+		ram[i] <= 0;
+end else if (i_stb)
+	ram[addr] <= value;
+\end{zformal}
+	This is often an unexpected frustration for beginners.
+\end{enumerate}\begin{itemize}
+	\item The solution is to rewrite your algorithm so you don't
+		need to do this
+\end{itemize}\end{slide}
+
+\begin{slide}[bm=,toc=,method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\item \rulethree
+\begin{zformal}
+always @(posedge i_clk)
+if (A)
+	value <= // something;
+else if (B)
+	value <= // something else;
+else if (C)
+	// Don't do this either!
+	value <= ram[addr];
+else if (D)
+	// logic continues ...
+\end{zformal}
+Such logic often ends up being replaced by flip-flops
+\end{enumerate}\end{slide}
+
+\begin{slide}[bm=,toc=,method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\item \rulethree
+\item \rulefour
+\begin{zformal}
+// Don't do this
+output reg [W-1:0] ram [0:(1<<LGMEMSZ)-1];
+\end{zformal}
+\end{enumerate}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\item \rulethree
+\item \rulefour
+\item \rulefive
+\begin{zformal}
+// Many synthesizers will turn this into FF's
+always @(posedge i_clk)
+if (write_enable)
+begin
+	B <= // some logic;
+	C <= // something else;
+	ram[addr] <= value;
+end
+\end{zformal}
+\end{enumerate}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\item \rulethree
+\item \rulefour
+\item \rulefive
+\end{enumerate}
+Some synthesizers/hardware allow byte enables
+\begin{zformal}
+always @(posedge i_clk)
+if (write_enable)
+begin
+	if (en[1])
+		ram[addr][15:8] <= value[15:8];
+	if (en[0])
+		ram[addr][ 7:0] <= value[7:0];
+end
+\end{zformal}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\item \rulethree
+\item \rulefour
+\item \rulefive
+\end{enumerate}
+Some synthesizers/hardware allow write-through
+\begin{itemize}
+\item Where the value being written may be read on the same clock
+\begin{zformal}
+always @(posedge i_clk)
+begin
+	if (write_enable)
+		mem[addr] = wvalue;
+	rvalue = mem[addr];
+end // Note the non-blocking notation!
+\end{zformal}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\item \rulethree
+\item \rulefour
+\item \rulefive
+\end{enumerate}
+Some synthesizers/hardware allow write-through
+\begin{itemize}
+\item Where the value being written may be read on the same clock
+	\begin{itemize}
+	\item This would be ideal for a CPU register file
+	\end{itemize}
+\item It's not uniformly supported across our chosen tools/vendors
+\item Know your hardware, synthesizer, and simulator
+\item We'll pretend this feature does not exist in this tutorial
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=file]{Block RAM Rules}
+If you want a block RAM, you need to follow certain rules:
+\begin{enumerate}
+\item \ruleone
+\item \ruletwo
+\item \rulethree
+\item \rulefour
+\item \rulefive
+\end{enumerate}
+If you fail to follow these rules,
+\begin{itemize}
+\item[] You might get something other than block RAM, or
+\item[] You're design might fail to synthesize entirely
+\end{itemize}
+This is a common reason for synthesis failure
+\pause
+\begin{itemize}
+\item Always keep an eye on your RAM and LUT usages
+\item Something out of bounds may be caused by this
+\end{itemize}
+If you suspect this is a problem, break your design into smaller and smaller
+components until you find out what's going on 
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Distributed RAM Rules}
+When is distributed RAM used?
+\begin{itemize}
+\item If the memory size is small (32 elements or less)
+\item If the memory is read without a clock
+\begin{zformal}
+always @(*)
+	rvalue = mem[addr];
+// Or equivalently
+assign	rvalue = mem[addr];
+\end{zformal}
+\item Obviously, only if the device has distributed RAM
+	\begin{itemize}
+	\item iCE40 devices have no distributed RAM
+	\end{itemize}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Initializing Memory}
+How might we initialize our RAM?
+\begin{itemize}
+\item We could  use assignments within an initial block
+\begin{zformal}
+reg [31:0]	ram	[0:8191];
+
+integer	k;
+initial	begin
+	for(k=0; k <8192; k=k+1)
+		ram[k] = 0;
+	// We can also set specific values
+	ram[5] = 7;
+	ram[8190] = 5;
+	// etc.
+end
+\end{zformal}
+\item When using Xilinx's ISE, this is the only way I've managed
+	to initialize RAM
+\end{itemize}
+\end{slide}
+%
+\begin{slide}[bm=,toc=,method=direct]{Initializing Memory}
+How might we initialize our RAM?
+\begin{itemize}
+\item We could  use assignments within an initial block
+\begin{itemize}
+\item Verilator (currently) complains about non-blocking
+	\zinline{initial} assignments
+\begin{zformal}
+// This will generate a Verilator warning
+initial	ram[8190] <= 5;
+\end{zformal}
+	\item Yosys (currently) complains about blocking \zinline{initial}
+		assignments
+\begin{zformal}
+// This will generate a Yosys warning
+initial	ram[8190] = 5;
+\end{zformal}
+\end{itemize}
+\end{itemize}
+If you don't redefine any values, both will still work
+\begin{itemize}
+	\item In this case, you may ignore the warnings
+\end{itemize}
+\end{slide}
+%
+\begin{slide}[bm=,toc=,method=direct]{Initializing Memory}
+How might we initialize our RAM?
+\begin{itemize}
+\item We could  use a \zinline{$readmemh} function call (recommended)
+\begin{zformal}
+reg [31:0]	ram	[0:8191];
+initial	$readmemh(FILE_NAME, ram);
+\end{zformal}
+\item Each line of the file \zinline{FILE_NAME} has format \cppinline{%0*x}
+\begin{zformal}
+012345678
+....
+\end{zformal}
+\item Separate each RAM word by white space
+\item Number of digits is based upon the width of the RAM word
+\begin{itemize}
+	\item Our example shows a 32-bit word
+\end{itemize}
+\item Xilinx's ISE has a known bug that prevents \zinline{$readmemh} from
+	working.  Vivado doesn't have this bug.
+\end{itemize}
+\end{slide}
+%
+\begin{slide}[bm=,toc=,method=direct]{Initializing Memory}
+How might we initialize our RAM?
+\begin{itemize}
+\item We could  use a \zinline{$readmemh} function call (recommended)
+\begin{zformal}
+reg [31:0]	ram	[0:8191];
+initial	$readmemh(FILE_NAME, ram);
+\end{zformal}
+\item Alternatively, lines can begin with (hexadecimal) addresses
+\begin{zformal}
+@000000e0 2c 20 61 20 6e 65 77 20 6e 61 74 ...
+@000000f0 63 6f 6e 63 65 69 76 65 64 20 69 ...
+....
+\end{zformal}
+\begin{itemize}
+	\item This example shows a series of 8-bit characters
+	\item Sixteen per line
+\end{itemize}
+\item This form makes it possible to skip elements
+\item We'll build one of these files for our project later
+\end{itemize}
+\end{slide}
+%
+\begin{slide}[bm=,toc=,method=direct]{Initializing Memory}
+How might we initialize our RAM?
+\begin{itemize}
+\item We could  use a \zinline{$readmemh} function call (recommended)
+\begin{zformal}
+reg [31:0]	ram	[0:8191];
+initial	$readmemh(FILE_NAME, ram);
+\end{zformal}
+\item On-chip RAM can only be initialized in an \zinline{initial} block
+\item Cannot re-initialize a block RAM in this fashion later
+	without reconfiguring (i.e. reloading) the FPGA
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[toc={Hex file},bm=,method=direct]{Generating the Hex file}
+Let's generate a hex file that we can use with \zinline{$readmemh}
+\begin{itemize}
+\item Use a C++ program
+\item We'll call this program \binline{genhex}
+\item Much of the program is boilerplate and error checking
+\item We'll skip much of this boilerplate now, and instead
+	\item[] discuss only the interesting parts
+\end{itemize}
+You can find the entire \binline{genhex} program with the course materials
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Generating the Hex file}
+Let's build our hex file
+\begin{itemize}
+\item We'll prefix each line with an address
+\begin{zCpp}
+int	linelen = 0;
+int	ch, addr = 0;
+
+fprintf(fout, "@%08x ", addr);
+linelen = 10;
+\end{zCpp}
+\end{itemize}
+\end{slide}
+%
+\begin{slide}[bm=,toc=,method=direct]{Generating the Hex file}
+Let's build our hex file
+\begin{itemize}
+\item We'll prefix each line with an address
+\item Process one character at a time
+\begin{zCpp}
+// Read one character from our file
+while((ch = fgetc(fp))!=EOF) {
+    // and process it if we read
+    // a non-empty character
+    // ...
+}
+\end{zCpp}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Generating the Hex file}
+Let's build our hex file
+\begin{itemize}
+\item We'll prefix each line with an address
+\item Process one character at a time
+\item The values out are simply hex characters
+\begin{zCpp}
+// ...
+while((ch = fgetc(fp))!=EOF) {
+	fprintf(fout, "%0*x ",
+	    (nbits+3)/4,
+	    ch & 0x0ff);
+	linelen += 3;
+	addr++;
+	// ...
+\end{zCpp}
+\item We can use \cppinline{nbits} to make the width generic
+\item In this example, we only need two hex digits each, so
+	\cppinline{nbits = 8}.
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Generating the Hex file}
+Let's build our hex file
+\begin{itemize}
+\item We'll prefix each line with an address
+\item Process one character at a time
+\item The values are just simply hex characters
+\item After 56 bytes, start a new line with a new address
+\begin{zCpp}
+while((ch = fgetc(fp))!=EOF) {
+    // ...
+    if (linelen >= 56) {
+        // New line starting with
+	// the current address
+        fprintf(fout, "\n@%08x ", addr);
+        linelen += 10;
+    }
+} fprintf(fout, "\n");
+\end{zCpp}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Generating the Hex file}
+One task remains: adding the hexfile generation to our Makefile
+\begin{itemize}
+\item Our target is ``memfile.hex''
+\item It depends upon \gmkinline{genhex}, and our text file,
+	\gmkinline{psalm.txt}
+\begin{zmake}
+memfile.hex: genhex psalm.txt
+	./genhex psalm.txt
+\end{zmake}
+\item \gmkinline{genhex} depends upon \gmkinline{genhex.cpp}, and must also be
+	built
+\begin{zmake}
+genhex: genhex.cpp
+	g++ genhex.cpp -o genhex
+\end{zmake}
+\item Don't forget to make sure \gmkinline{memfile.hex} is built before it's needed
+\end{itemize}
+Voila!  A hex file that will change anytime \gmkinline{psalm.txt} does
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Using the hexfile}
+After all that work,
+\begin{itemize}
+\item We can now declare and initialize our memory
+\end{itemize}
+\begin{zformal}
+reg	[7:0]	tx_memory	[0:2047];
+
+initial $readmemh("memfile.hex", tx_memory);
+\end{zformal}
+\end{slide}
+%
+%
+\begin{slide}[method=file]{Reset}
+There are two types of resets
+\begin{itemize}
+\item Asynchronous resets
+\begin{zformal}
+initial tx_index = 0;
+always @(posedge i_clk or negedge i_areset)
+if (i_areset)
+        tx_index <= 0;
+else begin
+        // The rest of your logic
+end
+\end{zformal}
+\item These are more complex than their synchronous counterparts
+\item Often require being asserted for many cycles, and
+\item Released on a clock edge
+\item Poor design can lead to radio interference triggering
+      an internal asynchronous reset
+\pause
+	\begin{itemize}
+	\item This is bad.  \pause We will avoid these in this tutorial
+	\end{itemize}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Reset}
+There are two types of resets
+\begin{itemize}
+\item Asynchronous resets, and
+\item Synchronous resets
+	\begin{itemize}
+	\item These are set and released on clock tick
+	\end{itemize}
+\begin{zformal}
+initial tx_index = 0;
+always @(posedge i_clk)
+if (i_reset)
+	tx_index <= 0;
+else begin
+	// The rest of your logic
+end
+\end{zformal}
+\item These are simple to build and use
+\end{itemize}
+Let's implement a synchronous reset to this design
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Synchronous Reset}
+Many designs use a synchronous reset
+\begin{itemize}
+\item Values responsive to a reset should also have an \zinline{initial} value
+\item The \zinline{initial} value and the reset value must match
+\begin{zformal}
+initial tx_index = 0;
+always @(posedge i_clk)
+if (i_reset)
+	tx_index <= 0;
+else begin
+	// The rest of your logic
+end
+\end{zformal}
+\item I like this form of a reset, but
+\item It requires that every register set by this block gets reset as well
+\end{itemize}
+The original Hello World design included no reset
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Synchronous Reset}
+Many designs use a synchronous reset
+\begin{itemize}
+\item Values responsive to a reset should also have an \zinline{initial} value
+\item An alternate form of reset needs to be used if some values need to be
+	reset within the block and others don't
+\begin{zformal}
+initial tx_index = 0;
+always @(posedge i_clk)
+begin
+	// Your logic would come
+	// first, then ...
+
+	if (i_reset)
+		// Overrides the logic above
+		tx_index <= 0;
+end
+\end{zformal}
+\item This is a more generic form, useful for all purposes
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Synchronous Reset}
+Why might you need a synchronous reset?
+\begin{itemize}
+\item Sometimes it just helps to start over
+\item Not all technologies support \zinline{initial} values
+\begin{itemize}
+	\item For example, if you want to create FPGA+ASIC support,
+	you design will need a reset
+\end{itemize}
+\item A (debounced) button can be used to create a reset
+\item Sometimes internal or external conditions will require a reset
+\begin{itemize}
+	\item Ex: An embedded CPU crash, or watchdog timer timeout
+		might cause a CPU to need to be reset
+\end{itemize}
+\end{itemize}
+Let's use a synchronous reset in our design
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Overview}
+Let's examine a design overview
+\begin{center}
+{\def\svgwidth{0.5\slidewidth}\input{gfx/memtx-logic.tex}}
+\end{center}
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Overview}
+Here's how our design is going to work
+\begin{center}
+{\def\svgwidth{0.5\slidewidth}\input{gfx/memtx-logic-1.tex}}
+\end{center}
+\begin{itemize}
+\item We'll send our message once per second
+\item A counter, \zinline{hz_counter}, will count each second
+\item When \zinline{hz_counter} is zero, \zinline{tx_restart}
+	will signal the rest of the design to start
+\end{itemize}
+This much should be fairly familiar
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Overview}
+Here's how our design is going to work
+\begin{center}
+{\def\svgwidth{0.5\slidewidth}\input{gfx/memtx-logic-2.tex}}
+\end{center}
+\begin{itemize}
+\item \zinline{tx_index} will capture our position in the message stream
+\item We'll read \zinline{tx_data} from memory, to know what to transmit
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Overview}
+Here's how our design is going to work
+\begin{center}
+{\def\svgwidth{0.47\slidewidth}\input{gfx/memtx-logic-3.tex}}
+\end{center}
+\begin{itemize}
+\item \zinline{tx_stb} will request a byte to be transmitted
+\item Once the whole message has been transmitted,
+\item \zinline{tx_stb} will deactivate until the next \zinline{tx_restart}
+\end{itemize}
+Are you ready to examine some Verilog?
+\end{slide}
+%
+%
+\begin{slide}[method=file]{Restarting}
+Here's the one-second counter, \zinline{hz_counter}
+\begin{zformal}
+// We'll start our counter just before the
+// top of the second, to give everything
+// a chance to initialize
+initial	hz_counter = 28'h16;
+always @(posedge i_clk)
+if (i_reset)
+        hz_counter <= 28'h16;
+else if (hz_counter == 0)
+        hz_counter <= CLOCK_RATE_HZ - 1'b1;
+else
+        hz_counter <= hz_counter - 1'b1;
+\end{zformal}
+\pause
+\begin{itemize}
+\item Question: What assertion does this logic require?
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Restarting}
+Once a second, we'll set \zinline{tx_restart}
+\begin{zformal}
+initial	tx_restart = 0;
+always @(posedge i_clk)
+	tx_restart <= (hz_counter == 1);
+\end{zformal}
+Do you see a formal property hiding in here?
+\begin{zformal}
+always @(*)
+	assert(tx_restart == (hz_counter == 0));
+\end{zformal}
+Practice writing assertions as you see relationships!
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Mem Address}
+We'll need an address to read from memory
+\begin{zformal}
+// Number of bytes in our message
+parameter	MSGLEN = 1600;
+
+initial	tx_index = 0;
+always @(posedge i_clk)
+if (i_reset)
+	tx_index <= 0;
+else if ((tx_stb)&&(!tx_busy))
+begin // Advance anytime a character was
+	// accepted by the serial port,
+	if (tx_index == MSGLEN-1)
+		// End of message
+		tx_index <= 0;
+	else
+		tx_index <= tx_index + 1'b1;
+end
+\end{zformal}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Reading from Memory}
+Memory reads take one clock
+\begin{zformal}
+always @(posedge i_clk)
+	tx_data <= tx_memory[tx_index];
+\end{zformal}
+Remember our rules from earlier?
+\begin{itemize}
+\item We might have also chosen to use a read enable
+\item It wasn't necessary for this design though
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{When to transmit}
+As with hello world, \zinline{tx_stb} indicates we have a character
+to transmit
+\begin{zformal}
+initial	tx_stb = 1'b0;
+always @(posedge i_clk)
+if (i_reset)
+	tx_stb <= 1'b0;
+else if (tx_restart)
+	// Start transmitting anytime
+	// tx_restart is true
+	tx_stb <= 1'b1;
+else if ((tx_stb)&&(!tx_busy)
+	    &&(tx_index >= MSGLEN-1))
+	// Stop when we get to the end
+	// of the message
+	tx_stb <= 1'b0;
+\end{zformal}
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Serial Port}
+We'll skip the serial port details here
+\begin{itemize}
+\item We built this earlier
+\item We also showed how to abstract the serial port earlier
+\item Even our simulation script is nearly identical to Hello World
+\end{itemize}
+Feel free to go back and review if you don't remember these
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Next Steps}
+That's the basics of our design!
+\begin{itemize}
+\item We've already built our hex file, so
+\item We can now move on to formal verification!
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Formal Verification}
+Formally verifying a component using memory requires:
+\begin{itemize}
+\item Assuming a constant address
+\item Asserting properties for the value at that address
+\item Usually requires examining no more than a single address
+\end{itemize}
+We can assume a constant value using the \zinline{(* anyconst *)} attribute
+\begin{zformal}
+(* anyconst *) reg [10:0] f_const_addr;
+\end{zformal}
+\begin{itemize}
+\item This allows the solver to pick any value for \zinline{f_const_addr}
+\item As long as it is constant
+\item If even one value can make your design fail,
+	\begin{itemize}
+	\item[] the solver will find it
+	\end{itemize}
+\end{itemize}
+Let's see how this works
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Formal Verification}
+Let's create a value to match our memory at
+\begin{itemize}
+\begin{zformal}
+(* anyconst *) reg [10:0] f_const_addr;
+\end{zformal}
+\item We'll call this \zinline{f_const_value}
+\begin{zformal}
+reg [7:0] f_const_value;
+always @(posedge i_clk)
+if (!f_past_valid)
+    f_const_value <= tx_memory[f_const_addr];
+else
+    assert(f_const_value
+	== tx_memory[f_const_addr]);
+\end{zformal}
+This value is constant because we are implementing a ROM
+\end{itemize}
+Now we can \zinline{assert} any properties associated with this address
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Formal Verification}
+This design need only \zinline{assert} one memory property
+\begin{zformal}
+(* anyconst *) reg [10:0] f_const_addr;
+	       reg [ 7:0] f_const_value;
+\end{zformal}
+\begin{itemize}
+\item When we transmit a value from \zinline{f_const_addr}, \ldots
+\item \zinline{assert} that it is the right value
+\begin{zformal}
+always @(posedge i_clk)
+if ((tx_stb)&&(!tx_busy)
+	    &&(tx_index == f_const_addr))
+	assert(tx_data == f_const_value);
+\end{zformal}
+\end{itemize}
+We'll come back to this memory verification approach
+  again when we discuss FIFO's
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=file]{Formal Verification}
+What other properties might we \zinline{assert}?
+\begin{itemize}
+\item That our index remains within bounds?
+\item That any time our index is within the memory bounds, \zinline{tx_stb} is high?
+\end{itemize}
+You should be familiar with these
+\begin{itemize}
+\item Let's pause to look at the reset
+\item Cover might need some attention as well
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Reset Assertions}
+Synchronous reset properties have a basic pattern
+\begin{itemize}
+\item You may (or may not) assume an initial reset
+\begin{zformal}
+always @(*)
+if (!f_past_valid)
+	assume(i_reset);
+\end{zformal}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[toc=,bm=,method=direct]{Reset Assertions}
+Synchronous reset properties have a basic pattern
+\begin{itemize}
+\item You may (or may not) assume an initial reset
+\item The \zinline{initial} value, held when \zinline{!f_past_valid}, and
+\item[] The value following a reset, i.e. when \zinline{$past(i_reset)}
+\item[] Should both be identical
+\begin{zformal}
+// Check for anything with an initial
+// or a reset value here
+always @(posedge i_clk)
+if ((!f_past_valid)||($past(i_reset)))
+begin
+	assert(hz_counter == 28'h16);
+	assert(tx_index == 0);
+	assert(tx_stb == 0);
+end
+\end{zformal}
+\item This verifies we met the rules of a synchronous reset
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[method=file]{Cover}
+Unlike our Hello World design
+\begin{itemize}
+\item We can't cover the entire message
+\begin{itemize}
+\item It's just too long
+\end{itemize}
+\item We can only cover the first several steps
+\item Let's cover the first 30 characters
+\begin{zformal}
+always @(posedge i_clk)
+	cover(tx_index == 30);
+\end{zformal}
+\end{itemize}
+We'll need to simulate the rest
+\end{slide}
+%
+%
+\begin{slide}[bm=,toc=,method=direct]{Simulation}
+Our simulation script is nearly identical to Hello World
+\begin{zCpp}
+// ...
+#include "Vmemtx.h"
+// ...
+int	main(int argc, char **argv) {
+	// ...
+	TESTB<Vmemtx>	*tb = new TESTB<Vmemtx>;
+	//
+	tb->opentrace("memtx.vcd");
+	for(unsigned clocks=0;
+		clocks < 16*2000*baudclocks;
+		 clocks++) {
+
+		tb->tick();
+		(*uart)(tb->m_core->o_uart_tx);
+	} // ...
+}
+\end{zCpp}
+\end{slide}
+%
+%
+\begin{slide}{Exercise!}
+As with all of your designs, let's:
+\begin{itemize}
+\item Formally Verify this design
+\item Make sure it works in simulation
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[method=direct]{Bonus}
+If you have hardware to work with,
+\begin{itemize}
+\item Build this design for your hardware!
+	\begin{itemize}
+	\item Be sure to compare the resource usage to Hello World
+	\end{itemize}
+\item Examine the serial port output
+	\begin{itemize}
+	\item Does your terminal require carriage returns?
+	\end{itemize}
+\item How hard would it be to change the message?
+	\begin{itemize}
+	\item Pick another message to send
+	\item I'm quite partial to the Sermon on the Mount, found in
+		Matthew 5-7
+	\item What changes would need to be made to your design to
+		support a longer message?
+	\item What's the longest message your hardware will support?
+	\begin{itemize}
+		\item Would Psalm 119 fit?
+	\end{itemize}
+	\end{itemize}
+\end{itemize}
+\end{slide}
+%
+%
+\begin{slide}[method=file]{Conclusion}
+What did we learn this lesson?
+\begin{itemize}
+\item The Rules of using Block RAM
+\item How to generate a hex file for initializing memory
+\item Two forms of synchronous reset logic
+\item How to formally verify \ldots
+	\begin{itemize}
+	\item A component that uses RAM
+	\item A synchronous reset
+	\end{itemize}
+\end{itemize}
+Now we just need to build a serial port receiver
+\pause
+\begin{itemize}
+\item That's next!
+\end{itemize}
+\end{slide}
+%
+%
+\end{document}
