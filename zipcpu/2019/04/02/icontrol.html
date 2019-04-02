@@ -1,0 +1,1457 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>The ZipCPU's Interrupt Controller</title>
+  <meta name="description" content="For those unfamiliar with the ZipCPU,it was designed from the ground up to be a simple, low logicCPU.  At every locationand opportunity, I have tried to cut ...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/zipcpu/2019/04/02/icontrol.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">The ZipCPU's Interrupt Controller</h1>
+    <p class="post-meta"><time datetime="2019-04-02T00:00:00-04:00" itemprop="datePublished">Apr 2, 2019</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>For those unfamiliar with the <a href="/about/zipcpu.html">ZipCPU</a>,
+it was designed from the ground up to be a simple, low logic
+<a href="https://en.wikipedia.org/wiki/Soft_microprocessor">CPU</a>.  At every location
+and opportunity, I have tried to cut logic from the design to make it simpler.
+One of the places where I tried to keep the design simple was the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 1: The ZipCPU Interrupt Controller</caption><tr><td><a href="/img/interrupt-controller.svg"><img src="/img/interrupt-controller.svg" alt="Multiple interrupts come in, one goes out" width="720" /></a></td></tr></table>
+
+<p>Traditionally, when a
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+receives an <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>,
+the hardware <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+logic then looks up an “<a href="https://en.wikipedia.org/wiki/Interrupt_vector_table">interrupt
+vector</a>” from a table
+located at a known location in memory.  The index to the table is given by the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> number.  This
+<a href="https://en.wikipedia.org/wiki/Interrupt_vector_table">interrupt vector</a>
+will contain the address of a software routine known as an <a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt
+handler</a>.  Once the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> reads this value
+from memory, it will then jump to that address in order to execute what is
+known as an <a href="https://en.wikipedia.org/wiki/Interrupt_handler">“Interrupt Service Routine” or
+ISR</a>.</p>
+
+<p>In a pseudo-assembly, these actions of the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> might look like:</p>
+
+<figure class="highlight"><pre><code class="language-asm" data-lang="asm">	PUSH CC	; Push the condition codes to the stack
+	PUSH PC	; Push the program counter to the stack
+	; Read from the interrupt table, in the INTN entry, the value
+	; to place into the program counter
+	LW ITBL[INTN],PC</code></pre></figure>
+
+<p>Of course, these instructions would never appear in any
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+software.  Rather, they are implied by and executed within the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> itself.</p>
+
+<table align="center" style="float: right"><caption>Fig 2: A Generic Interrupt Vector Table</caption><tr><td><img src="/img/interrupt-vectors.svg" alt="A table of function pointers at the end of memory" width="180" /></td></tr></table>
+
+<p>Depending upon the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>,
+other actions may take place as well.  The current
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+may be disabled, and some architectures will even disable all
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>.  The old
+<a href="https://en.wikipedia.org/wiki/Program_counter">program counter</a>
+is usually stored somewhere (as shown in pseudocode above), and sometimes
+there’s even a <a href="https://en.wikipedia.org/wiki/Program_counter">flag register</a>
+that needs to be stored as well (also shown in pseudocode above).  Modern
+multitasking computers may also store the <a href="https://en.wikipedia.org/wiki/Program_counter">stack
+register</a> register itself,
+and so on.  Where these registers get stored is
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+and <a href="https://en.wikipedia.org/wiki/Operating_System">Operating System (O/S)</a>
+dependent.  Older <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>s
+used to store these values in memory on the stack.  Many newer
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>s
+just place these values into special purpose registers.</p>
+
+<p>The size of the
+<a href="https://en.wikipedia.org/wiki/Interrupt_vector_table">vector table</a> itself
+is also <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+dependent.  <a href="https://en.wikipedia.org/wiki/Programmable_interrupt_controller">Some
+architectures</a>
+support 16 <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>s.  Some support
+more.  Each <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> gets its own 
+<a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt handler</a> address in
+the <a href="https://en.wikipedia.org/wiki/Interrupt_vector_table">table</a>, and as a
+result the <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+can have many <a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt service
+routines (ISRs)</a>.  This
+allows the <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> to jump
+to a routine specific to the type of
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> taking place.  Should the
+keyboard <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> trigger, for
+example, the <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+could transition straight to the software necessary for handling keyboard
+input.  Other possible <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+sources include the display, mouse,
+<a href="https://en.wikipedia.org/wiki/Direct_memory_access">DMA</a>,
+<a href="/zipcpu/2018/04/17/ziptimer.html">timer</a>,
+hard drive, SD-card, and many more.</p>
+
+<p>One fascinating fact of the <a href="https://en.wikipedia.org/wiki/Linux">Linux O/S</a>
+is that it tends to set every <a href="https://en.wikipedia.org/wiki/Interrupt_vector_table">interrupt
+address</a>
+to the same <a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt service
+routine</a>–regardless of the
+peripheral that tripped it.</p>
+
+<p>The <a href="/about/zipcpu.html">ZipCPU</a> uses a different approach,
+somewhat inspired by the <a href="https://en.wikipedia.org/wiki/Linux">Linux</a>
+approach of having only a single <a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt service
+routine</a>.</p>
+
+<p>The <a href="/about/zipcpu.html">ZipCPU</a> doesn’t look up an <a href="https://en.wikipedia.org/wiki/Interrupt_vector_table">interrupt
+address</a> from memory.
+Instead, it just clears the <a href="/zipcpu2017/08/23/cpu-pipeline.html">internal
+pipeline</a> and then
+switches from the user to the
+<a href="/zipcpu/2018/01/01/zipcpu-isa.html">supervisor</a> register
+sets.  It also has only one <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+input.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 3: ZipCPU Operating Modes</caption><tr><td><img src="/img/zipcpu-modes.svg" alt="Reset -&gt; [ supervisor -&gt; user ]*" width="360" /></td></tr></table>
+
+<p>From the software standpoint, the 
+<a href="/about/zipcpu.html">ZipCPU</a> doesn’t call the
+<a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt handler</a> directly.
+That’s not the entry point to the <a href="https://en.wikipedia.org/wiki/Interrupt_handler">interrupt
+handler</a>.  Instead, it just
+looks like the return of a special <code class="highlighter-rouge">zip_rtu()</code> function call made from
+<a href="/zipcpu/2018/01/01/zipcpu-isa.html">supervisor mode</a>.
+As a quick background, if you will recall the
+<a href="/about/zipcpu.html">ZipCPU</a> starts
+in <a href="/zipcpu/2018/01/01/zipcpu-isa.html">supervisor mode</a> upon
+any reset.  When it then hits an RTU (return to userspace)
+instruction, i.e. when the software calls the <code class="highlighter-rouge">zip_rtu()</code> function, the
+<a href="/about/zipcpu.html">ZipCPU</a>
+switches from supervisor to user mode.  It will then run instructions from the
+user register set until some time later following either a user trap
+(system call request), an exception (something went wrong, a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> for example), or an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>.  At this point in time,
+the <a href="/about/zipcpu.html">ZipCPU</a> switches to the supervisor
+register set, and continues executing instructions from there.</p>
+
+<p>This often leads to a <a href="/about/zipcpu.html">ZipCPU</a>
+supervisor program that looks something like:</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c"><span class="kt">void</span> <span class="nf">kernel_entry</span><span class="p">()</span> <span class="p">{</span>
+	<span class="c1">// ... Setup the environment
+</span>	<span class="k">while</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// Set up the interrupt controller
+</span>		<span class="n">zip_rtu</span><span class="p">();</span>
+		<span class="c1">// Read interrupt status from the controller
+</span>		<span class="n">pic</span> <span class="o">=</span> <span class="o">*</span><span class="n">_picv</span><span class="p">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">pic</span> <span class="o">&amp;</span> <span class="n">ANY_INTERRUPT</span><span class="p">)</span> <span class="p">{</span>
+			<span class="c1">// Handle any interrupt
+</span>			<span class="c1">// ....
+</span>		<span class="p">}</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">zip_ucc</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">EXCEPTION</span><span class="p">)</span> <span class="p">{</span>
+			<span class="c1">// Handle any user exceptions
+</span>			<span class="c1">// ...
+</span>		<span class="p">}</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">zip_ucc</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">CC_TRAP</span><span class="p">)</span> <span class="p">{</span>
+			<span class="c1">// Handle any user traps
+</span>			<span class="c1">// ...
+</span>		<span class="p">}</span>
+		<span class="c1">// ...
+</span>	<span class="p">}</span>
+
+	<span class="c1">// Halt the CPU if we ever exit from the loop
+</span>	<span class="n">zip_halt</span><span class="p">();</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>The problem with this approach is that the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+needs to know, once it switches to <a href="/zipcpu/2018/01/01/zipcpu-isa.html">supervisor
+mode</a>, which device
+triggered the <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>.  This is
+the purpose of the <a href="/about/zipcpu.html">ZipCPU</a>’s <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>.
+The <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt controller</a>
+also handles enabling particular
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>–something
+we’ll get to in a moment.</p>
+
+<h2 id="the-concept">The Concept</h2>
+
+<p>The basic concept of an <a href="https://en.wikipedia.org/wiki/Programmable_interrupt_controller">interrupt
+controller</a>
+is that it monitors several <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+lines or sources, and triggers an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> when any of the lines is
+high.  If we consider a generic
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> numbered <code class="highlighter-rouge">k</code>, we might
+write:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">i_interrupt_line</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>
+	<span class="n">interrupt_state</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
+
+<table align="center" style="float: right"><caption>Fig 4: Interrupt Register States</caption><tr><td><img src="/img/interrupt-bistate.svg" alt="" width="540" /></td></tr></table>
+
+<p>Of course, this isn’t quite sufficient.  We also need a way to clear this
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state once set.  We also need to insure that it starts in an idle state, and
+only triggers after the <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+has taken place, as shown in Fig. 4 on the right.</p>
+
+<p>So, let’s try this again.  We’ll initialize our
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>’s
+state to zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">initial</span>	<span class="n">interrupt_state</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="n">interrupt_state</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Likewise, on an <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>,
+we’ll set the <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> state.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_interrupt</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>
+	<span class="n">interrupt_state</span><span class="p">[</span><span class="n">this_interrupt</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span> <span class="o">//</span> <span class="n">Triggered</span></code></pre></figure>
+
+<p>Finally, if the user writes to our
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+register, we’ll clear the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state.  To be specific to one
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>,
+we’ll clear the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state any time the user writes a ‘1’ to the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state associated with this
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+in the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state register, and ignore any write otherwise.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">i_wb_stb</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">i_wb_we</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">i_wb_data</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>
+	<span class="c1">// Turned off via a wishbone write command
+</span>	<span class="n">interrupt_state</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Now, if we aggregate all of these
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+together, we can create a single
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+input for the
+<a href="/about/zipcpu.html">CPU</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">o_int</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="o">|</span><span class="n">interrupt_state</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Except … what if we don’t want to be interrupted?  Or, alternatively,
+what if we don’t want to be interrupted by a particular
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>?</p>
+
+<p>Therefore, let’s create what’s known as an interrupt mask, so that only
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a> found identified by the
+mask will <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>.</p>
+
+<p>There are actually two parts to the
+<a href="/about/zipcpu.html">ZipCPU</a>s
+interrupt mask logic within its <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>.
+First, an individual interrupt mask selects particular
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+to be enabled or disabled.  Second, there’s a master interrupt enable wire
+that needs to be set in order for any interrupt wire to create an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> within that
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>.</p>
+
+<p>The code for this “interrupt enable” register might now look something like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="c1">// By default, upon reset no interrupts are enabled
+</span>	<span class="n">int_enabled</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">i_wb_stb</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">i_wb_we</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">16</span><span class="o">+</span><span class="n">k</span><span class="p">]))</span>
+	<span class="c1">// Set the enable bit based upon the hi-word of the write
+</span>	<span class="c1">// together with bit 15 indicating whether to set or clear
+</span>	<span class="c1">// the big
+</span>	<span class="n">int_enabled</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">i_wb_data</span><span class="p">[</span><span class="mi">15</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>We can also apply this same logic to the master interrupt enable or MIE
+register within the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>.
+We’ll just use the MSB to control this value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="n">mie</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span> <span class="c1">// Disable everything
+</span><span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">i_wb_stb</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">i_wb_we</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">i_wb_data</span><span class="p">[</span><span class="n">MSB</span><span class="p">]))</span>
+	<span class="n">mie</span> <span class="o">&lt;=</span> <span class="n">i_wb_data</span><span class="p">[</span><span class="n">MSB</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>When put together, the logic for generating an outgoing interrupt will now
+look something like,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="n">o_interrupt</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span> <span class="c1">// Not tripped
+</span><span class="k">else</span>
+	<span class="n">o_interrupt</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">mie</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">|</span><span class="p">(</span><span class="n">interrupt_state</span><span class="o">|</span><span class="n">int_enabled</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>As a result, an outgoing <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+will be created any time one of several
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> source wires goes high,
+provided that both that individual enable and the MIE bit is set.</p>
+
+<p>The <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>
+logic I’m presenting above is actually from a second generation
+<a href="/about/zipcpu.html">ZipCPU</a> <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>–one
+that hasn’t (yet) propagated into all of <a href="/projects.html">my projects
+yet</a>.  The
+<a href="https://github.com/ZipCPU/zipcpu/blob/b3bee662b54a54d5b9ff27379e52d79b1e7f0a88/rtl/peripherals/icontrol.v">first generation controller</a>
+had a big problem with the lack of an ability to atomically set or clear
+particular interrupt enable lines.  In this
+<a href="https://github.com/ZipCPU/zipcpu/blob/b3bee662b54a54d5b9ff27379e52d79b1e7f0a88/rtl/peripherals/icontrol.v">first controller</a>,
+writing a word with the high order bit set high, that is with the MIE bit
+set, would enable all <a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+as well as those whose interrupt enable
+lines were set.  However, if you were to wrote a word to the controller
+with the high order bit clear, you could then disable any interrupt masks but
+<em>you would also disable the MIE bit</em>!  These two operations, in the original
+design, <em>could not be decoupled</em>.  As a result of that earlier approach,
+disabling any <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+source within the controller also disabled the master
+interrupt enable bit.  If you only wanted to disable a single
+interrupt’s enable bit, you’d need to first disable all
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+as well as the single interrupt you wanted to disable, and then
+you’d need to re-enable all
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a> in a second transaction.</p>
+
+<p>The newer, and updated logic above, avoids that problem.</p>
+
+<p>Let’s see how this works, shall we?</p>
+
+<h2 id="the-code">The Code</h2>
+
+<p>The biggest difference between the outlined logic above, and the actual
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller as implemented</a>,
+is that the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">currently implemented
+controller</a>
+uses word rather than bit operators.  Hence, for <code class="highlighter-rouge">IUSED</code> possible
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+there’s a word of <code class="highlighter-rouge">IUSED</code> bits in length that contains all of the bits in the
+current
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>	<span class="p">[(</span><span class="n">IUSED</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">r_int_state</span><span class="o">;</span></code></pre></figure>
+
+<p>and another one that contains a list of all of the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+sources that are currently enabled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>	<span class="p">[(</span><span class="n">IUSED</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">r_int_enable</span><span class="o">;</span></code></pre></figure>
+
+<p>The third state register controls whether this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>
+will generate
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+at all.  Setting <code class="highlighter-rouge">r_mie</code> to zero, will disable all
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+generation from this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>			<span class="n">r_mie</span><span class="o">;</span></code></pre></figure>
+
+<p>Reads to this core will just read our status register, but writes can have
+a couple of side effects.  In particular, we’ll want to support a basic write
+to the peripheral, as well as writes that either enable or disable
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">wire</span>			<span class="n">wb_write</span><span class="o">,</span> <span class="n">enable_ints</span><span class="o">,</span> <span class="n">disable_ints</span><span class="o">;</span>
+
+	<span class="k">assign</span>	<span class="n">wb_write</span>     <span class="o">=</span> <span class="p">(</span><span class="n">i_wb_stb</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">i_wb_we</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">assign</span>	<span class="n">enable_ints</span>  <span class="o">=</span> <span class="p">(</span><span class="n">wb_write</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span> <span class="n">i_wb_data</span><span class="p">[</span><span class="mi">15</span><span class="p">])</span><span class="o">;</span>
+	<span class="k">assign</span>	<span class="n">disable_ints</span> <span class="o">=</span> <span class="p">(</span><span class="n">wb_write</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">15</span><span class="p">])</span><span class="o">;</span></code></pre></figure>
+
+<p>Now comes the fun parts!</p>
+
+<p>First, how shall we determine which
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>.
+are active?  Remember, an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+is active independent of whether or not it is enabled.  An
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+becomes “active” when the incoming
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+line is high, and it gets deactivated when a <code class="highlighter-rouge">1</code> is written to its
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state line.  We’ll keep the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state in our bottom 15 bits, giving us something like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">r_int_state</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">r_int_state</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">wb_write</span><span class="p">)</span>
+		<span class="c1">// Deactivate any interrupts that may have tripped,
+</span>		<span class="c1">// but only if the interrupt source is also inactive
+</span>		<span class="n">r_int_state</span> <span class="o">&lt;=</span> <span class="n">i_brd_ints</span>
+			<span class="o">|</span> <span class="p">(</span><span class="n">r_int_state</span> <span class="o">&amp;</span> <span class="p">(</span><span class="o">~</span><span class="n">i_wb_data</span><span class="p">[(</span><span class="n">IUSED</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]))</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="c1">// Activate or trigger on any new interrupts
+</span>		<span class="n">r_int_state</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">r_int_state</span> <span class="o">|</span> <span class="n">i_brd_ints</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The next important piece of logic controls our interrupt enable lines.  These
+will be controlled by bits <code class="highlighter-rouge">i_wb_data[16 +: IUSED]</code>.  If you’ve never used
+this <code class="highlighter-rouge">A[X +: W]</code> notation before, it’s equivalent to <code class="highlighter-rouge">A[(X+W)-1:X]</code>.  I
+often find it much easier to read–especially since, like an old codger,
+I try to make certain all of my code fits within an <a href="https://en.wikipedia.org/wiki/Punched_card#IBM_80-column_punched_card_format_and_character_codes">80 column screen</a>,
+using 8-character tabs.</p>
+
+<p>We’ll start out the interrupt enable logic by disabling all of
+the enable bits on any synchronous reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">r_int_enable</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">r_int_enable</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>Otherwise, if the user writes a word to our <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>
+with bit <code class="highlighter-rouge">i_wb_data[15]</code> held high, then we’ll enable any
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+whose enable bits are also set during the write.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">enable_ints</span><span class="p">)</span>
+		<span class="n">r_int_enable</span> <span class="o">&lt;=</span> <span class="n">r_int_enable</span> <span class="o">|</span> <span class="n">i_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>The same is true for disabling
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>.
+Writing to the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt controller</a>
+with bit <code class="highlighter-rouge">i_wb_data[15]</code> clear, will be used to clear any enable lines that
+are set during the write.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">disable_ints</span><span class="p">)</span>
+		<span class="n">r_int_enable</span> <span class="o">&lt;=</span> <span class="n">r_int_enable</span> <span class="o">&amp;</span> <span class="p">(</span><span class="o">~</span> <span class="n">i_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">])</span><span class="o">;</span></code></pre></figure>
+
+<p>The logic for the master enable bit for this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>
+is almost identical.  The big difference is that we aren’t using word logic
+but rather bit logic to set it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">r_mie</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">r_mie</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">enable_ints</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_data</span><span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+		<span class="n">r_mie</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">disable_ints</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_data</span><span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+		<span class="n">r_mie</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Notice the important part of this control design: the <code class="highlighter-rouge">r_mie</code> bit is <em>only</em>
+adjusted when <code class="highlighter-rouge">i_wb_data[DW-1]</code> is also high.  This allows other bits to be
+adjusted without adjusting this one–fixing the problem from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/b3bee662b54a54d5b9ff27379e52d79b1e7f0a88/rtl/peripherals/icontrol.v">last controller</a>.</p>
+
+<p>Ok, that handles most of our
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+state and enable controls.</p>
+
+<p>How can we now go about using them to generate our outgoing
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>?</p>
+
+<p>First, we’ll set a helper bit, <code class="highlighter-rouge">w_any</code>, to capture whether any enabled bits
+are also active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">w_any</span> <span class="o">=</span> <span class="o">|</span><span class="p">(</span><span class="n">r_int_state</span> <span class="o">&amp;</span> <span class="n">r_int_enable</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Now, if <code class="highlighter-rouge">w_any</code> is set, and if the master
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+enable is also set, then we can send an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+to the <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">o_interrupt</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">o_interrupt</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">o_interrupt</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">r_mie</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">w_any</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Notice how <code class="highlighter-rouge">o_interrupt</code> is registered, or set on a clock edge.  That’s
+important, since a <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+may have a lot of logic riding on this incoming signal.  By registering it
+here and now, we avoid compounding any internal timing problems the
+<a href="/about/zipcpu.html">CPU</a>
+might already have.  Indeed, <a href="/about/zipcpu.html">ZipCPU</a>
+used to have a <a href="https://github.com/ZipCPU/zipcpu/blob/1786a8529d44157a22de3661c413559f8ba1ece4/rtl/core/zipcpu.v#L1669-L1693">lot more
+logic</a>
+dependent upon this one signal than <a href="https://github.com/ZipCPU/zipcpu/blob/b3bee662b54a54d5b9ff27379e52d79b1e7f0a88/rtl/core/zipcpu.v#L1971-L1987">it has
+now</a>.</p>
+
+<p>All that’s left, then, is to set our
+<a href="/zipcpu/2017/05/29/simple-wishbone.html">bus outputs</a>.</p>
+
+<p>The first one is <code class="highlighter-rouge">o_wb_data</code>.  In this case, we want to set bit <code class="highlighter-rouge">31</code> to
+reflect whether or not the master interrupt enable is set,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_wb_data</span><span class="p">[</span><span class="mi">31</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_mie</span><span class="o">;</span></code></pre></figure>
+
+<p>and bit <code class="highlighter-rouge">15</code> to reflect whether any
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+would be currently triggering.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">o_wb_data</span><span class="p">[</span><span class="mi">15</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">w_any</span><span class="o">;</span>
+
+		<span class="n">o_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_int_enable</span><span class="o">;</span>
+		<span class="n">o_wb_data</span><span class="p">[</span> <span class="mi">0</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_int_state</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>After that,
+the register is split into two halves.  The top half indicates which
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+are enabled,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">o_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_int_enable</span><span class="o">;</span></code></pre></figure>
+
+<p>and the bottom half indicates which
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+are currently active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">o_wb_data</span><span class="p">[</span> <span class="mi">0</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_int_state</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Only there’s a tricky problem here: if we don’t set all of the bits, such
+as if <code class="highlighter-rouge">IUSED</code> is something less than the full width, then the synthesis
+tools will complain at us about undefined bits–and rightly so.</p>
+
+<p>I used to get around this by setting part of the bits in the basic always
+block, and using a generate block to set the rest.  Verilog, however, has
+this wonderful feature where the “last assignment wins.”  Therefore, we can
+start by assigning <em>all</em> of the bits within <code class="highlighter-rouge">o_wb_data</code> to zero,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_wb_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>after which we can set the specific bits of interest as before.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">o_wb_data</span><span class="p">[</span><span class="mi">31</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_mie</span><span class="o">;</span>
+		<span class="n">o_wb_data</span><span class="p">[</span><span class="mi">15</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">w_any</span><span class="o">;</span>
+
+		<span class="n">o_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_int_enable</span><span class="o">;</span>
+		<span class="n">o_wb_data</span><span class="p">[</span> <span class="mi">0</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">r_int_state</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>As a result, any bit that isn’t set specifically, will be set by default
+to zero.  Even better, the synthesizer can remove the logic surrounding any
+of these bits which might get stuck at zero.</p>
+
+<p>This particular peripheral is also unique because it has only one address,
+and hence there’s no logic that needs to take place on a read other than just
+returning <code class="highlighter-rouge">o_wb_data</code>.  Hence, we can set <code class="highlighter-rouge">o_wb_ack</code> to be equal to
+<code class="highlighter-rouge">i_wb_stb</code>, and set our stall line to zero as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">o_wb_ack</span> <span class="o">=</span> <span class="n">i_wb_stb</span><span class="o">;</span>
+	<span class="k">assign</span>	<span class="n">o_wb_stall</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Voila!  A functioning <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>!</p>
+
+<h2 id="formally-verifying-the-interrupt-controller">Formally Verifying the Interrupt Controller</h2>
+
+<p>What about <a href="/blog/2017/10/19/formal-intro.html">formally
+verifying</a>
+something this simple?</p>
+
+<p>Let’s see if we can’t turn the
+<a href="/blog/2017/10/19/formal-intro.html">formal verification</a>
+section into a set of
+rules that we will check, and then check at each point that our
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>
+works as intended.</p>
+
+<p>The first step, though, is a bit preliminary.  First, we want to create our
+<code class="highlighter-rouge">f_past_valid</code> logic, so we can tell when any <code class="highlighter-rouge">$past()</code> values are properly
+constrained and usable within any assertions.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>	<span class="n">f_past_valid</span><span class="o">;</span>
+
+	<span class="k">initial</span>	<span class="n">f_past_valid</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">f_past_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
+
+<p>Then we want to make certain our design starts with an initial reset.  This
+is really needed more for the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>
+than anything else, but it often makes good practice anyway.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="cp">`ASSUME</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span><span class="p">)</span>
+		<span class="cp">`ASSUME</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Here are the values we want to make certain are responsive to a reset.
+Notice that we also force them to be properly responsive to the first
+or initial clock as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">||</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">r_int_state</span>  <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">r_int_enable</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">w_any</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_interrupt</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">r_mie</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Ok, let’s start walking through what this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>
+needs to do.</p>
+
+<ul>
+  <li>Rule #1: Any incoming
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+should be able to set the <code class="highlighter-rouge">r_int_state</code> bits</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)))</span>
+		<span class="k">assert</span><span class="p">((</span><span class="n">r_int_state</span> <span class="o">&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_brd_ints</span><span class="p">))</span><span class="o">==</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_brd_ints</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>The word level logic here might be a touch confusing.  Basically,
+we’re asserting that if a bit was high in <code class="highlighter-rouge">i_brd_ints</code> on the last
+clock, that <code class="highlighter-rouge">r_int_state</code> in the next clock should reflect that.</p>
+
+<ul>
+  <li>Rule #2: An
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+should be generated if received and enabled</li>
+</ul>
+
+<p>In this case, <code class="highlighter-rouge">r_int_state</code> captures an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+being received, and <code class="highlighter-rouge">r_int_enable</code> captures one being enabled.  If this is
+true one clock ago, and if <code class="highlighter-rouge">r_mie</code> was high, then <code class="highlighter-rouge">o_interrupt</code> should now
+be high as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)))</span>
+			<span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">|</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">r_int_state</span> <span class="o">&amp;</span> <span class="n">r_int_enable</span><span class="p">))</span>
+			<span class="o">&amp;&amp;</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">r_mie</span><span class="p">))</span> <span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_interrupt</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<ul>
+  <li>Rule #3: If the master
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+enable bit is off, then no outgoing
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+shall be asserted</li>
+</ul>
+
+<p>This is really the first part of the inverse of Rule #2 above, expressing when
+the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+line should be clear.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">r_mie</span><span class="p">)))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_interrupt</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Rule #4 is the other half of rule #3.</p>
+
+<ul>
+  <li>Rule #4: If no active
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+are enabled, then no outgoing
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+shall be asserted either</li>
+</ul>
+
+<p>Again, we are asserting when the outgoing
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> line should be
+<em>clear</em> (zero).  In this case, if there are no active and enabled
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>,
+then neither should the outgoing
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+line be high.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="mi">0</span> <span class="o">==</span> <span class="o">|</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">r_int_state</span> <span class="o">&amp;</span> <span class="n">r_int_enable</span><span class="p">)))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_interrupt</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>From here, let’s switch from how the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>
+should deal with
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>,
+and look at how it should deal with transactions from the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>.</p>
+
+<ul>
+  <li>Rule #5: It should be possible to disable one (or all)
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+as a result of writing a word from the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a></li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">disable_ints</span><span class="p">)))</span>
+		<span class="k">assert</span><span class="p">(($</span><span class="nb">past</span><span class="p">(</span><span class="o">{</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">31</span><span class="p">]</span><span class="o">,</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span><span class="o">}</span><span class="p">)</span>
+			<span class="o">&amp;</span> <span class="o">{</span> <span class="n">r_mie</span><span class="o">,</span> <span class="n">r_int_enable</span> <span class="o">}</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>To put this another way, if it was set one clock ago within
+<code class="highlighter-rouge">$past({i_wb_data[31],i_wb_data[16 +: IUSED]})</code>, then the enables on the
+current clock, <code class="highlighter-rouge"><span class="p">{</span><span class="w"> </span><span class="err">r_mie,</span><span class="w"> </span><span class="err">r_int_enable</span><span class="w"> </span><span class="p">}</span></code> should be zero.</p>
+
+<ul>
+  <li>Rule #6: It should be possible to enable one (or more)
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a></li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span><span class="o">&amp;&amp;</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">enable_ints</span><span class="p">)))</span>
+		<span class="k">assert</span><span class="p">(($</span><span class="nb">past</span><span class="p">(</span><span class="o">{</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">31</span><span class="p">]</span><span class="o">,</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span><span class="o">}</span><span class="p">)</span>
+			<span class="o">&amp;</span> <span class="o">{</span> <span class="n">r_mie</span><span class="o">,</span> <span class="n">r_int_enable</span> <span class="o">}</span><span class="p">)</span>
+			<span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="o">{</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">31</span><span class="p">]</span><span class="o">,</span><span class="n">i_wb_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">IUSED</span><span class="p">]</span><span class="o">}</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<ul>
+  <li>Rule #7: It should be possible to acknowledge an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>,
+and so deactivate it</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span><span class="o">&amp;&amp;</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">wb_write</span><span class="p">)))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">r_int_state</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_brd_ints</span>
+				<span class="o">|</span> <span class="p">(</span><span class="n">r_int_state</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">i_wb_data</span><span class="p">[</span><span class="n">IUSED</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">])))</span><span class="o">;</span></code></pre></figure>
+
+<ul>
+  <li>Rule #8: The
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+enables should be stable without a write</li>
+</ul>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">wb_write</span><span class="p">)))</span>
+		<span class="k">assert</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="o">{</span><span class="n">r_mie</span><span class="o">,</span> <span class="n">r_int_enable</span><span class="o">}</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>The next big portion of our proof is to include our <a href="/zipcpu/2017/11/07/wb-formal.html">bus property
+file</a>,
+to verify that, yes, we are properly responding to
+<a href="/zipcpu/2017/05/29/simple-wishbone.html">bus requests</a>.</p>
+
+<p>The tricky part here is that this slave doesn’t have an <code class="highlighter-rouge">i_wb_cyc</code> line coming
+into it.  According to the <a href="/doc/wbspec_b4.pdf">Wishbone
+spec</a>, it doesn’t need one.  It can (and
+does) get by with just the <code class="highlighter-rouge">i_wb_stb</code> signal.  Our
+<a href="/zipcpu/2017/11/07/wb-formal.html">interface properties</a>,
+however, require an <code class="highlighter-rouge">i_wb_cyc</code> line.  Therefore, let’s imagine we had an
+<code class="highlighter-rouge">i_wb_cyc</code> line, and that our imagined <code class="highlighter-rouge">i_wb_cyc</code> followed the <a href="/zipcpu/2017/11/07/wb-formal.html">rules of the
+bus</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Allow the solver to pick an i_wb_cyc signal that
+</span>	<span class="c1">// can change as often as the solver wants to whatever
+</span>	<span class="c1">// the solver sets it to
+</span>	<span class="p">(</span><span class="o">*</span> <span class="n">anyseq</span> <span class="o">*</span><span class="p">)</span> <span class="kt">wire</span>		<span class="n">i_wb_cyc</span><span class="o">;</span>
+
+	<span class="c1">// If i_wb_stb is ever true, make sure the solver also sets
+</span>	<span class="c1">// i_wb_cyc true at the same time
+</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_wb_stb</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_wb_cyc</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="c1">// Similarly, following a reset, i_wb_cyc should be low
+</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span>
+		<span class="k">assume</span><span class="p">(</span><span class="o">!</span><span class="n">i_wb_cyc</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Now we can include our <a href="/zipcpu/2017/11/07/wb-formal.html">bus
+properties</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">fwb_slave</span> <span class="p">#(</span><span class="o">.</span><span class="n">DW</span><span class="p">(</span><span class="n">DW</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">AW</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">F_MAX_STALL</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">F_MAX_ACK_DELAY</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">F_LGDEPTH</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">F_MAX_REQUESTS</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">F_OPT_MINCLOCK_DELAY</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+		<span class="n">fwb</span><span class="p">(</span><span class="n">i_clk</span><span class="o">,</span> <span class="n">i_reset</span><span class="o">,</span>
+			<span class="n">i_wb_cyc</span><span class="o">,</span> <span class="n">i_wb_stb</span><span class="o">,</span> <span class="n">i_wb_we</span><span class="o">,</span>
+			<span class="mb">1'b0</span><span class="o">,</span> <span class="n">i_wb_data</span><span class="o">,</span> <span class="mh">4'hf</span><span class="o">,</span>
+			<span class="n">o_wb_ack</span><span class="o">,</span> <span class="n">o_wb_stall</span><span class="o">,</span> <span class="n">o_wb_data</span><span class="o">,</span> <span class="mb">1'b0</span><span class="o">,</span>
+			<span class="n">f_nreqs</span><span class="o">,</span> <span class="n">f_nacks</span><span class="o">,</span> <span class="n">f_outstanding</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>You may note that we set the width of the address bus to <code class="highlighter-rouge">.AW(1)</code>.  It’s not.
+It’s really zero.  I have yet, however, to learn how to remove bits
+automatically based upon a parameter, so I instead set this to one and then set
+the address bit(s) themselves to <code class="highlighter-rouge">1'b0</code>.</p>
+
+<p>Since <code class="highlighter-rouge">o_wb_ack == i_wb_stb</code>, we’ll never have any outstanding requests, so
+asserting the proper value for the number of outstanding (not responded to)
+requests becomes easy.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_outstanding</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>I then threw some odds and ends into the proof, just for good measure.</p>
+
+<p>For example, if there hasn’t been either a write or reset request, then any
+previously active
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+should remain active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">wb_write</span><span class="p">))</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(($</span><span class="nb">past</span><span class="p">(</span><span class="n">r_int_state</span><span class="p">)</span><span class="o">&amp;</span> <span class="o">~</span><span class="n">r_int_state</span><span class="p">)</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">((</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">w_any</span><span class="p">))</span> <span class="o">||</span> <span class="n">w_any</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>What’s missing?  A big and important part of any proof: the proof that, in
+spite of all of our constraints, our logic can still work.  So, let’s add some
+<code class="highlighter-rouge">cover()</code> statements.</p>
+
+<p>The first and most obvious item to cover is, yes, it is possible to produce an
+outgoing <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">o_interrupt</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>A good second example would be that, given a prior active
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>,
+it can be cleared by a write from the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">($</span><span class="nb">fell</span><span class="p">(</span><span class="n">w_any</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">r_int_enable</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Let’s also make certain our enables work, by covering a low <code class="highlighter-rouge">o_interrupt</code>,
+but yet a high <code class="highlighter-rouge">w_any</code> or similarly a low <code class="highlighter-rouge">o_interrupt</code>, an active
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+line, and a high <code class="highlighter-rouge">r_mie</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">cover</span><span class="p">(</span><span class="o">!</span><span class="n">o_interrupt</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">w_any</span><span class="p">))</span><span class="o">;</span>
+		<span class="k">cover</span><span class="p">(</span><span class="o">!</span><span class="n">o_interrupt</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">r_mie</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="o">|</span><span class="n">r_int_state</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This should be (roughly) enough to convince ourselves that this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>
+is working.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">endmodule</span></code></pre></figure>
+
+<p>But how to use it?  Well, the first step towards using an <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>
+is to wire it up.  To do that, let’s invoke
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+to make our connections for us.</p>
+
+<h2 id="autofpga">AutoFPGA</h2>
+
+<p>The first step to integrating <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">this
+controller</a>
+into a design using
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+is to create an <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/pic.txt">configuration file</a> for this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">controller</a>.
+The second step will be using
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> to connect
+various <a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> sources to <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">this
+controller</a>.
+So let’s start out by walking through an
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/pic.txt">configuration file</a>
+for this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>,
+and then walk through how to connect the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+from the <a href="/zipcpu/2018/04/17/ziptimer.html">ZipTimer peripheral that we discussed
+previously</a>
+to our <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">new interrupt
+controller</a>.
+If you’d like, you can follow along as I work my way through the
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/pic.txt">buspic</a>
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/pic.txt">configuration file</a>
+in my <a href="https://github.com/ZipCPU/arrowzip">ArrowZip design</a>, and again through
+<a href="/zipcpu/2018/04/17/ziptimer.html">the bus timer</a>
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/zipbones.txt">configuration</a>
+to see how some simple
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+tags can be used to merge this into a
+<a href="https://github.com/ZipCPU/arrowzip">design</a>.</p>
+
+<p>As we get into this, let me remind you of two things about
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>: First,
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+is designed to be able to compose a design from multiple sources via a
+copy-and-paste approach, with some amount of variable substitution.  Second,
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+can also attach
+<a href="/blog/2017/06/08/simple-wb-master.html">bus masters</a> and
+<a href="/zipcpu/2017/05/29/simple-wishbone.html">slaves</a> together,
+assign addresses, and for our purposes today, it can assign
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a> to a bit-vector that
+will then be the input to an <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+like the one we’ve discussed above.</p>
+
+<p>We’ll start out by examining how to integrate this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+into the <a href="https://github.com/ZipCPU/arrowzip">ArrowZip</a> project.  In many of <a href="/projects.html">my
+projects</a>, the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+is a part of the wrapper of the <a href="/about/zipcpu.html">ZipCPU</a>
+that I call the
+<a href="/zipcpu/2018/01/31/cpu-build.html">ZipSystem</a>.  Not so in the
+<a href="https://github.com/ZipCPU/arrowzip">ArrowZip design</a>.  Sorry.  There wasn’t
+room in the <a href="https://github.com/ZipCPU/arrowzip">ArrowZip design</a> for the
+<a href="/zipcpu/2018/01/31/cpu-build.html">ZipSystem</a>.  Instead, in
+the <a href="https://github.com/ZipCPU/arrowzip">ArrowZip</a> design the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+is a proper
+<a href="/zipcpu/2017/05/29/simple-wishbone.html">peripheral</a> on the
+main <a href="/zipcpu/2017/11/07/wb-formal.html">wishbone bus</a>
+along with every other peripheral.</p>
+
+<p>As a result, we’ll be primarily just integrating a
+<a href="/zipcpu/2017/10/06/autofpga-dataword.html">simple peripheral</a>
+into the <a href="/zipcpu/2017/11/07/wb-formal.html">wishbone bus</a>
+structure using
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>.</p>
+
+<p>The first step, as always, is to pick a name for our peripheral.  I’m going to
+use the name <code class="highlighter-rouge">buspic</code>, since this Programmable Interrupt Controller (PIC) is
+attached to the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> instead of the
+<a href="/zipcpu/2018/01/31/cpu-build.html">ZipSystem</a>.
+I’m also going to create the tag <code class="highlighter-rouge">@DEVID</code> for later substitution
+and set it to the same name, but this time in all capitals.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@PREFIX=buspic
+@DEVID=BUSPIC</code></pre></figure>
+
+<p>In case anything else depends upon the presence of the BUSPIC within the
+design, we’ll also create an <code class="highlighter-rouge">@ACCESS</code> tag.  This will create a <code class="highlighter-rouge">define</code>
+macro in the top of the
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+design element, that can then later be
+commented out (if you’d like).  Other Verilog components within
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+that might depend upon the presence of this one can then use this macro
+to determine whether this peripheral is present in the design or not.
+Even better, a quick script within the
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/Makefile">Makefile</a>
+of our
+<a href="https://github.com/ZipCPU/arrowzip/tree/master/rtl/arrowzip">rtl directory</a>
+converts these defines into a <code class="highlighter-rouge">design.h</code> file as well, which
+can then be used within software components to determine what components
+are and are not built into the design.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@ACCESS=BUSPIC_ACCESS</code></pre></figure>
+
+<p>Let’s now create a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+connection for this component.  The first step is to
+tell <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+how many addresses this slave has.  In our case, it’s just the
+one, so <code class="highlighter-rouge">@NADDR=1</code>.  We then want to connect to the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+I’ve named <code class="highlighter-rouge">wb</code>.  Further, since our output register is available to be
+read at all times, and since this peripheral never stalls, we can tell
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> to
+connect it up as a peripheral of type <code class="highlighter-rouge">SINGLE</code>, as in, <code class="highlighter-rouge">@SLAVE.TYPE=SINGLE</code>.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@NADDR=1
+@SLAVE.TYPE=SINGLE
+@SLAVE.BUS=wb</code></pre></figure>
+
+<p>That will create return wires for this peripheral to return to the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>,
+using the <code class="highlighter-rouge">@PREFIX</code> tag to determine their names.  It will also create another
+value to determine when a <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+operation is selecting this device, <code class="highlighter-rouge">buspic_sel</code>.  In total, this will looks
+something like,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">        <span class="c1">// Wishbone slave definitions for bus wb(SIO), slave buspic
+</span>        <span class="kt">wire</span>            <span class="n">buspic_sel</span><span class="o">,</span> <span class="n">buspic_ack</span><span class="o">,</span> <span class="n">buspic_stall</span><span class="o">;</span>
+        <span class="kt">wire</span>    <span class="p">[</span><span class="mi">31</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>  <span class="n">buspic_data</span><span class="o">;</span></code></pre></figure>
+
+<p>We’ll use these various connections in a moment to actually connect <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">our
+device</a>
+to the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>.</p>
+
+<p>Before we do that, though, let’s tell
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> that this
+particular device is a programmable interrupt  controller (PIC).  Specifically,
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+accepts a number of tags associated with any PIC.  These are first the name of a
+multi-element vector, in our case <code class="highlighter-rouge">bus_int_vector</code>, and second the number of
+elements in that vector–which for us is 15 elements.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@PIC.BUS= bus_int_vector
+@PIC.MAX= 15</code></pre></figure>
+
+<p>Now, when any peripheral wants to route its interrupt wire to the PIC named
+<code class="highlighter-rouge">buspic</code>, it will be assigned a bit within this <code class="highlighter-rouge">bus_int_vector</code> of bits.
+We’ll get back to that in a bit.</p>
+
+<p>Our <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+needs an output wire, to be fed to the
+<a href="/about/zipcpu.html">ZipCPU</a>.  Let’s call that
+<code class="highlighter-rouge">bus_interrupt</code>, and declare it at the top of our
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+file.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@MAIN.DEFNS=
+	wire	bus_interrupt;</code></pre></figure>
+
+<p><code class="highlighter-rouge">@MAIN.DEFNS</code> describes one of those tags that’s just copied directly
+into a given location within an output file–in this case
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>.</p>
+
+<p>Another straight copy tag is <code class="highlighter-rouge">@MAIN.INSERT</code>.  The value for this tag will
+be copied directly into
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+after variable substitution.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@MAIN.INSERT=
+	//
+	// The BUS Interrupt controller
+	//
+	icontrol #(15)	@$(PREFIX)i(i_clk, 1'b0,
+			(wb_stb)&amp;&amp;(@$(PREFIX)_sel), wb_we, wb_data,
+			@$(PREFIX)_ack, @$(PREFIX)_stall, @$(PREFIX)_data,
+			bus_int_vector, bus_interrupt);</code></pre></figure>
+
+<p>In this case, the primary variable that we wish to substitute in, as we copy
+this longer string into our
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+file, is the <code class="highlighter-rouge">@$(PREFIX)</code> tag.  As you may
+recall, <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+tags may be referenced by either a <code class="highlighter-rouge">@$(*)</code> or a <code class="highlighter-rouge">@$*</code>.  Hence, we could
+reference <code class="highlighter-rouge">@$(PREFIX)</code> or <code class="highlighter-rouge">@$PREFIX</code> equally.  Both will get substituted with
+our prefix, <code class="highlighter-rouge">buspic</code>.  I personally like the <code class="highlighter-rouge">@$(*)</code> form better, because in
+this case the underscore following the tag will not be confused with the
+identifier for the tag itself.</p>
+
+<p>We can also specify some alternate logic, for if and when the <code class="highlighter-rouge">define</code> macro
+at the top of
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+is commented out.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@MAIN.ALT=
+	assign	bus_interrupt = 0;</code></pre></figure>
+
+<p>In that case, the <code class="highlighter-rouge">@MAIN.ALT</code> code will replace the <code class="highlighter-rouge">@MAIN.INSERT</code> code.</p>
+
+<p>Further, in this alternate “the buspic is not included” case, <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+will provide default values for the bus returns: <code class="highlighter-rouge">buspic_stall = 0</code>,
+<code class="highlighter-rouge">buspic_data = 0</code>, and so on, so you can ignore them here.</p>
+
+<p>If you’ve followed this blog much, you know that I like to have command line
+access to the peripherals within my designs using a command I call
+<a href="/blog/2017/06/29/sw-dbg-interface.html">wbregs</a>.
+This allows me access to memory mapped peripherals in roughly the same was
+as the <a href="https://en.wikipedia.org/wiki/PEEK_and_POKE">PEEK &amp; POKE</a> of
+yesteryear.</p>
+
+<p>Unlike <a href="https://en.wikipedia.org/wiki/PEEK_and_POKE">PEEK &amp; POKE</a>,
+though, <code class="highlighter-rouge">wbregs</code> allows named values.</p>
+
+<p>In a similar manner, if you want access to this peripheral from the C++
+bus interface, you’ll need to know the address of this peripheral.  This
+is the purpose of the <code class="highlighter-rouge">@REGS.*</code> tags.  The first one, <code class="highlighter-rouge">@REGS.N=1</code>, tells
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> that this
+peripheral has only one named register.  The second line tells
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+that this register has a zero word offset from the base address
+of this peripheral, that the C++ name for this register should be <code class="highlighter-rouge">R_PIC</code>,
+and that <code class="highlighter-rouge">wbregs</code> should accept a name <code class="highlighter-rouge">PIC</code> in order to access this register.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@REGS.N=1
+@REGS.0= 0 R_PIC PIC</code></pre></figure>
+
+<p>These two lines affect the <code class="highlighter-rouge">regdefs.h</code> and <code class="highlighter-rouge">regdefs.cpp</code> files generated
+by <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>.</p>
+
+<p>We’d also like to reference this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+from within a program for the <a href="/about/zipcpu.html">ZipCPU</a>.</p>
+
+<p>For example, given an interrupt number, such as <code class="highlighter-rouge">X</code>, it would be nice to know
+how it maps to the various bit masks within our peripheral.  We can also
+throw in macros to enable and disable interrupts using <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">this
+controller</a>’s
+if we would like.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@BDEF.DEFN=
+#define BUSPIC(X) (1&lt;&lt;X)
+#define	BUSPIC_EN(X)	(0x80008000 | (X) | ((X)&lt;&lt;16))
+#define	BUSPIC_DIS(X)	(0x00000000 | (X) | ((X)&lt;&lt;16))</code></pre></figure>
+
+<p>These macros will get copied to the top part of the <code class="highlighter-rouge">board.h</code> file, used to
+describe peripherals for any CPU within the design.  The first one of these,
+<code class="highlighter-rouge">BUSPIC(X)</code>, will also get called by the
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+generated code to define values to describe each interrupt assignment.</p>
+
+<p>We’d also like to know, in that same file, the location of this peripheral
+in address space.  We <a href="/blog/2018/11/03/soc-fpga.html">discussed some time ago how to access memory mapped
+peripherals in general</a>,
+so here’s how it is done with <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>.</p>
+
+<p>First, we define the name that we want to reference this peripheral as from
+within our <a href="/about/zipcpu.html">ZipCPU</a> C code.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@BDEF.IONAME= _@$(PREFIX)</code></pre></figure>
+
+<p>the type this value will point to,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@BDEF.IOTYPE= unsigned</code></pre></figure>
+
+<p>and a macro that can be used to determine if the design (originally) had this
+peripheral within it,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@BDEF.OSDEF= _BOARD_HAS_@$(DEVID)</code></pre></figure>
+
+<p>Finally, we can put these all together to define an constant address
+pointer referencing this peripheral.  This final line, after variable
+substitution, will be copied directly into the <code class="highlighter-rouge">board.h</code> file.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@BDEF.OSVAL= static volatile @$BDEF.IOTYPE *const @$BDEF.IONAME = ((@$BDEF.IOTYPE *)@$[0x%08x](REGBASE));</code></pre></figure>
+
+<p><a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> will then place a line into the <code class="highlighter-rouge">board.h</code> file looking something like:</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c"><span class="k">static</span> <span class="k">volatile</span> <span class="kt">unsigned</span> <span class="o">*</span><span class="k">const</span> <span class="n">_buspic</span> <span class="o">=</span> <span class="p">((</span><span class="kt">unsigned</span> <span class="o">*</span><span class="p">)</span><span class="mh">0x00600008</span><span class="p">);</span></code></pre></figure>
+
+<p>Our <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>’s
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/pic.txt">configuration file</a> contains one more group of
+tags.  These are used to place information into a
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/make.inc">make include file</a>, which
+can then be used to determine which files to send to
+<a href="http://www.clifford.at/yosys">yosys</a>
+(or any other synthesizer) and how to determine dependencies.</p>
+
+<p>For our <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">controller</a>,
+we create a group of files within the
+<a href="https://github.com/ZipCPU/arrowzip/tree/master/rtl/arrowzip/cpu">cpu</a>
+subdirectory named <code class="highlighter-rouge">BUSPIC</code>.  This file group contains the <code class="highlighter-rouge">icontrol.v</code> file
+only in our case, since this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+implementation doesn’t have any submodules.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@RTL.MAKE.GROUP= BUSPIC
+@RTL.MAKE.SUBD= cpu
+@RTL.MAKE.FILES=icontrol.v</code></pre></figure>
+
+<p>At this point, our <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>
+has now been connected to the rest of the design.  The one remaining detail
+is that the rest of the design hasn’t been connected to this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controller</a>.
+So let’s take a look at how to connect the
+<a href="/zipcpu/2018/04/17/ziptimer.html">ZipTimer</a>’s
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> output to <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">this
+controller</a>.</p>
+
+<p>The <a href="https://github.com/ZipCPU/arrowzip">ArrowZip</a> design contains a <a href="/zipcpu/2018/04/17/ziptimer.html">ZipTimer</a> <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> configuration within the
+<a href="/about/zipcpu.html">ZipCPU</a>’s
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/zipbones.txt">configuration file, zipbones.txt</a>.
+Two particular lines within <a href="https://github.com/ZipCPU/arrowzip/blob/master/auto-data/zipbones.txt">this
+configuration</a>
+need to be discussed.</p>
+
+<p>First, the <code class="highlighter-rouge">@INT.BUSTIMER.WIRE</code> line defines a wire that will contain this
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a> signal.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@INT.BUSTIMER.WIRE= @$(PREFIX)_int</code></pre></figure>
+
+<p>This alone will define the wire, <code class="highlighter-rouge">bustimer_int</code>, pasting a line,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">	wire	bustimer_int;</code></pre></figure>
+
+<p>into the
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+file.  That only defines it.</p>
+
+<p>To connect it up to a particular
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt controller</a>,
+just name the <code class="highlighter-rouge">@PREFIX</code> of the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">controller</a>
+you want to connect to.  In
+our case, that’s
+the <code class="highlighter-rouge">buspic</code> we just defined above.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">@INT.BUSTIMER.PIC= buspic</code></pre></figure>
+
+<p><a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> will now pick a bit within <code class="highlighter-rouge">bus_int_vector[14:0]</code>, and assign
+<code class="highlighter-rouge">bustimer_int</code> to that vector, giving it the name <code class="highlighter-rouge">BUSTIMER</code> found within the
+key name, <code class="highlighter-rouge">@INT.BUSTIMER.WIRE</code>.  For example, if you look through the
+<a href="https://github.com/ZipCPU/arrowzip/blob/master/rtl/arrowzip/main.v">main.v</a>
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+generated file within the
+<a href="https://github.com/ZipCPU/arrowzip">ArrowZip</a> repository, you’ll find
+the lines,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">       <span class="k">assign</span>  <span class="n">bus_int_vector</span> <span class="o">=</span> <span class="o">{</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="mb">1'b0</span><span class="o">,</span>
+                <span class="n">bustimer_int</span><span class="o">,</span>
+                <span class="n">spio_int</span><span class="o">,</span>
+                <span class="n">rtc_int</span><span class="o">,</span>
+                <span class="n">uartrx_int</span><span class="o">,</span>
+                <span class="n">uarttx_int</span><span class="o">,</span>
+                <span class="n">uartrxf_int</span><span class="o">,</span>
+                <span class="n">uarttxf_int</span>
+        <span class="o">};</span></code></pre></figure>
+
+<p>From here you can see how the seven interrupts used within this design are
+assigned.</p>
+
+<p>But how would you access these definitions within some C code, to know which
+interrupts got assigned where?  For that, check out the
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+generated <code class="highlighter-rouge">board.h</code> file.  Towards the bottom, you’ll find these
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+assignment statements.</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c"><span class="c1">//
+// Interrupt assignments (1 PICs)
+//
+// PIC: buspic
+</span><span class="cp">#define BUSPIC_UARTTXF  BUSPIC(0)
+#define BUSPIC_UARTRXF  BUSPIC(1)
+#define BUSPIC_UARTTX   BUSPIC(2)
+#define BUSPIC_UARTRX   BUSPIC(3)
+#define BUSPIC_RTC      BUSPIC(4)
+#define BUSPIC_SPIO     BUSPIC(5)
+#define BUSPIC_BUSTIMER BUSPIC(6)</span></code></pre></figure>
+
+<p>These lines are created by
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+based upon the
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>s
+connected to the peripheral having the <code class="highlighter-rouge">@PREFIX</code> of <code class="highlighter-rouge">buspic</code>, and the
+<code class="highlighter-rouge">@PIC.WIRE</code> key.</p>
+
+<p>Looking over this code, you should now understand why we defined the
+<code class="highlighter-rouge">BUSPIC(X)</code> macro earlier.  We can now reference these interrupt ID’s
+by these macros.  In the case of our
+<a href="/zipcpu/2018/04/17/ziptimer.html">timer</a>,
+we can now reference the <code class="highlighter-rouge">BUSPIC_BUSTIMER</code>
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+within our code.</p>
+
+<p>Alternatively,
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+has defined a value for the <code class="highlighter-rouge">@INT.BUSTIMER.ID</code> key that you can
+use as well, to place this identifier as necessary wherever you need to within
+your design.</p>
+
+<p>That’s all that’s necessary to connect a <code class="highlighter-rouge">SLAVE.TYPE=SINGLE</code> peripheral to the
+bus, and then to fill out an
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+(or other) vector register with values
+composed from several other peripherals within the design.  Yes, this
+capability is currently very flexible–I’ve even used it to compose system
+reset wires from multiple independent sources.  It’s just that useful.</p>
+
+<p>What if you didn’t want to include this <code class="highlighter-rouge">buspic</code> in your design?  You could
+simply remove it from the
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+command line.  Sure, you’d then get some errors about
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>s
+that didn’t have corresponding <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">interrupt
+controllers</a>,
+but that’s what you’d want, right?</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>At this point, we’ve now created (or rather updated) an <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">interrupt
+controller</a>,
+we’ve then
+<a href="/blog/2017/10/19/formal-intro.html">formally verified</a>
+it and connected it into our design.  The peripheral now has an address
+on our bus, and the bus logic knows to check the results of this peripheral
+for responses.  Similarly, we’ve also seen how to connect various
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupt</a>
+lines created from among our several peripherals to this
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.md">controller</a>
+using <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>.
+All that remains is to demonstrate <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">this
+controller</a>
+within a design.</p>
+
+<p>At this point, though, I’m going to stop and break this article into pieces.
+The next step in using
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+with the
+<a href="/about/zipcpu.html">ZipCPU</a>
+isn’t really a Verilog or
+FPGA
+design problem.  Using
+<a href="https://en.wikipedia.org/wiki/Interrupt">interrupts</a>
+is more of an advanced software lesson, so it will have
+somewhat of a different flavor to it.</p>
+
+<p>My hope is to use <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/icontrol.v">this
+controller</a>
+to demonstrate and discuss not only how to control
+<a href="/zipcpu/2018/04/17/ziptimer.html">timing delays</a>
+within an embedded
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>,
+but also to demonstrate how to run multiple tasks within the
+<a href="/about/zipcpu.html">ZipCPU</a> as well.</p>
+
+<p>All of these will be if and <a href="https://www.blueletterbible.org/kjv/jas/4/15">as the Lord
+wills</a>.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>While he was yet speaking, there came also another, and said, The fire of God is fallen from heaven, and hath burned up the sheep, and the servants, and consumed them; and I only am escaped alone to tell thee.  (Job 1:16)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
