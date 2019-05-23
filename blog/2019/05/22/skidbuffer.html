@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a Skid Buffer for AXI processing</title>
+  <meta name="description" content="I’m currently in the process of building and verifying severalAXI cores,primarily for the purpose of proving that myAXIformal Verification IP core works.  So...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2019/05/22/skidbuffer.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/#training">Formal training</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a Skid Buffer for AXI processing</h1>
+    <p class="post-meta"><time datetime="2019-05-22T00:00:00-04:00" itemprop="datePublished">May 22, 2019</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>I’m currently in the process of building and verifying several
+<a href="/doc/axi-spec.pdf">AXI</a> cores,
+primarily for the purpose of proving that my
+<a href="/doc/axi-spec.pdf">AXI</a>
+<em>formal</em> Verification IP core works.  Some examples of these cores include:</p>
+
+<ul>
+  <li><a href="/formal/2019/05/13/axifull.html">Xilinx’s demonstration core</a></li>
+  <li><a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v">My own AXI slave core</a></li>
+  <li><a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">My own AXI crossbar</a></li>
+  <li><a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">A Bus Fault Isolator</a></li>
+  <li><a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbm2axisp.v">A WB to AXI converter</a>, and</li>
+  <li>An AXI to WB converter.  This latter one will actually be two converters,
+AXI-write to WB bridge and AXI read to WB bridge just like the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axlite2wbsp.v">AXI-lite to WB
+converter</a>
+was also split into an <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilwr2wbsp.v">AXI-lite (write) to WB
+converter</a>
+and an <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilrd2wbsp.v">AXI-lite (read) to WB
+converter</a>.
+The two will then be connected together with a <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbarbiter.v">WB
+arbiter</a>,
+just like it was with the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axlite2wbsp.v">AXI-lite to WB
+converter</a>.</li>
+</ul>
+
+<p>Most of <a href="https://github.com/ZipCPU/wb2axip">these cores</a> have already passed a
+<a href="/blog/2017/10/19/formal-intro.html">formal verification</a>
+check.  None of these, however, have passed the FPGA check save perhaps the
+<a href="/formal/2019/05/13/axifull.html">Xilinx
+core</a>–which I’m assuming
+others have used although I haven’t used it myself.</p>
+
+<p>These cores are all currently kept in my <a href="https://github.com/ZipCPU/wb2axip">Wishbone to AXI
+bridge</a> repository.  They aren’t there
+because they really belong there, but rather for a lack of a better place.</p>
+
+<p>I’ve already blogged about <a href="/formal/2019/05/13/axifull.html">formally verifying Xilinx’s AXI demonstration
+core</a>.
+I’ve even blogged about <a href="/formal/2018/12/28/axilite.html">formally verifying Xilinx’s AXI-lite demonstration
+core</a>, as well as
+<a href="/blog/2019/01/12/demoaxilite.html">demonstrating how to build a bug free AXI-lite
+core</a>.  I’d like to
+do the same for my <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v">AXI (full) slave
+core</a> as well.</p>
+
+<p>Indeed, I’d like to blog about some or all of these other cores.  They each
+have some very fascinating and useful features.</p>
+
+<ul>
+  <li>
+    <p>For example, the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v">AXI slave
+core</a> is designed
+to be able to sustain 100% throughput on both read and write channels.
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/xlnxfull_2018_3.v">Xilinx’s core</a>,
+for comparison, was only able to achieve just less than a 50% read throughput,
+and something close to 100% on the write channel, although it didn’t quite
+get there.</p>
+  </li>
+  <li>
+    <p>The <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI
+crossbar</a> is
+unusual in several respects.  First, it is unusual in that it is a public,
+open source, <em>formally verified</em>
+<em><a href="/blog/2017/10/19/formal-intro.html">formally verified</a></em>
+<a href="https://en.wikipedia.org/wiki/Crossbar_switch">crossbar</a>.  Every tried
+to simulate both halves of a design, both the master and the slave side of
+Xilinx’s <a href="https://en.wikipedia.org/wiki/Crossbar_switch">interconnect</a>?
+An <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">open source AXI
+crossbar</a>,
+capable of being
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilated</a>,
+would be very powerful for this purpose.</p>
+
+    <p>Further, if either <a href="/formal/2019/05/13/axifull.html">Xilinx’s AXI demo
+core</a>, or their <a href="/formal/2018/12/28/axilite.html">AXI-lite
+demo core</a> is any
+indication, then this
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">crossbar</a>
+will have over twice the throughput.  Similarly, both of these cores had
+latent bugs within them, having not been
+<a href="/blog/2017/10/19/formal-intro.html">formally verified</a>.
+Xilinx’s
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">crossbar</a>
+may have similar latent bugs or limitations within it.  While I’d
+love to know, I don’t have access to the logic within their
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">crossbar</a>
+to find out.</p>
+  </li>
+  <li>
+    <p>Finally, my brand new <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">bus fault
+isolator</a>
+will allow you to connect an unverified 
+<a href="/doc/axi-spec.pdf">AXI</a> design to a larger system,
+knowing that the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">bus fault
+isolator</a>
+will identify any descrepancies between your core’s
+<a href="/doc/axi-spec.pdf">AXI</a>
+interface and the
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+properties we’ve discussed that can be used to verify
+and arbitrary slave, and return a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+in the case of any error.</p>
+
+    <p>Just think about that for a moment.  When I worked with the
+<a href="/blog/2018/02/09/first-cyclonev.html">Cyclone-V</a>, I had
+a bug in my own design where two <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone
+bus</a> responses got
+collapsed into one.  The ARM on the Cyclone-V then <em>hung</em> waiting for that
+response.  It never came.  No matter what I tried, I couldn’t get access
+into the design to see what had happened.  Had I had this <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">bus fault
+isolator</a>,
+the fault in my broken design would have been detected and a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> returned.  I <a href="/blog/2017/06/08/simple-scope.html">could have
+then used logic</a> to
+dig into what was going wrong to find the bug.  Even better, the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">bus fault
+isolator</a>
+now has a recovery mode, allowing access to the slave after a reset period.</p>
+
+    <p>Does this sound like a “get out to
+<a href="/fpga-hell.html">FPGA-Hell</a> for free” card at all?</p>
+  </li>
+</ul>
+
+<p>There is one key component, however, in all of these designs.  Without this
+key, I wouldn’t be able to make any high performance
+<a href="/doc/axi-spec.pdf">AXI</a> designs.  That key
+component is the <em>skid buffer</em>.</p>
+
+<p>I know, <a href="/blog/2017/08/14/strategies-for-pipelining.html">I called these “double buffers” some time
+ago</a>,
+but I am really starting to like the term “<a href="http://fpgacpu.ca/fpga/skid_buffer.html">skid
+buffer</a>”.  It captures the idea much
+better, and so I’m going to switch terminology and start calling these things
+“<a href="http://fpgacpu.ca/fpga/skid_buffer.html">skid buffer</a>” from now on.</p>
+
+<p>If you are going to build or otherwise work with an
+<a href="/doc/axi-spec.pdf">AXI</a> design, you really
+need to understand a basic
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>.
+Indeed, that’s really the whole occasion for this post: I was going to post
+about my <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v">AXI slave
+core</a>,
+and I realized that I was either going to need to spend a long section
+explaining <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffers</a>,
+or I would need to separate that material into its own post.</p>
+
+<h2 id="the-basic-concept-of-the-skid-buffer">The basic concept of the skid buffer</h2>
+
+<p>So, just what is a <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>?
+A <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>
+arises from the need to create a stall signal in a <em>registered data only</em>
+context.</p>
+
+<p>Just to illustrate with an example, the <a href="/about/zipcpu.html">ZipCPU</a> doesn’t use
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">skid buffers</a>.
+As a result, if the
+CPU
+needs to wait on a long instruction, such as a memory load or a divide, then the
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html">read-operands stage</a>
+needs to stall lest an instruction be lost.  If the
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html">read-operands stage</a>
+stalls, then the
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html">decode stage</a>
+needs to stall.  If the
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html">decode stage</a>
+needs to stall, the
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html">prefetch</a>
+needs to stall and so on.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="n">div_stall</span> <span class="o">=</span> <span class="n">div_busy</span><span class="o">;</span>
+	<span class="n">op_stall</span>  <span class="o">=</span> <span class="n">div_stall</span> <span class="o">|</span> <span class="n">mem_busy</span> <span class="o">|</span> <span class="n">cpu_halt</span> <span class="o">|</span> <span class="c1">// other things
+</span>	<span class="n">dcd_stall</span> <span class="o">=</span> <span class="n">op_stall</span> <span class="o">|</span> <span class="n">pipeline_hazard</span><span class="o">;</span>
+	<span class="n">pf_stall</span>  <span class="o">=</span> <span class="o">..</span> <span class="c1">///
+</span><span class="k">end</span></code></pre></figure>
+
+<p>Because the <a href="/about/zipcpu.html">ZipCPU</a> uses
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html"><em>combinatorial</em> stall
+signals</a> internally,
+by the time the stall signal gets to the
+<a href="/blob/2017/11/18/wb-prefetch.html">prefetch</a> stage
+there’s not much slack left in the signal before the next clock edge.
+Indeed, this was one of the problems I had when I tried to run the
+<a href="/about/zipcpu.html">ZipCPU</a>
+at higher clock rates.  (It wasn’t the only problem …)</p>
+
+<p>If I had used <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffers</a>
+instead, the
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html">stall signal</a>
+could have then been
+<em>registered</em>, breaking the timing accumulation.</p>
+
+<p>The problem is that if the
+<a href="/zipcpu/2017/08/23/cpu-pipeline.html">stall signal</a>
+is registered, then the <a href="/zipcpu/2017/08/23/cpu-pipeline.html">previous processing stage in the
+pipeline</a>
+doesn’t know about the stall until it finishes its processing and registers
+its values at the next set of
+<a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>.
+At this point, the data needs to go somewhere or get dropped.</p>
+
+<table align="center" style="float: right"><caption>Fig 1. A basic skid buffer block diagram</caption><tr><td><img src="/img/skidbuffer/skidbuffer-blockdiag.svg" alt="" width="360" /></td></tr></table>
+
+<p>Enter a <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>,
+such as the one shown in Fig. 1 at the right.</p>
+
+<p>The goal of the <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>
+in Fig. 1 is to bridge the divide between combinatorial logic on the one side
+and the registered logic on the other–given that the outgoing stall signal
+(i.e. <code class="highlighter-rouge">!o_ready</code>) can only be a registered signal.</p>
+
+<p>In this case, I’ve used the <a href="/doc/axi-spec.pdf">AXI</a>
+signaling convention, so this <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>
+has <code class="highlighter-rouge">VALID</code> and <code class="highlighter-rouge">READY</code> signals on both incoming and outgoing interfaces.</p>
+
+<p>There are two big criteria this
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>
+must meet.  First, if ever
+<code class="highlighter-rouge">VALID &amp; !READY</code>, the respective data values must remain constant into
+the next clock cycle.  Second, no piece of data may be lost along the way.</p>
+
+<p>The first of these is very easy to express
+<a href="/blog/2017/10/19/formal-intro.html">formally</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// First, we assume this property of the input
+</span>	<span class="k">assume</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="p">(</span><span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">o_ready</span><span class="p">)</span> <span class="o">|=&gt;</span> <span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">i_data</span><span class="p">))</span><span class="o">;</span>
+
+	<span class="c1">// Then we assert it when describing the output
+</span>	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="p">(</span><span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_ready</span><span class="p">)</span> <span class="o">|=&gt;</span> <span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">o_data</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>In all of my <a href="/doc/axi-spec.pdf">AXI</a> cores, I
+have wanted to use the data as soon as possible.  This means that I
+don’t want to add any more buffers or path logic to my incoming data
+than necessary.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 2. With no stalls, the buffer acts like a pass through device</caption><tr><td><img src="/img/skidbuffer/skidbuffer-passthrough.svg" alt="" width="360" /></td></tr></table>
+
+<p>Hence, when all is going well and nothing is stalled, then the
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">skid buffer</a>
+needs to operate like a pass through device, as illustrated in Fig. 2.</p>
+
+<p>In this case, both the incoming valid and data signals pass through
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">the core</a>
+and go directly to the output.</p>
+
+<table align="center" style="float: right"><caption>Fig 3. Copying the incoming data to an internal buffer</caption><tr><td><img src="/img/skidbuffer/skidbuffer-copy.svg" alt="" width="360" /></td></tr></table>
+
+<p>If the output port is stalled however, then we need to copy everything to an
+internal buffer, i.e. the “skid” buffer, lest the input data values get lost
+on the next cycle.  This is the meaning of Fig. 3 on the right.  In this
+figure, the incoming valid and data lines are copied directly to the buffer.
+This gives the buffer its own internal valid and data lines.  Further down,
+when we start discussing <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">the implementation of this
+core</a>
+we’ll name these <code class="highlighter-rouge">r_valid</code> and <code class="highlighter-rouge">r_data</code> respectively–but I’m getting ahead of
+myself.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 4. The stall signal propagates upstream</caption><tr><td><img src="/img/skidbuffer/skidbuffer-active.svg" alt="" width="360" /></td></tr></table>
+
+<p>On the next clock cycle, <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">the
+core</a>
+can output the incoming values from the last
+cycle–the ones it just buffered.  Further, the incoming interface may
+move on to its next value, but by now the incoming <code class="highlighter-rouge">o_ready</code> signal has
+fallen, so the module feeding this one now knows that it needs to wait.
+This is shown in Fig. 4 on the left.</p>
+
+<p>The neat thing about all of this is that the logic necessary to implement a
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">skid buffer</a>
+is fairly straightforward, so let’s take a peek at what it takes build one
+of these today.</p>
+
+<h2 id="optional-enhancements">Optional Enhancements</h2>
+
+<p>After building this first skid buffer, I quickly realized there was a need
+for a similar skid buffer, but with the output sides reversed.  That is,
+could a
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>
+be created where the incoming side was combinatorial
+and the outgoing side was registered?</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 5. The Skid buffer can be made to register outputs</caption><tr><td><img src="/img/skidbuffer/skidbuffer-blockdiag-outreg.svg" alt="" width="360" /></td></tr></table>
+
+<p>Our
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>
+might then look like Fig. 5.</p>
+
+<p>In this case, the biggest difference are the set of
+<a href="https://en.wikipedia.org/wiki/Flip-flop_(electronics)">flip-flops</a>
+used to register the outputs.</p>
+
+<p>That sounds simple enough.  But what if I wanted both?  What if I could use
+combinatorial logic to create the outgoing interface whenever the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>
+was used on an incoming <a href="/doc/axi-spec.pdf">AXI</a>
+channel, and combinatorial logic on the incoming interface whenever the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>
+was used to drive an outgoing <a href="/doc/axi-spec.pdf">AXI</a>
+channel?  To support both purposes, I created a parameter which could be used
+to select between them, <code class="highlighter-rouge">OPT_OUTREG</code>.  When this parameter is set, the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>
+will register all outputs.  When it isn’t set, the outputs can
+then be combinatorially driven.  In all cases, the upstream stall signal
+will be registered.</p>
+
+<p>Surely that’s simple enough to build, right?</p>
+
+<p>Not quite.  I wanted more.</p>
+
+<p>I’ve noticed that with a lot of my
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>
+designs, that the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> signals
+have a very high fan out.  They send data all across the chip.  When such
+high fanout signals get set in a manner so as to minimize LUTs, they might
+end up transitioning often–even when the valid signal (<code class="highlighter-rouge">STB</code> for 
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>)
+is low and so no reader is listening on the other end.
+Further, every one of these high-fanout transitions takes power.</p>
+
+<p>What if I instead wanted to force any unused data lines to be zero when the
+valid signal indicated the output was inactive?  This might prevent unnecessary
+transitions, and perhaps even lower the power usage of my designs.  (This
+remains to be determined, but this design is part of my preparation for
+an experiment or two to see if this is so.)</p>
+
+<p>For this, I assigned another options, <code class="highlighter-rouge">OPT_LOWPOWER</code>.  <code class="highlighter-rouge">OPT_LOWPOWER</code> is
+really defined by a set of
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+properties.  If <code class="highlighter-rouge">OPT_LOWPOWER</code> is set, then anytime <code class="highlighter-rouge">!o_valid</code> is true then
+<code class="highlighter-rouge">o_data</code> should be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="o">!</span><span class="n">o_valid</span> <span class="o">|-&gt;</span> <span class="p">(</span><span class="n">o_data</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Supporting both of these options also means that we’ll be essentially
+designing four separate
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer</a>
+designs, depending upon the options chosen.  These options will be
+aintermingled throughout the design to control logic generation as well.
+Therefore, when it comes to verification we’ll also need to make certain that
+we verify all four of the designs found within
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">this code</a>.</p>
+
+<h2 id="verilog-code">Verilog code</h2>
+
+<p>As is my normal practice, I’ll skip most of the introductory code, and jump
+right into the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skid buffer
+example</a> itself.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span> <span class="n">skidbuffer</span><span class="p">(</span><span class="n">i_clk</span><span class="o">,</span> <span class="n">i_reset</span><span class="o">,</span>
+		<span class="n">i_valid</span><span class="o">,</span> <span class="n">o_ready</span><span class="o">,</span> <span class="n">i_data</span><span class="o">,</span>
+		<span class="n">o_valid</span><span class="o">,</span> <span class="n">i_ready</span><span class="o">,</span> <span class="n">o_data</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">parameter</span>	<span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">OPT_LOWPOWER</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">parameter</span>	<span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">OPT_OUTREG</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>Or perhaps we’ll just mostly skip this introductory code.</p>
+
+<p>I would like to point out that both <code class="highlighter-rouge">OPT_LOWPOWER</code> and <code class="highlighter-rouge">OPT_OUTREG</code> are
+single bit parameters, making true/false logical tests simpler and keeping
+us from accidentally trying to set a value to something other than true (1)
+or false (0).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">parameter</span>		<span class="n">DW</span> <span class="o">=</span> <span class="mi">8</span><span class="o">;</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>			<span class="n">i_clk</span><span class="o">,</span> <span class="n">i_reset</span><span class="o">;</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>			<span class="n">i_valid</span><span class="o">;</span>
+	<span class="kt">output</span>	<span class="kt">reg</span>			<span class="n">o_ready</span><span class="o">;</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_data</span><span class="o">;</span>
+	<span class="kt">output</span>	<span class="kt">reg</span>			<span class="n">o_valid</span><span class="o">;</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>			<span class="n">i_ready</span><span class="o">;</span>
+	<span class="kt">output</span>	<span class="kt">reg</span>	<span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">o_data</span><span class="o">;</span>
+
+	<span class="c1">//
+</span>	<span class="c1">// We'll start with skid buffer itself
+</span>	<span class="c1">//
+</span>	<span class="kt">reg</span>			<span class="n">r_valid</span><span class="o">;</span>
+	<span class="kt">reg</span>	<span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">r_data</span><span class="o">;</span></code></pre></figure>
+
+<p>The internal skid buffer
+itself is captured by two signals.  The first, <code class="highlighter-rouge">r_valid</code>, just
+indicates that the internal buffer has valid data within it.  This is shown
+in Fig. 3 above, which shows data going into the internal buffer, as well as
+in Fig. 4 above, which shows data coming out of the internal buffer.</p>
+
+<p>The basic logic for this <code class="highlighter-rouge">r_valid</code> signal is that we want it to go high any
+time there’s a valid incoming signal but the outgoing path is stalled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">r_valid</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">r_valid</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="n">o_ready</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_ready</span><span class="p">))</span>
+		<span class="c1">// We have incoming data, but the output is stalled
+</span>		<span class="n">r_valid</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>We can then return to normal operation once the incoming ready signal returns
+to normal, acting again as a pass through device.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_ready</span><span class="p">)</span>
+		<span class="n">r_valid</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>The data logic is even simpler.  Any time the outgoing combinatorial side is
+ready, we’ll just quietly copy the incoming value into our buffer.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">o_ready</span><span class="p">)</span>
+		<span class="n">r_data</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>However, this doesn’t preserve our <code class="highlighter-rouge">OPT_LOWPOWER</code> property that any time
+<code class="highlighter-rouge">r_valid</code> is true <code class="highlighter-rouge">r_data</code> should be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="o">!</span><span class="n">r_valid</span> <span class="o">|-&gt;</span> <span class="n">r_data</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>To implement this low power logic, we’ll need to make certain that <code class="highlighter-rouge">r_data</code>
+starts at zero.  Not only that, but any time the design is reset then <code class="highlighter-rouge">r_valid</code>
+will be reset to zero, and so we’ll need to set <code class="highlighter-rouge">r_data</code> to zero in both of
+those cases–but only if <code class="highlighter-rouge">OPT_LOWPOWER</code> is set.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">r_data</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">r_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>This also means that any time the outgoing side <em>isn’t</em> stalled we’ll need
+to hold <code class="highlighter-rouge">r_data</code> at zero as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">o_valid</span> <span class="o">||</span> <span class="n">i_ready</span><span class="p">))</span>
+		<span class="n">r_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, we can copy the data any time the outgoing/upstream side isn’t
+stalled, just like before.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">OPT_LOWPOWER</span> <span class="o">||</span> <span class="n">i_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">o_ready</span><span class="p">)</span>
+		<span class="n">r_data</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>Or rather, we can’t because that’s not quite right.  If we are in both
+<code class="highlighter-rouge">OPT_LOWPOWER</code> mode, and we are registering our output, then we need to make
+certain we <em>only</em> set this value when <code class="highlighter-rouge">i_valid</code> is true.  Otherwise if
+<code class="highlighter-rouge">OPT_LOWPOWER</code> is true, the input and <code class="highlighter-rouge">r_valid</code> properties would force the
+output to be zero.</p>
+
+<p>While I could write this as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="n">OPT_OUTREG</span><span class="p">)</span> <span class="o">||</span> <span class="n">i_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">o_ready</span><span class="p">)</span></code></pre></figure>
+
+<p>I prefer expanding the logic out using <a href="https://en.wikipedia.org/wiki/De_Morgan's_laws">De Morgan’s
+laws</a>.  The condition below,
+therefore, captures the same logic.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">OPT_LOWPOWER</span> <span class="o">||</span> <span class="o">!</span><span class="n">OPT_OUTREG</span> <span class="o">||</span> <span class="n">i_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">o_ready</span><span class="p">)</span>
+		<span class="n">r_data</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>There’s also one very profound key feature to a
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">skid buffer</a>
+implementation that I missed for the first several years I used them: the
+output stall signal is given by the internal buffer’s valid signal.  The
+two are signals completely equivalent.  Ok, I’ll admit I didn’t believe
+it myself until I ran the
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+proof, but that’s beside the point.  In this case, since we are using
+<a href="/doc/axi-spec.pdf">AXI</a>
+READY/VALID notation, this means that the outgoing READY (not stalled)
+signal is the opposite of our VALID signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">o_ready</span> <span class="o">=</span> <span class="o">!</span><span class="n">r_valid</span><span class="o">;</span></code></pre></figure>
+
+<p>I built and implemented many <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>s
+before realizing this.  Even once I first saw this equivalency, it still
+took some time (and
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+proofs) to believe it.  That said, it nicely simplifies any implementation.</p>
+
+<p>Now that we’ve dealt with the internal buffer, we can move on to the outgoing
+interface.  We’ll need to split this logic into two sections, though: One
+section for the simpler case where the outgoing registers are not buffered,
+and another for the case where they are.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_OUTREG</span><span class="p">)</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>In the unregistered case, we’ll want our output port to be valid
+any time either the input port is valid, or if there’s data in our <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">o_valid</span> <span class="o">=</span> <span class="p">(</span><span class="n">i_valid</span> <span class="o">||</span> <span class="n">r_valid</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>This is also the combinatorial side of the interface, so you may note the use
+of the <code class="highlighter-rouge">always @(*)</code>.</p>
+
+<p>As for our output data, we’ll want that to come from the buffer any time the
+buffer is active, or be a pass through otherwise.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">r_valid</span><span class="p">)</span>
+			<span class="n">o_data</span> <span class="o">=</span> <span class="n">r_data</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">o_data</span> <span class="o">=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>Well, almost.  What if the incoming <code class="highlighter-rouge">i_data</code> didn’t observe the low-power
+property?  In that case we’d need to only set <code class="highlighter-rouge">o_data</code> to the incoming
+<code class="highlighter-rouge">i_data</code> value if <code class="highlighter-rouge">i_valid</code> were also set, otherwise we’d want to force the
+output to be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">r_valid</span><span class="p">)</span>
+			<span class="n">o_data</span> <span class="o">=</span> <span class="n">r_data</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_LOWPOWER</span> <span class="o">||</span> <span class="n">i_valid</span><span class="p">)</span>
+			<span class="n">o_data</span> <span class="o">=</span> <span class="n">i_data</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">o_data</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>Otherwise the outgoing interface logic seems simple enough.  But what
+about the case where we register the outgoing data?</p>
+
+<p>That one is just a touch trickier.</p>
+
+<p>Perhaps the valid line isn’t any different, save for the reality that it
+can be reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+
+		<span class="k">initial</span>	<span class="n">o_valid</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="n">o_valid</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_valid</span> <span class="o">||</span> <span class="n">i_ready</span><span class="p">)</span>
+			<span class="n">o_valid</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">i_valid</span> <span class="o">||</span> <span class="n">r_valid</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>That said, I’ve been burned by this kind of logic before, so I’ve gotten to
+the point where I always build it with the structure above.  Notice the
+<code class="highlighter-rouge">if (!o_valid || i_ready)</code> condition.  This is the piece that’s caught me up
+a couple of times.  It’s basically the same as saying
+<code class="highlighter-rouge">if (!(o_valid &amp;&amp; i_ready))</code> but rewritten using <a href="https://en.wikipedia.org/wiki/De_Morgan's_laws">De Morgan’s
+laws</a>, and so it describes
+any time the outgoing interface is not stalled.</p>
+
+<p>My problem is that I keep wanting to add other logic to channels like this,
+much like we discussed in the <a href="/formal/2019/04/16/axi-mistakes.html">article about the most common AXI
+mistake</a>.</p>
+
+<p>Be forwarned: if you play with registered signals using this basic handshake,
+you will want to use this pattern and no more!  How do I know this?  Because
+every time I do something different, the
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+tools correct me.  This seems to be the only valid approach to signals
+subject to the rules of this type of
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">handshake</a>.</p>
+
+<p>Does that mean that this format will apply to the <code class="highlighter-rouge">o_data</code> signal as well?
+Absolutely!</p>
+
+<p>We start with resetting <code class="highlighter-rouge">o_data</code> anytime <code class="highlighter-rouge">OPT_LOWPOWER</code> is set, and then
+we refuse any further logic if the output is stalled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">initial</span>	<span class="n">o_data</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="n">i_reset</span><span class="p">)</span>
+			<span class="n">o_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_valid</span> <span class="o">||</span> <span class="n">i_ready</span><span class="p">)</span>
+		<span class="k">begin</span></code></pre></figure>
+
+<p>The key to making this work in a registered context is now found within the
+next tidbit of logic.  First, if there’s something in the buffer, then that
+needs to move to the output port.  If not, but if something is coming in on
+the input port, then we’ll set to that output instead.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="n">r_valid</span><span class="p">)</span>
+				<span class="n">o_data</span> <span class="o">&lt;=</span> <span class="n">r_data</span><span class="o">;</span>
+			<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_LOWPOWER</span> <span class="o">||</span> <span class="n">i_valid</span><span class="p">)</span>
+				<span class="n">o_data</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span>
+			<span class="k">else</span>
+				<span class="n">o_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">end</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>As before, though, there’s an optimization we can take, but not if we are
+in the <code class="highlighter-rouge">OPT_LOWPOWER</code> mode.</p>
+
+<p>Before I leave this topic, notice the key feature of how I’ve used
+<code class="highlighter-rouge">OPT_LOWPOWER</code>: If it <em>isn’t</em> set, then all of the <code class="highlighter-rouge">OPT_LOWPOWER</code> logic
+(save the initial statement) just goes away.  Since <code class="highlighter-rouge">OPT_LOWPOWER</code> is a
+constant, the synthesizer can handle optimizing this logic away
+if <code class="highlighter-rouge">OPT_LOWPOWER</code> is ever clear.  The same is also basically
+true of <code class="highlighter-rouge">OPT_OUTREG</code>, but there’s more going on with that signal.</p>
+
+<p>That’s all there is to the implementation of a <a href="/blog/2017/08/14/strategies-for-pipelining.html">skid
+buffer</a>.
+As you can see, the logic is <em>really</em> simple, and there are really only two
+internal registers associated with it: <code class="highlighter-rouge">r_valid</code> and <code class="highlighter-rouge">r_data</code>.  If the outputs
+are registered as well, then <code class="highlighter-rouge">o_valid</code> and <code class="highlighter-rouge">o_data</code> will also be registered.</p>
+
+<p>That leads us to the next step: proving that <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">this
+implementation</a>
+works and that it does what it is supposed to.</p>
+
+<h2 id="formal-verification">Formal Verification</h2>
+
+<p>We’ve already seen several of the
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+properties above.  I’ll repeat those again below in a moment.  For now, let’s
+start with the reset properties.</p>
+
+<p>Following any reset, all of the valid lines need to be cleared.  We can assume
+this of our input signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">FORMAL</span>
+	<span class="c1">// Reset properties
+</span>	<span class="k">property</span> <span class="n">RESET_CLEARS_IVALID</span><span class="o">;</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span> <span class="n">i_reset</span> <span class="o">|=&gt;</span> <span class="o">!</span><span class="n">i_valid</span><span class="o">;</span>
+	<span class="k">endproperty</span></code></pre></figure>
+
+<p>In this case, I declared this as a named property–a feature of the
+SystemVerilog Assertion language.  I’ll come back to this in
+a moment and either assert or assume it.</p>
+
+<p>We’ll also want to assume that any time the incoming interface is stalled,
+that is any time there’s valid data at the input but <code class="highlighter-rouge">o_ready</code> is low, the
+valid signal needs to continue into the next clock cycle and the data isn’t
+allowed to change.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">property</span> <span class="n">IDATA_HELD_WHEN_NOT_READY</span><span class="o">;</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span> <span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">o_ready</span> <span class="o">|=&gt;</span> <span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">i_data</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">endproperty</span></code></pre></figure>
+
+<p>Now here’s why I’m declaring these as named properties: when I went to verify
+my <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v">AXI slave
+core</a> using
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">this buffer</a>,
+I realized that the <a href="/formal/2018/12/18/skynet.html">assumptions might void the
+proof</a>.  They had
+to be converted to assertions for that proof, while left as assumptions within.</p>
+
+<p>To handle this, I created a <code class="highlighter-rouge">SKIDBUFFER</code> macro to determine if the properties
+should be assumed or asserted.  Using this macro, I can choose to assume
+or assert as necessary.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">SKIDBUFFER</span>
+	<span class="k">assume</span>	<span class="k">property</span> <span class="p">(</span><span class="n">RESET_CLEARS_IVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">assume</span>	<span class="k">property</span> <span class="p">(</span><span class="n">IDATA_HELD_WHEN_NOT_READY</span><span class="p">)</span><span class="o">;</span>
+<span class="cp">`else</span>
+	<span class="k">assert</span>	<span class="n">RESET_CLEARS_IVALID</span><span class="o">;</span>
+	<span class="k">assert</span>	<span class="n">IDATA_HELD_WHEN_NOT_READY</span><span class="o">;</span>
+<span class="cp">`endif</span></code></pre></figure>
+
+<p>Those are the only two assumptions describing the incoming interface.</p>
+
+<p>On the outgoing side, we’ll quickly repeat the reset property: following any
+reset, both valid signals need to be cleared.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">i_reset</span> <span class="o">|=&gt;</span> <span class="o">!</span><span class="n">r_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">o_valid</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>We can now start walking through both our internal and output signals.</p>
+
+<p>The big rule we want to preserve is that any time there’s an outstanding
+request on the output port that’s stalled, i.e. <code class="highlighter-rouge">o_valid &amp;&amp; !i_ready</code>,
+then the request must remain the same on the next clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Rule #1:
+</span>	<span class="c1">//	Once o_valid goes high, the data cannot change until the
+</span>	<span class="c1">//	clock after i_ready
+</span>	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_ready</span>
+		<span class="o">|=&gt;</span> <span class="p">(</span><span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">o_data</span><span class="p">)))</span><span class="o">;</span></code></pre></figure>
+
+<p>The <code class="highlighter-rouge">disable iff (i_reset)</code> just means that we won’t check this test if the
+reset is ever high.  Personally, I think this goes without saying, however,
+the <a href="/blog/2017/10/19/formal-intro.html">formal</a>
+tools have been known to disagree with me from time to time.</p>
+
+<p>The second rule tries to capture the “no data shall be dropped” policy.
+Specifically, if there’s data on the incoming port, then it either needs
+to go to the output or it needs to be buffered.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Rule #2:
+</span>	<span class="c1">//	All incoming data must either go directly to the
+</span>	<span class="c1">//	output port, or into the skid buffer
+</span>	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="p">(</span><span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="n">o_ready</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_OUTREG</span> <span class="o">||</span> <span class="n">o_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_ready</span><span class="p">)</span>
+			<span class="o">|=&gt;</span> <span class="p">(</span><span class="n">r_valid</span> <span class="o">&amp;&amp;</span> <span class="n">r_data</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_data</span><span class="p">)))</span><span class="o">;</span></code></pre></figure>
+
+<p>What about the other cases?  Well, if either <code class="highlighter-rouge">!i_valid</code> or
+<code class="highlighter-rouge">i_valid &amp;&amp; !o_ready</code>, then nothing happens on the input port that we need
+to worry about.  Since <code class="highlighter-rouge">r_valid</code> is equivalent to <code class="highlighter-rouge">!o_ready</code>, we know that
+the only interesting case is the one in which <code class="highlighter-rouge">r_valid</code> is low.  If <code class="highlighter-rouge">r_valid</code>
+is low and <code class="highlighter-rouge">i_ready</code> is high, the core is a simple pass through and a quick
+code inspection will prove that works.  That leaves the case where <code class="highlighter-rouge">r_valid</code> is
+low and <code class="highlighter-rouge">i_ready</code> is also low–the case we covered above.</p>
+
+<p>This doesn’t quite capture everything, though.  We’ve now discussed how
+information should flow through this design, but not how the design should
+return to idle.  That’s important, and I’ve been burned by not checking
+the return to idle before.  Hence we want to make certain that the design
+will return to idle.</p>
+
+<p>So any time <code class="highlighter-rouge">i_ready</code> is true on the outgoing interface then everything should
+be cleared.  On the next clock, <code class="highlighter-rouge">o_valid</code> should only be true if <code class="highlighter-rouge">i_valid</code> is
+also true.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Rule #3:
+</span>	<span class="c1">//	After the last transaction, o_valid should become idle
+</span>	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_OUTREG</span><span class="p">)</span>
+	<span class="k">begin</span>
+
+		<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+			<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="n">i_ready</span> <span class="o">|=&gt;</span> <span class="p">(</span><span class="n">o_valid</span> <span class="o">==</span> <span class="n">i_valid</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>But what if we are registering the ports on our outgoing interface?</p>
+
+<p>In that case two rules shall apply.  First, any time an input is accepted,
+then <code class="highlighter-rouge">o_valid</code> should be high on the next clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+
+		<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+			<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="n">o_ready</span> <span class="o">|=&gt;</span> <span class="n">o_valid</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Second, any time <code class="highlighter-rouge">i_ready</code> is true and there’s nothing on either the input
+or in the buffer, then <code class="highlighter-rouge">o_valid</code> should clear on the next clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+			<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="o">!</span><span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">r_valid</span> <span class="o">&amp;&amp;</span> <span class="n">i_ready</span> <span class="o">|=&gt;</span> <span class="o">!</span><span class="n">o_valid</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>That checks both the rise and the fall of <code class="highlighter-rouge">o_valid</code>.  Seems simple enough.</p>
+
+<p>But what about <code class="highlighter-rouge">r_valid</code>?</p>
+
+<p>Well, if <code class="highlighter-rouge">r_valid</code> is ever true while the outgoing port is <code class="highlighter-rouge">i_ready</code>, then
+the skid buffer gets copied to the outgoing port and <code class="highlighter-rouge">r_valid</code> must be
+deasserted on the next clock.  This is the case from Fig. 4 above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Rule #4
+</span>	<span class="c1">//	Same thing, but this time for r_valid
+</span>	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">r_valid</span> <span class="o">&amp;&amp;</span> <span class="n">i_ready</span> <span class="o">|=&gt;</span> <span class="o">!</span><span class="n">r_valid</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>What if something was also coming in on the incoming interface?  It won’t
+happen.  Remember, <code class="highlighter-rouge">o_ready = !r_valid</code>.  Therefore if <code class="highlighter-rouge">r_valid</code> is high,
+the incoming interface is stalled and so we can ignore it.</p>
+
+<p>That leaves the two special low power properties that we discussed above.  We
+only want to enforce those if <code class="highlighter-rouge">OPT_LOWPOWER</code> is set, and we want to ignore
+them otherwise.  Therefore, we’ll use a generate block to capture these
+checks.  That means that if <code class="highlighter-rouge">OPT_LOWPOWER</code> isn’t set, the synthesis tool
+(i.e. <a href="http://www.clifford.at/yosys">yosys</a>) won’t even create the
+logic to support these checks.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">//
+</span>		<span class="c1">// If OPT_LOWPOWER is set, o_data and r_data both need
+</span>		<span class="c1">// to be zero any time !o_valid or !r_valid respectively
+</span>		<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+			<span class="o">!</span><span class="n">o_valid</span> <span class="o">|-&gt;</span> <span class="n">o_data</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+
+		<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+			<span class="o">!</span><span class="n">r_valid</span> <span class="o">|-&gt;</span> <span class="n">r_data</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+
+		<span class="c1">// else
+</span>		<span class="c1">//	if OPT_LOWPOWER isn't set, we can lower our logic
+</span>		<span class="c1">//	count by not forcing these values to zero.
+</span>
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>Those are all of the properties we need to know this works, but does it
+really work?</p>
+
+<p>For that, we’ll turn to cover.</p>
+
+<h2 id="cover">Cover</h2>
+
+<p>Unlike the safety (assert/assume) properties above which can be proved true
+if no trace can be found that makes an assert false while keeping all of
+the assumes true, cover only succeeds if at least one trace can be found.
+Cover is very useful for finding faults in your assumptions, proving that
+particular operations can take place and more.</p>
+
+<p>It’s also very valuable when you just want a trace showing that the design
+works.</p>
+
+<p>So let’s build such a trace that starts and ends with the core idle.
+In the middle, we’ll insist that the <code class="highlighter-rouge">i_ready</code> line toggle from high to low
+twice before settling back on high.</p>
+
+<p>Oh, and did I mention that we only want to check cover if this unit is
+verified in isolation?  Otherwise it may be that the parent module doesn’t
+ever make this <code class="highlighter-rouge">cover()</code> statement true–something that wouldn’t be a fault.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">SKIDBUFFER</span>
+	<span class="kt">reg</span>	<span class="n">f_changed_data</span><span class="o">;</span>
+
+	<span class="c1">// Cover test
+</span>	<span class="k">cover</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="kt">disable</span> <span class="k">iff</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="p">(</span><span class="o">!</span><span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_valid</span><span class="p">)</span>
+		<span class="p">##</span><span class="mi">1</span> <span class="n">i_valid</span> <span class="o">&amp;&amp;</span>  <span class="n">i_ready</span> <span class="p">[</span><span class="o">*</span><span class="mi">3</span><span class="p">]</span>
+		<span class="p">##</span><span class="mi">1</span> <span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_ready</span>
+		<span class="p">##</span><span class="mi">1</span> <span class="n">i_valid</span> <span class="o">&amp;&amp;</span>  <span class="n">i_ready</span> <span class="p">[</span><span class="o">*</span><span class="mi">2</span><span class="p">]</span>
+		<span class="p">##</span><span class="mi">1</span> <span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_ready</span> <span class="p">[</span><span class="o">*</span><span class="mi">2</span><span class="p">]</span>
+		<span class="p">##</span><span class="mi">1</span> <span class="n">i_valid</span> <span class="o">&amp;&amp;</span>  <span class="n">i_ready</span> <span class="p">[</span><span class="o">*</span><span class="mi">3</span><span class="p">]</span>
+		<span class="c1">// Wait for the design to clear
+</span>		<span class="p">##</span><span class="mi">1</span> <span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="n">i_ready</span> <span class="p">[</span><span class="o">*</span><span class="mi">0</span><span class="o">:</span><span class="mi">5</span><span class="p">]</span>
+		<span class="p">##</span><span class="mi">1</span> <span class="p">(</span><span class="o">!</span><span class="n">o_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="n">f_changed_data</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>The resulting trace is interesting, but it could be better.  In particular, the
+incoming data is all zeros.  While that’s valid, it’s not very revealing.
+I’d rather be able to “see” from the trace that the various data lines were
+properly progressing.  Perhaps if we cound insist that the incoming data
+be a counter?</p>
+
+<p>The easy way to do this is to add another register, and some logic associated
+with it.  Let’s call this <code class="highlighter-rouge">f_changed_data</code>, and use it to indicate that our
+data “properly” changes throughout the cover trace.  That is, <code class="highlighter-rouge">f_changed_data</code>
+will capture if the incoming data counts up–just so we can visualize
+the trace and what is going on easier.</p>
+
+<p>In many ways, this isn’t your typical “formal” property.  It doesn’t use any
+of the formal language features (except <code class="highlighter-rouge">$past()</code>).  However, if the whole
+world starts to look like a Verilog problem, then the solution is easily a
+simple piece of Verilog logic.</p>
+
+<p>We’ll start by setting this <code class="highlighter-rouge">f_changed_data</code> flag to true, and the clear the
+flag if any rule of what we want to see for our cover statement changes.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_changed_data</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">f_changed_data</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p><code class="highlighter-rouge">i_data</code> is only allowed to change on the clock following
+<code class="highlighter-rouge">!i_valid || o_ready</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="o">!</span><span class="n">i_valid</span> <span class="o">||</span> <span class="n">o_ready</span><span class="p">))</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>In this case, we’ll just clear <code class="highlighter-rouge">f_changed_data</code> any time <code class="highlighter-rouge">i_data</code> doesn’t
+increment.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">i_data</span> <span class="o">!=</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_data</span> <span class="o">+</span> <span class="mi">1</span><span class="p">))</span>
+			<span class="n">f_changed_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>Similarly, we want clear this value any time the input hasn’t been valid
+constantly.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_valid</span> <span class="o">&amp;&amp;</span> <span class="n">i_data</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span>
+		<span class="n">f_changed_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<table align="center" style="float: right"><caption>Fig 6. A cover trace from this skid buffer</caption><tr><td><img src="/img/skidbuffer/skidbuffer-example.svg" alt="" width="360" /></td></tr></table>
+
+<p>Voila!  We now have a wonderful trace in Fig. 6 showing how this core works.</p>
+
+<p>Yes, this trace has been edited, but only minimally.</p>
+
+<h2 id="symbiyosys-script">SymbiYosys Script</h2>
+
+<p>In most cases the <a href="https://symbiyosys.readthedocs.io/en/latest/reference.html">SymbiYosys
+script</a>
+used to drive a proof like this is very basic.  In this case, however, there
+are a couple of key features of <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/skidbuffer.sby">the
+script</a>
+that are worth discussing.</p>
+
+<p>First, you may recall above that I mentioned we would need to do four separate
+proofs in order to try all of the combinations of our <code class="highlighter-rouge">OPT_LOWLOGIC</code> and
+<code class="highlighter-rouge">OPT_OUTREG</code> parameters.  Each of these can be separated into its own
+proof using the <code class="highlighter-rouge">[tasks]</code> section of the <a href="https://symbiyosys.readthedocs.io/en/latest/reference.html">SymbiYosys configuration
+file</a>.  We’ll
+also create a single task for our cover proof.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">[tasks]
+prfc prf
+prfo prf              opt_outreg
+lpc  prf opt_lowpower
+lpo  prf opt_lowpower opt_outreg
+cvr</code></pre></figure>
+
+<p>If you’ve never seen a <code class="highlighter-rouge">[tasks]</code> section of a <a href="https://symbiyosys.readthedocs.io/en/latest/reference.html">SymbiYosys
+file</a>
+before, then you are in for a treat.  Each line within this section
+defines a separate
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+run.  The first identifier on the line gives the name of the run, and the
+subsequent identifiers are tags that are then applied to the run and useful
+when configuring it.</p>
+
+<p>The second section, the <code class="highlighter-rouge">[options]</code> section, shows the first reason to use
+tasks: All of our induction proofs can be accomplished within 3 steps, whereas
+the cover pass will take 20.  Here you’ll notice that every task above had
+either the <code class="highlighter-rouge">prf</code> tag or the <code class="highlighter-rouge">cvr</code> name (also a tag).  This allows us to
+set different depths for each of the passes.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">[options]
+prf: mode prove
+prf: depth 3
+cvr: mode cover
+cvr: depth 20</code></pre></figure>
+
+<p>This design is simple enough that it doesn’t really matter what engine we
+use, so we’ll use the default.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">[engines]
+smtbmc</code></pre></figure>
+
+<p>The real action, however, is in the <code class="highlighter-rouge">[script]</code> section.  This section contains
+a series of commands to be given to <a href="http://www.clifford.at/yosys">yosys</a>
+to control how the design is processed.  That also means that you can use the
+<a href="http://www.clifford.at/yosys">yosys</a> <code class="highlighter-rouge">help</code> command if you come across
+anything confusing.</p>
+
+<p>We’ll start the script off by defining the <code class="highlighter-rouge">SKIDBUFFER</code> macro, and then
+<a href="http://www.clifford.at/yosys/cmd_read.html">reading</a>
+our code into <a href="http://www.clifford.at/yosys">yosys</a>.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">[script]
+read -define SKIDBUFFER
+read -formal skidbuffer.v</code></pre></figure>
+
+<p>Often my designs consist of many parts.  For these designs, I’d spend one
+line here reading in each of the input files.</p>
+
+<p>The next step, however, is to control the parameters externally.
+<a href="http://www.clifford.at/yosys">yosys</a> has a new extension to the <code class="highlighter-rouge">hierarchy</code>
+command to make this easier.
+Basically, the <code class="highlighter-rouge">hierarchy</code> command finds the top level module and instantiates
+all of the logic below it.  In our case, we want to instantiate specific
+logic depending upon the proof.  Therefore we are going to use the <code class="highlighter-rouge">chparam</code>
+option to <code class="highlighter-rouge">hierarchy</code> to set these parameters.</p>
+
+<p>This is different from the <a href="/zipcpu/2018/12/20/sby-makefile.html">approach I discussed
+before</a>.  Before,
+I would have written,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">opt_outreg:    chparam -set OPT_OUTREG 1   skidbuffer
+~opt_outreg:   chparam -set OPT_OUTREG 0   skidbuffer
+opt_lowpower:  chparam -set OPT_LOWPOWER 1 skidbuffer
+~opt_lowpower: chparam -set OPT_LOWPOWER 0 skidbuffer</code></pre></figure>
+
+<p>This usage had some problems, and so it has now been deprecated.  One of those
+problems was that <a href="http://www.clifford.at/yosys">yosys</a> would re-elaborate
+the module with every call to <code class="highlighter-rouge">chparam</code>.  Any elaboration errors due to
+incompatible parameter settings along the way might cause the whole process
+to halt.</p>
+
+<p>Instead, using the <code class="highlighter-rouge">hierarchy</code> command, every parameter is set at once.  Hence
+we might want to use,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">prfc: hierarchy -top skidbuffer -chparam OPT_LOWPOWER 0 -chparam OPT_OUTREG 0
+prfo: hierarchy -top skidbuffer -chparam OPT_LOWPOWER 0 -chparam OPT_OUTREG 1
+lpc:  hierarchy -top skidbuffer -chparam OPT_LOWPOWER 1 -chparam OPT_OUTREG 0
+lpo:  hierarchy -top skidbuffer -chparam OPT_LOWPOWER 1 -chparam OPT_OUTREG 1</code></pre></figure>
+
+<p>The problem with this approach is simple: what if you have twenty different
+tasks, all with different repeats of the same options?</p>
+
+<p>In this case, <a href="https://symbiyosys.readthedocs.io/en/latest/reference.html#pycode-blocks">SymbiYosys’ python
+interface</a>
+can come to our rescue.</p>
+
+<p>The following script will check our two parameters independently, and create
+a string variable, called <code class="highlighter-rouge">cmd</code>, containing the <code class="highlighter-rouge">hierarchy</code> line with the
+appropriate values in it.  Then, when the <code class="highlighter-rouge">output(cmd);</code> call is issued at
+the end, the <code class="highlighter-rouge">cmd</code> string will be written into the individual
+<a href="http://www.clifford.at/yosys">yosys</a> scripts driving each of their
+respective proofs.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">--pycode-begin--
+cmd = "hierarchy -top skidbuffer"
+cmd += " -chparam OPT_LOWPOWER %d" % (1 if "opt_lowpower" in tags else 0)
+cmd += " -chparam OPT_OUTREG   %d" % (1 if "opt_outreg"   in tags else 0)
+output(cmd);
+--pycode-end--
+prep -top skidbuffer</code></pre></figure>
+
+<p>The final <code class="highlighter-rouge">[files]</code> section is fairly unremarkable.  It just lists the files
+used in this proof.  In this case, it is only the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/skidbuffer.v">skidbuffer.v</a>
+file.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">[files]
+skidbuffer.v</code></pre></figure>
+
+<p><a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>
+will copy this file into its processing directory prior to running the proof.</p>
+
+<p>The whole proof can now be run using,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">% sby -f skidbuffer.sby</code></pre></figure>
+
+<p>Alternatively, you can integrate it into your
+<a href="/blog/2017/10/19/formal-intro.html">formal verification</a>
+<a href="/zipcpu/2018/12/20/sby-makefile.html">Makefile</a>, and just run</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">% make</code></pre></figure>
+
+<p>Feel free to take a loot at the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/Makefile">Makefile</a>
+I’m using for these
+<a href="/doc/axi-spec.pdf">AXI</a>
+projects should you need an example.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Skid buffers are very powerful, and very useful, especially when using
+<a href="/doc/axi-spec.pdf">AXI</a>.  Indeed, I’m using skid buffers
+throughout almost all of <a href="https://github.com/ZipCPU/wb2axip/tree/master/rtl">my various AXI
+designs</a>.  Over and over
+it’s the same logic, so it makes sense to create a single file to capture this
+logic and simplify the design.  They really are just that useful.</p>
+
+<p>I just wish I’d separated this logic into its own module earlier, since
+now I have many, many copies of the same logic that need to be maintained.
+To this end, I’d like to thank <a href="https://twitter.com/elaforest">Eric LaForest</a>
+for setting a better example for me to follow.  I would also commend <a href="http://fpgacpu.ca/fpga/skid_buffer.html">his blog
+article on skid buffers</a> to you
+for further reading.</p>
+
+<p>For those of you who are not familiar with the <a href="http://www.asic-world.com/systemverilog/assertions4.html">SystemVerilog’s concurrent
+assertion language</a>,
+or who do not have access to the commercial
+<a href="https://www.symbioticeda.com/seda-suite">SymbioticEDA Suite</a>, you might find
+<a href="/formal/2019/02/21/txuart.html">this discussion of alternatives and equivalents to concurrent assertions
+valuable</a>.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>The desire accomplished is sweet to the soul: but it is abomination to fools to depart from evil. (Prov 13:19)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
