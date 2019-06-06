@@ -93,7 +93,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 	//
 	// Cross clock domains
 	//
-	// Cross the read gray pointer into the write clock domain
+	// Cross the read Gray pointer into the write clock domain
 	initial	{ wq2_rgray,  wq1_rgray } = 0;
 	always @(posedge i_wclk or negedge i_wrst_n)
 	if (!i_wrst_n)
@@ -109,7 +109,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 
 	assign	waddr = wbin[AW-1:0];
 
-	// Register these two values--the address and its gray code
+	// Register these two values--the address and its Gray code
 	// representation
 	initial	{ wbin, wgray } = 0;
 	always @(posedge i_wclk or negedge i_wrst_n)
@@ -152,7 +152,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 	//
 	// Cross clock domains
 	//
-	// Cross the write gray pointer into the read clock domain
+	// Cross the write Gray pointer into the read clock domain
 	initial	{ rq2_wgray,  rq1_wgray } = 0;
 	always @(posedge i_rclk or negedge i_rrst_n)
 	if (!i_rrst_n)
@@ -163,10 +163,10 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 
 	// Calculate the next read address,
 	assign	rbinnext  = rbin + { {(AW){1'b0}}, ((i_rd)&&(!o_rempty)) };
-	// and the next gray code version associated with it
+	// and the next Gray code version associated with it
 	assign	rgraynext = (rbinnext >> 1) ^ rbinnext;
 
-	// Register these two values, the read address and the gray code version
+	// Register these two values, the read address and the Gray code version
 	// of it, on the next read clock
 	//
 	initial	{ rbin, rgray } = 0;
@@ -176,7 +176,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 	else
 		{ rbin, rgray } <= { rbinnext, rgraynext };
 
-	// Memory read address gray code and pointer calculation
+	// Memory read address Gray code and pointer calculation
 	assign	raddr = rbin[AW-1:0];
 
 	// Determine if we'll be empty on the next clock
@@ -485,7 +485,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 	always @(*)
 		`ASSERT(f_r2w_fill <= { 1'b1, {(AW){1'b0}} });
 
-	// From the writers perspective, anytime the gray pointers are
+	// From the writers perspective, anytime the Gray pointers are
 	// equal save for the top bit, the FIFO is full and should be asserted
 	// as such.  It is possible for the FIFO to be asserted as full at
 	// some other times as well.
@@ -494,7 +494,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 		`ASSERT(o_wfull);
 
 	// The same basic principle applies to the reader as well.  From the
-	// readers perspective, anytime the gray pointers are equal the FIFO
+	// readers perspective, anytime the Gray pointers are equal the FIFO
 	// is empty, and should be asserted as such.
 	always @(*)
 	if (rgray == rq2_wgray)
