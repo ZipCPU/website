@@ -67,10 +67,10 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 			AW = ASIZE;
 	input	wire			i_wclk, i_wrst_n, i_wr;
 	input	wire	[DW-1:0]	i_wdata;
-	output	wire			o_wfull;
+	output	reg			o_wfull;
 	input	wire			i_rclk, i_rrst_n, i_rd;
 	output	wire	[DW-1:0]	o_rdata;
-	output	wire			o_rempty;
+	output	reg			o_rempty;
 
 	wire	[AW-1:0]	waddr, raddr;
 	wire			wfull_next, rempty_next;
@@ -602,7 +602,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 			f_next_valid = 1'b1;
 	end
 
-	wire	f_first_in_fifo, f_second_in_fifo, f_both_in_fifo;
+	reg	f_first_in_fifo, f_second_in_fifo, f_both_in_fifo;
 
 	always @(*)
 		f_first_in_fifo = (f_addr_valid)
@@ -614,7 +614,7 @@ module afifo(i_wclk, i_wrst_n, i_wr, i_wdata, o_wfull,
 	always @(*)
 		f_both_in_fifo = (f_first_in_fifo)&&(f_second_in_fifo);
 
-	wire	f_wait_for_first_read, f_read_first, f_read_second,
+	reg	f_wait_for_first_read, f_read_first, f_read_second,
 		f_wait_for_second_read;
 
 	// States of interest
