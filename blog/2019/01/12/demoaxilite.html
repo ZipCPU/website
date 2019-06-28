@@ -527,40 +527,45 @@ the upstream channel should only stall if the downstream channel is stalled
 
 <p>We’ll need this tidbit as we move forward.</p>
 
+<p>Let’s also try to simplify things with two helper variables.  The first,
+<code class="highlighter-rouge">valid_read_request</code>, will be true if ever there’s been a request on the
+read channel, either currently or one that has since stalled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">valid_read_request</span>  <span class="o">=</span>  <span class="n">S_AXI_ARVALID</span> <span class="o">||</span> <span class="o">!</span><span class="n">S_AXI_ARREADY</span><span class="o">;</span></code></pre></figure>
+
+<p>Similarly, we’ll assign <code class="highlighter-rouge">read_response_stall</code> to indicate that there’s a
+valid response currently in the return channel but that the ready flag
+is low so that it cannot move forward.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">read_response_stall</span> <span class="o">=</span>  <span class="n">S_AXI_RVALID</span>  <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_RREADY</span><span class="o">;</span></code></pre></figure>
+
 <p>So let’s work through our downstream implementation first.</p>
 
-<p>The downstream response will be invalid following a reset (obviously), but
-valid following any incoming request, stalled or not.</p>
+<p>If the downstream read channel is stalled, that means <code class="highlighter-rouge">axi_rvalid</code> is true
+and must remain so until the stall is clear.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_rvalid</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span> <span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span> <span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
 		<span class="n">axi_rvalid</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
-	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_ARVALID</span><span class="p">)</span>
-		<span class="n">axi_rvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">read_response_stall</span><span class="p">)</span>
+		<span class="c1">// Need to stay valid as long as the return path is stalled
+</span>		<span class="n">axi_rvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
 
 <p>Likewise if the response was valid before and the downstream response channel
 was stalled, then we need to maintain the response on the output channel until
 it has been accepted.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">S_AXI_RVALID</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_RREADY</span><span class="p">))</span>
-		<span class="n">axi_rvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
-
-<p>These are the straightforward parts of this logic.</p>
-
-<p>The piece that isn’t quite as straight forward is that if the downstream channel
-isn’t stalled, but yet there’s an item in our buffer and so <code class="highlighter-rouge">!axi_arready</code>,
-then we also want to set the output response channel as valid.  This was the
-situation shown in Fig. 9 above.</p>
-
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">axi_arready</span><span class="p">)</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">valid_read_request</span><span class="p">)</span>
 		<span class="n">axi_rvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
 
 <p>In all other cases, we’ll release the response channel and lower our valid
 signal, since all transactions have by now been accepted.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span>
-		<span class="n">axi_rvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+		<span class="c1">// Any stall has cleared, so we can always
+</span>		<span class="c1">// clear the valid signal in this case
+</span>		<span class="n">axi_rvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
 
 <p>But what about the data content of this channel?</p>
 
@@ -594,7 +599,7 @@ This helps to satisfy our minimum logic goal.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_ARREADY</span><span class="p">)</span>
-		<span class="n">dly_addr</span> <span class="o">&lt;=</span> <span class="n">S_AXI_ARADDR</span><span class="o">;</span></code></pre></figure>
+		<span class="n">pre_raddr</span> <span class="o">&lt;=</span> <span class="n">S_AXI_ARADDR</span><span class="o">;</span></code></pre></figure>
 
 <p>The second step is to determine which address to read from.  If our
 <a href="/blog/2017/08/14/strategies-for-pipelining.html">buffer</a>
@@ -606,7 +611,7 @@ address provided on the
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">axi_arready</span><span class="p">)</span>
-		<span class="n">rd_addr</span> <span class="o">=</span> <span class="n">dly_addr</span><span class="o">;</span>
+		<span class="n">rd_addr</span> <span class="o">=</span> <span class="n">pre_raddr</span><span class="o">;</span>
 	<span class="k">else</span>
 		<span class="n">rd_addr</span> <span class="o">=</span> <span class="n">S_AXI_ARADDR</span><span class="o">;</span></code></pre></figure>
 
@@ -617,7 +622,7 @@ channel isn’t stalled–regardless
 of whether we have an active read request or not.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
-	<span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">S_AXI_RVALID</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">S_AXI_RREADY</span><span class="p">))</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">read_response_stall</span><span class="p">)</span>
 		<span class="c1">// If the outgoing channel is not stalled (above)
 </span>		<span class="c1">// then read
 </span>		<span class="n">axi_rdata</span> <span class="o">&lt;=</span> <span class="n">slv_mem</span><span class="p">[</span><span class="n">rd_addr</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="n">ADDR_LSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDR_LSB</span><span class="p">]]</span><span class="o">;</span></code></pre></figure>
@@ -633,33 +638,30 @@ side effects, such as in my
 In that case, you’d want to add a bit more logic, perhaps even the following:</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
-	<span class="k">if</span> <span class="p">(((</span><span class="o">!</span><span class="n">S_AXI_RVALID</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">S_AXI_RREADY</span><span class="p">))</span>
-		<span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">OPT_READ_SIDEEFFECTS</span> <span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">axi_arready</span> <span class="o">||</span> <span class="n">S_AXI_ARVALID</span><span class="p">)))</span>
-		<span class="c1">// If 1. the outgoing channel is not stalled (above)
-</span>		<span class="c1">// and 2. there's an outstanding (!axi_arready) or
-</span>		<span class="c1">// incoming (S_AXI_ARVALID) read request, then
-</span>		<span class="c1">// perform the read
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">read_response_stall</span>
+		<span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">OPT_READ_SIDEEFFECTS</span> <span class="o">||</span> <span class="n">valid_read_request</span><span class="p">))</span>
+		<span class="c1">// If the outgoing channel is not stalled (above)
+</span>		<span class="c1">// then read
 </span>		<span class="n">axi_rdata</span> <span class="o">&lt;=</span> <span class="n">slv_mem</span><span class="p">[</span><span class="n">rd_addr</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="n">ADDR_LSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDR_LSB</span><span class="p">]]</span><span class="o">;</span></code></pre></figure>
 
 <p>That sets our response data.  Now for the upstream <code class="highlighter-rouge">S_AXI_ARREADY</code> which, as
 I mentioned above, also determines when or if we have an item in our buffer.</p>
 
 <p>The logic here starts by looking downstream.  If we have something in our
-buffer, that is if <code class="highlighter-rouge">!axi_arready</code> is true, then as long as the downstream
-channel remains stalled with <code class="highlighter-rouge">S_AXI_RVALID &amp;&amp; !S_AXI_RREADY</code> the upstream
-channel needs to remain stalled as well.</p>
+buffer or about to be in our buffer, that is if we have a
+<code class="highlighter-rouge">valid_read_request</code>, then we’ll need to stall the upstream
+channel as well.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_arready</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
 		<span class="n">axi_arready</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
-	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">S_AXI_RVALID</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_RREADY</span><span class="p">))</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">read_response_stall</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="c1">// Outgoing channel is stalled
-</span>		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">axi_arready</span><span class="p">)</span>
-			<span class="c1">// If something is already in the buffer,
-</span>			<span class="c1">// axi_arready needs to stay low
-</span>			<span class="n">axi_arready</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+</span>		<span class="c1">//    As long as something is already in the buffer,
+</span>		<span class="c1">//    axi_arready needs to stay low
+</span>		<span class="n">axi_arready</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">valid_read_request</span><span class="o">;</span></code></pre></figure>
 
 <p>Here’s the difficult part: If the downstream channel is stalled,
 and the upstream channel is passing us data, then we need to accept the
@@ -749,6 +751,18 @@ data buffer.</p>
 <p>That’s going to be our basic approach.  Now let’s just work through the
 various signals.</p>
 
+<p>Our first step will be to define some helper variables, to make the logic
+below simpler.  The first will indicate that we have a valid write address,
+either one coming in now or one in our buffer.  The second is the same,
+but for write data.  Finally, the third helper indicates that the outgoing
+channel is stalled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">valid_write_address</span> <span class="o">=</span> <span class="n">S_AXI_AWVALID</span> <span class="o">||</span> <span class="o">!</span><span class="n">axi_awready</span><span class="o">;</span>
+	<span class="k">assign</span>	<span class="n">valid_write_data</span>    <span class="o">=</span> <span class="n">S_AXI_WVALID</span>  <span class="o">||</span> <span class="o">!</span><span class="n">axi_wready</span><span class="o">;</span>
+	<span class="k">assign</span>	<span class="n">write_response_stall</span><span class="o">=</span> <span class="n">S_AXI_BVALID</span>  <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_BREADY</span><span class="o">;</span></code></pre></figure>
+
+<p>These three helper values will make it easier to express our logic below.</p>
+
 <p>Let’s start with the write address channel ready signal, and the logic that
 would be appropriate if there were no write data channel.  That is, set the
 ready on reset, then deal with the case where the outgoing buffer is stalled.</p>
@@ -757,7 +771,7 @@ ready on reset, then deal with the case where the outgoing buffer is stalled.</p
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
 		<span class="n">axi_awready</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
-	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">S_AXI_BVALID</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_BREADY</span><span class="p">))</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">write_response_stall</span><span class="p">)</span>
 	<span class="k">begin</span></code></pre></figure>
 
 <p>Now when I say that the outgoing buffer is stalled, I mean that <code class="highlighter-rouge">S_AXI_BVALID</code>
@@ -767,8 +781,9 @@ leaves us with two conditions to check, as shown in Fig. 13 below.</p>
 
 <table align="center" style="float: none"><caption>Fig 13. Stall conditions if the response channel is already stalled</caption><tr><td><img src="/img/demoaxil/demoaxil-wdbl-1.svg" alt="" width="720" /></td></tr></table>
 
-<p>If the output channel is stalled and our buffer is already full, then we need
-to remain stalled.  This is the case shown on the right above.  Likewise if
+<p>If the output channel is stalled and our buffer is either already full
+or a new write address is available, then we need to make certain that
+the write address channel is stalled.  This is the case shown on the right above.  Likewise if
 the output channel is stalled and we just accepted a value, then we need to
 lower the ready line of <code class="highlighter-rouge">S_AXI_AWREADY</code>.  This is shown on the left above.
 In either case, we need to drop the ready signal for this channel.  However,
@@ -776,13 +791,10 @@ if there’s nothing in our buffer and <code class="highlighter-rouge">S_AXI_AWV
 then we can just leave our buffer empty.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// The output channel is stalled
-</span>		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">axi_awready</span><span class="p">)</span>
-			<span class="c1">// If our buffer is full, remain stalled
-</span>			<span class="n">axi_awready</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
-		<span class="k">else</span>
-			<span class="c1">// If the buffer is empty, accept one transaction
-</span>			<span class="c1">// to fill it and then stall
-</span>			<span class="n">axi_awready</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_AWVALID</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+</span>		<span class="c1">//	If our buffer is full, we need to remain stalled
+</span>		<span class="c1">//	Likewise if it is empty, and there's a request,
+</span>		<span class="c1">//	  we'll need to stall.
+</span>		<span class="n">axi_awready</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">valid_write_address</span><span class="o">;</span></code></pre></figure>
 
 <p>That wasn’t too bad, and it was roughly identical to what we did before.</p>
 
@@ -802,7 +814,7 @@ an address is coming in or it isn’t.  If no address comes in, then the
 We are working through the write address channel, so that doesn’t impact
 us here.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">axi_wready</span><span class="p">)</span><span class="o">||</span><span class="p">((</span><span class="n">S_AXI_WVALID</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">S_AXI_WREADY</span><span class="p">)))</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">valid_write_data</span><span class="p">)</span>
 		<span class="c1">// The output channel is clear, and write data
 </span>		<span class="c1">// are available
 </span>		<span class="n">axi_awready</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
@@ -832,14 +844,12 @@ information are reversed.</p>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
 		<span class="n">axi_wready</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
-	<span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">S_AXI_BVALID</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_BREADY</span><span class="p">))</span>
-	<span class="k">begin</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">write_response_stall</span><span class="p">)</span>
 		<span class="c1">// The output channel is stalled
-</span>		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">axi_wready</span><span class="p">)</span>
-			<span class="n">axi_wready</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
-		<span class="k">else</span>
-			<span class="n">axi_wready</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_WVALID</span><span class="p">)</span><span class="o">;</span>
-	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">axi_awready</span><span class="p">)</span><span class="o">||</span><span class="p">((</span><span class="n">S_AXI_AWVALID</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">S_AXI_AWREADY</span><span class="p">)))</span>
+</span>		<span class="c1">//	We can remain ready until valid
+</span>		<span class="c1">//	write data shows up
+</span>		<span class="n">axi_wready</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">valid_write_data</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">valid_write_address</span><span class="p">)</span>
 		<span class="c1">// The output channel is clear, and a write address
 </span>		<span class="c1">// is available
 </span>		<span class="n">axi_wready</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
@@ -852,9 +862,15 @@ information are reversed.</p>
 address channel, it means capturing the incoming address.  Remember,
 our buffer is valid any time <code class="highlighter-rouge">axi_awready</code> is low.</p>
 
+<p>The bus requires that we capture this address any time
+<code class="highlighter-rouge">S_AXI_AWVALID &amp;&amp; S_AXI_AWREADY</code>.  The reality, though, is that if
+<code class="highlighter-rouge">S_AXI_AWREADY</code> is true, then we can capture the address regardless of
+whether or not <code class="highlighter-rouge">AWVALID</code> is also true–since our address copy is a don’t
+care if no request is active.</p>
+
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Buffer the address
 </span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
-	<span class="k">if</span> <span class="p">((</span><span class="n">S_AXI_AWREADY</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">S_AXI_AWVALID</span><span class="p">))</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_AWREADY</span><span class="p">)</span>
 		<span class="n">pre_waddr</span> <span class="o">&lt;=</span> <span class="n">S_AXI_AWADDR</span><span class="o">;</span></code></pre></figure>
 
 <p>The same applies to the write data channel.  We’ll want to make a copy of it
@@ -862,9 +878,12 @@ any time we accept a value.  Then, if we end up accepting a value while the
 output is stalled or likewise if we have no address, this will become the
 buffered value waiting to be written to the address that hasn’t yet been given.</p>
 
+<p>As before, we’ll ignore the valid signal since these registers have don’t care
+values if <code class="highlighter-rouge">S_AXI_WREADY &amp; !S_AXI_WVALID</code> and it just simplifies our logic count.</p>
+
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Buffer the data
 </span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
-	<span class="k">if</span> <span class="p">((</span><span class="n">S_AXI_WREADY</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">S_AXI_WVALID</span><span class="p">))</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_WREADY</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="n">pre_wdata</span> <span class="o">&lt;=</span> <span class="n">S_AXI_WDATA</span><span class="o">;</span>
 		<span class="n">pre_wstrb</span> <span class="o">&lt;=</span> <span class="n">S_AXI_WSTRB</span><span class="o">;</span>
@@ -902,11 +921,11 @@ channel, if we have a valid address, and if we have valid data.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span> <span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span> <span class="p">)</span>
 	<span class="c1">// If the output channel isn't stalled, and
-</span>	<span class="k">if</span> <span class="p">(((</span><span class="o">!</span><span class="n">S_AXI_BVALID</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">S_AXI_BREADY</span><span class="p">))</span>
+</span>	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">write_response_stall</span>
 		<span class="c1">// If we have a valid address, and
-</span>		<span class="o">&amp;&amp;</span><span class="p">((</span><span class="o">!</span><span class="n">axi_awready</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">S_AXI_AWVALID</span><span class="p">))</span>
+</span>		<span class="o">&amp;&amp;</span> <span class="n">valid_write_address</span>
 		<span class="c1">// If we have valid data
-</span>		<span class="o">&amp;&amp;</span><span class="p">((</span><span class="o">!</span><span class="n">axi_wready</span><span class="p">)</span><span class="o">||</span><span class="p">((</span><span class="n">S_AXI_WVALID</span><span class="p">))))</span>
+</span>		<span class="o">&amp;&amp;</span> <span class="n">valid_write_data</span><span class="p">)</span>
 	<span class="k">begin</span></code></pre></figure>
 
 <p>It’s been a while since <a href="/zipcpu/2017/05/29/select-lines.html">I’ve discussed byte enable or select
@@ -948,14 +967,16 @@ we’ll set <code class="highlighter-rouge">S_AXI_BVALID</code> high either way 
 	<span class="c1">//
 </span>	<span class="c1">// The outgoing response channel should indicate a valid write if ...
 </span>		<span class="c1">// 1. We have a valid address, and
-</span>	<span class="k">else</span> <span class="k">if</span> <span class="p">(((</span><span class="o">!</span><span class="n">axi_awready</span><span class="p">)</span><span class="o">||</span><span class="p">(</span><span class="n">S_AXI_AWVALID</span><span class="p">))</span>
+</span>	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">valid_write_address</span>
 			<span class="c1">// 2. We had valid data
-</span>			<span class="o">&amp;&amp;</span><span class="p">((</span><span class="o">!</span><span class="n">axi_wready</span><span class="p">)</span><span class="o">||</span><span class="p">((</span><span class="n">S_AXI_WVALID</span><span class="p">))))</span>
+</span>			<span class="o">&amp;&amp;</span> <span class="n">valid_write_data</span><span class="p">)</span>
 		<span class="c1">// It doesn't matter here if we are stalled or not
 </span>		<span class="c1">// We can keep setting ready as often as we want
 </span>		<span class="n">axi_bvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
 	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_BREADY</span><span class="p">)</span>
-		<span class="n">axi_bvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+		<span class="c1">// Otherwise, if BREADY was true, then it was just accepted
+</span>		<span class="c1">// and can return to idle now
+</span>		<span class="n">axi_bvalid</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
 
 <p>Oops, I forgot one: as with the read channel, our write response won’t return
 any <a href="https://en.wikipedia.org/wiki/Bus_error">bus errors</a>.</p>
