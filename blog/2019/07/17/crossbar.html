@@ -1,0 +1,1763 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Lessons learned while building crossbar interconnects</title>
+  <meta name="description" content="Okay, I’ll admit it, I’ve never usedAXIfor anything other than accessingDDR3 SDRAM memory.  Even for thatI tend to use a Wishbone (WB) to AXIbridge.">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2019/07/17/crossbar.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/#training">Formal training</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Lessons learned while building crossbar interconnects</h1>
+    <p class="post-meta"><time datetime="2019-07-17T00:00:00-04:00" itemprop="datePublished">Jul 17, 2019</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Okay, I’ll admit it, I’ve never used
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+for anything other than accessing
+<a href="https://en.wikipedia.org/wiki/DDR3_SDRAM">DDR3 SDRAM</a> memory.  Even for that
+I tend to use a <a href="https://github.com/ZipCPU/blob/master/rtl/wbm2axisp.v">Wishbone (WB) to AXI
+bridge</a>.</p>
+
+<p>I have, however, looked for posts on both
+<a href="https://forum.digilentinc.com">Digilent</a>’s and now
+<a href="https://forums.xilinx.com">Xilinx</a>’s forums
+that I might be able to answer.  It seems that
+Xilinx’s
+answer to most design problems is to create either a
+<a href="https://en.wikipedia.org/wiki/MicroBlaze">MicroBlaze CPU</a> or an
+<a href="https://en.wikipedia.org/wiki/ARM_architecture">ARM CPU</a> (within a Zynq),
+that you then connect to the rest of your design using their
+<em><a href="https://en.wikipedia.org/wiki/Crossbar_switch">interconnect</a></em>.</p>
+
+<table align="center" style="float: right"><caption>Fig 1.  Xilinx Tech Support</caption><tr><td><img src="/img/crossbar/xiltech-support.svg" alt="" width="480" /></td></tr></table>
+
+<p><a href="https://www.xilinx.com/support/documentation/ip_documentation/axi_interconnect/v2_1/pg059-axi-interconnect.pdf">Xilinx’s interconnect</a>
+is a general <a href="https://en.wikipedia.org/wiki/Crossbar_switch">cross bar switch</a>.
+It “connects one or more <a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+memory-mapped master devices to one or more memory-mapped slave devices.”
+In general, a <a href="https://en.wikipedia.org/Crossbar_switch">crossbar switch</a>
+allows any number of bus masters to access any number of bus slaves with the
+(general) rule that only one master can talk to any given slave at a time.</p>
+
+<p>This is all fine and dandy, but what happens when you want to simulate a design
+that has an <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a> within it?  <a href="https://www.xilinx.com/support/documentation/ip_documentation/axi_interconnect/v2_1/pg059-axi-interconnect.pdf">Xilinx’s
+crossbar</a>
+is proprietary.  It won’t run in
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>.
+Of course, <a href="https://en.wikipedia.org/wiki/MicroBlaze">their
+CPU</a>
+is also proprietary, but we’ll leave that as a topic for a different discussion.</p>
+
+<p>I recently had the opportunity to investigate how to build a
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar switch</a>
+of my own.  I built three of them: a
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">Wishbone
+crossbar</a>, an
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">AXI-lite crossbar</a>,
+and a full-up <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI4
+crossbar</a>.  Today,
+I thought I might share several of the more important points of these designs,
+and perhaps even some lessons I learned while building them.</p>
+
+<h2 id="crossbars-and-autofpga">Crossbars and AutoFPGA</h2>
+
+<p>My own interest in building a
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>
+stems from my work with
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>.
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a> takes
+a series of
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+components, and connects them all together–much like either Vivado or Quartus
+does but without the graphical user interface.  Each component is given its own
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>, a set of
+dedicated <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+connection wires, and then connected to a user-selected
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>.</p>
+
+<p>This works great … when it works.</p>
+
+<p>Sadly, I’ve had to work through some times when it hasn’t worked for me.
+Often, I’ve mis-connected a slave to the
+<a href="/blog/2017/06/22/simple-wb-interconnect.html">interconnect</a>–perhaps not ANDing the address selection wire with the strobe, perhaps swapping
+the stall and acknowledgment signals, whatever it is I’ve often ended up needing
+to debug a piece of a design where the <a href="/blog/2017/10/19/formal-intro.html">formally
+verified</a> core
+meets some “<a href="/blog/2018/08/22/what-is-simulation.html">verified-by-simulation</a>”
+logic.</p>
+
+<p>My ultimate goal is to avoid these problems by <a href="/blog/2017/10/19/formal-intro.html">formally
+verifying</a>
+all of the parts and pieces of any design I create, to include those parts
+that <a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+generates.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 2.  Crossing slaves mid-request</caption><tr><td><img src="/img/crossbar/double-ack-bug.svg" alt="" width="420" /></td></tr></table>
+
+<p>One of my first problems is that <a href="/blog/2017/06/22/simple-wb-interconnect.html">my favorite interconnect
+design</a>,
+the same basic interconnect
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>
+builds, has a couple of limitations.  First, it can only handle a single bus
+master at a time.  Multiple bus masters need to go through an
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+first
+before they can get access to the bus.  We’ll come back to this again
+in a moment.  Second, <a href="/blog/2017/06/22/simple-wb-interconnect.html">that
+interconnect</a>
+offers no protection against the case where a
+bus master
+crosses from one slave to another during a single bus interaction, as Fig. 2
+illustrates on the left.  In this illustration, the first bus slave responds
+two cycles after the strobe while the second slave responds one cycle later.
+The responses might end up colliding, as shown in the figure, or even out of
+order.  Worse, the third problem has to do with
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>s.
+If a <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+is generated as I have things set up, the
+bus master
+will never know <em>which</em> request generated the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+and which request(s) have completed.</p>
+
+<p>I was curious to know if I could do better.</p>
+
+<p>At least, that was my first reason for being interested.</p>
+
+<table align="center" style="float: right"><caption>Fig 3. A Formal Property File can be the easiest way to start with formal verification</caption><tr><td><img src="/img/tweets/fpropfile.png" alt="" width="540" /></td></tr></table>
+
+<p>Eventually, a second reason came into play as well:
+<a href="https://en.wikipedia.org/Crossbar_switch">Interconnects</a>,
+like
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+bridges in general, make ideal tests of <a href="/zipcpu/2017/11/07/wb-formal.html">formal bus property
+files</a>.
+Because you need the properties for both the slave and the master, you
+essentially have to verify your properties back to back.  Are the master
+bus property assumptions sufficient to drive the slave?  Are the slave
+bus assumptions sufficient to satisfy the master’s assertions?</p>
+
+<p>Finally, my last basic reason was that this
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>
+work was a lot of fun.  Indeed, I found them building these
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnects</a>, and particularly
+<a href="/blog/2017/10/19/formal-intro.html">formally verifying</a>
+them, to be a rather addictive challenge–even if it’s quite a time consuming
+one.  Hey, we all have our hobbies, right?</p>
+
+<h2 id="what-is-a-crossbar">What is a Crossbar?</h2>
+
+<p><a href="https://en.wikipedia.org/Crossbar_switch">Wikipedia describes a crossbar</a>
+as a two-dimensional electrical structure where the source
+comes in from one direction, and the outgoing connections go out a second.
+While there’s <a href="https://en.wikipedia.org/Crossbar_switch">no picture offered currently on
+wikipedia</a>, I’m going to use
+Fig. 4 as my attempt to capture and explain this concept.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 4.  The Concept of a Crossbar Switch</caption><tr><td><img src="/img/crossbar/crossbar-switch.svg" alt="" width="420" /></td></tr></table>
+
+<p>In this figure, you can see a set of incoming electrical connections at the top,
+and a set of outgoing electrical connections on the right.  At every crossing,
+there’s a switch which may be closed to create a connection between any given
+master and slave combination.</p>
+
+<p>There’s two other things to note from this figure.  First, note that any
+of the incoming signals can be connected to any of the outputs.  Second, note
+that for an <code class="highlighter-rouge">NxN</code> array, all <code class="highlighter-rouge">N</code> sources can be connected to a different
+sink.</p>
+
+<p><a href="https://en.wikipedia.org/wiki/Bus_(computing)">Bus</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnects</a>
+are very similar conceptually.  A series of
+bus masters
+are available as sources to drive one of several
+bus slaves.  The biggest difference is that
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">buses</a> typically have
+many wires associated with them, and some of those wires are driven
+with return values by the slave.  For example, a 32-bit
+<a href="/formal/2019/05/13/axifull.html">AXI</a>
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> requires roughly 164
+separate wires to drive the slave, whereas the slave will respond with another
+50 wires returned in response.  The
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB</a>.
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> is both much simpler, and
+not nearly so full featured.  Wishbone transactions, therefore, can be
+accomplished with only 106 separate wires, of which 71 are used to drive the
+slave and 35 are returned in response.</p>
+
+<p>As for how you might use one of these, consider as an example that the
+<a href="/zipcpu/2018/02/12/zbasic-intro.html">typical ZipCPU design</a>
+that has at least four separate
+bus masters:</p>
+
+<ol>
+  <li>
+    <p>The <a href="/zipcpu/2017/11/18/wb-prefetch.html">instruction
+fetch</a> unit</p>
+  </li>
+  <li>
+    <p>The <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pipemem.v">data memory port</a>, handling any load or store instructions</p>
+  </li>
+  <li>
+    <p>A <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v">DMA</a> data transfer port</p>
+  </li>
+  <li>
+    <p><a href="/zipcpu/2017/08/25/hw-debugging.html">A debug port</a>,
+through which the CPU can be <a href="/zipcpu/2017/07/14/cpu-debugging-needs.html">stopped, stepped, or reset and its registers
+may be read</a>.</p>
+  </li>
+</ol>
+
+<p>Some of my
+<a href="/about/zipcpu.html">ZipCPU</a> designs have more
+masters as well, for example:</p>
+
+<ol>
+  <li>
+    <p><a href="/blog/2018/11/29/llvga.html">A Video display controller</a>
+that needs to read from memory in order to create a pixel stream</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/ZipCPU/fftdemo">A spectrogram raster, that writes FFT results from captured data to the
+memory</a></p>
+  </li>
+</ol>
+
+<p>As I’ve currently built most of my <a href="/about/zipcpu.md">ZipCPU</a>
+designs, I’ve used <code class="highlighter-rouge">2:1</code>
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiters</a>
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/ex/wbpriarbiter.v">such as this
+one</a>
+followed by a <a href="/blog/2017/06/22/simple-wb-interconnect.html"><code class="highlighter-rouge">1:N</code> interconnect</a>, as illustrated by Fig. 5.  (I did build a <a href="https://github.com/ZipCPU/videozip/blob/master/rtl/wbquadarbiter.v">4:1
+arbiter</a>
+once, but as I recall I’ve yet to use it.)</p>
+
+<table align="center" style="float: none"><caption>Fig 5. The ZBasic bus structure only allows a single master to ever drive the bus</caption><tr><td><img src="/img/crossbar/zipcpu-nocrossbar.svg" alt="" width="720" /></td></tr></table>
+
+<p>Sadly, that means that any
+bus master
+can starve another by simply hogging the port.</p>
+
+<p>To see how this might happen, consider an example from one of my first FPGA
+projects what it would take to drive a video stream from a <a href="https://store.digilentinc.com/basys-3-artix-7-fpga-trainer-board-recommended-for-introductory-users/">Basys3
+board</a>.
+The <a href="/blog/2018/11/29/llvga.html">video driver</a> needed access
+to the <a href="/blog/2019/03/27/qflexpress.html">flash</a> to read
+(and then decompress) pixels so that they could be displayed on
+<a href="/blog/2018/11/29/llvga.html">VGA</a> output.
+(There wasn’t enough RAM on or off chip for a proper screen buffer.)  Now
+imagine that at the same time, the <a href="/about/zipcpu.html">CPU</a>
+wants to <a href="/zipcpu/2017/11/18/wb-prefetch.html">read
+instructions</a> from
+<a href="/zipcpu/2018/07/13/memories.html">block RAM</a>: the
+<a href="/blog/2018/11/29/llvga.html">video controller</a> needs the
+<a href="/blog/2019/03/27/qflexpress.html">flash</a>, and <a href="/about/zipcpu.html">the
+CPU</a> needs the
+<a href="/zipcpu/2018/07/13/memories.html">block RAM</a>.
+By going through an N:1
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+first, or rather several <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/ex/wbpriarbiter.v">2:1
+arbiters</a>
+as I had actually implemented it, any time
+<a href="/about/zipcpu.html">the CPU</a>’s
+<a href="/zipcpu/2018/07/13/memories.html">block RAM</a>
+request would get through the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/ex/wbpriarbiter.v">arbiter</a>
+it would then force any
+<a href="/blog/2018/11/29/llvga.html">video</a>
+requests to stall.  Worse, they might need to wait so long that the
+<a href="/blog/2018/11/29/llvga.html">video</a>
+can’t read its pixel memory fast enough to display it.</p>
+
+<p>This particular design was from before
+<a href="/zipcpu/2017/10/05/autofpga-intro.html">AutoFPGA</a>.
+The solution I eventually chose, shown in Fig. 6 below, was to place the
+<a href="/blog/2018/11/29/llvga.html">video</a>
+memory controller <em>after</em> the main
+<a href="/blog/2017/06/22/simple-wb-interconnect.html">interconnect</a>
+in order to disconnect <a href="/about/zipcpu.html">the CPU</a> from
+<a href="/blog/2018/11/29/llvga.html">video</a>
+memory if it didn’t need it.</p>
+
+<table align="center" style="float: none"><caption>Fig 6. Placing the arbiter after the interconnect</caption><tr><td><img src="/img/crossbar/flash-v-video.svg" alt="" width="720" /></td></tr></table>
+
+<p>Of course, this will only ever work as long as the
+<a href="/blog/2018/11/29/llvga.html">video controller</a>
+only ever needs access to a single peripheral–in this case the
+<a href="/blog/2019/03/27/qflexpress.html">flash</a>.</p>
+
+<p>If, on the other hand,
+<a href="/about/zipcpu.html">the CPU</a>
+could access the
+<a href="/zipcpu/2018/07/13/memories.html">block RAM</a>
+at the same time the video controller could access
+<a href="/blog/2019/03/27/qflexpress.html">flash</a>, then you have a
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>—or at least that’s the
+idea.</p>
+
+<p>With <a href="/blog/2019/03/27/qflexpress.html">my new flash
+controller</a>,
+this might no longer be an issue–but it certainly
+was back then with the older controller.  On the other hand, with the
+<a href="/blog/2019/03/27/qflexpress.html">old flash controller</a>,
+I could only ever control a 640x480 screen–with the newer
+<a href="/blog/2019/03/27/qflexpress.html">flash controller</a>
+I might be able to handle some better screen resolutions if I ever returned
+to the project.</p>
+
+<h2 id="the-key-an-nxm-arbiter">The key: an NxM Arbiter</h2>
+
+<p>When building a
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>, everything
+comes down to the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>.
+The <a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+has <code class="highlighter-rouge">N</code> ports for <code class="highlighter-rouge">N</code> masters, and <code class="highlighter-rouge">M</code> ports for <code class="highlighter-rouge">M</code> slaves.  Somehow, then,
+a slave needs to get its data from one of the masters.  But which master?
+That’s the task of the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)">arbiter</a>.</p>
+
+<p>There are several rules to the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a> in a
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>.</p>
+
+<ol>
+  <li>
+    <p><strong>Rule:</strong> The bus protocol must be obeyed.</p>
+
+    <p>This is easily checked: all it requires is attaching a set of <a href="/zipcpu/2017/11/07/wb-formal.html">formal bus
+properties</a>
+to every incoming or outgoing connection.  Since I have bus properties for
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB</a>,
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>, and even
+<a href="/formal/2019/05/13/axifull.html">AXI</a>,
+I could easily verify that each of my
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">WB crossbar</a>,
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">AXI-lite crossbar</a>,
+and <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI
+crossbar</a>
+maintained these properties for each connection.</p>
+
+    <p>Having <code class="highlighter-rouge">NM</code> identical master connections and <code class="highlighter-rouge">NS</code> identical slave connections
+naturally lent itself to a lot of <code class="highlighter-rouge">for</code> loops within the design.  Normally I
+avoid <code class="highlighter-rouge">for</code> loops within digital design like the plague.  In this case, there
+was no way around it if I wanted the interconnects to have a programmable
+number of master and slave connections.</p>
+
+    <p>To help deal with this, I used either the <code class="highlighter-rouge">genvar</code> index <code class="highlighter-rouge">N</code> or equivalently
+the integer index <code class="highlighter-rouge">iN</code> to refer to a connection to a bus master, while I
+used either <code class="highlighter-rouge">M</code> or <code class="highlighter-rouge">iM</code> to refer to a connection to a bus slave.  I’ll
+refer to these indexes often later, so remember <code class="highlighter-rouge">NxM</code>: <code class="highlighter-rouge">N</code> will reference
+one of the <code class="highlighter-rouge">N</code> connections from the <code class="highlighter-rouge">NM</code>
+bus masters,
+whereas <code class="highlighter-rouge">M</code> references one of the <code class="highlighter-rouge">NS</code> outgoing connections to
+bus slaves.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: right"><caption>Fig 7.  One master connection, one slave connection</caption><tr><td><img src="/img/crossbar/arbiter-rule-1.svg" alt="" width="420" /></td></tr></table>
+
+<ol start="2">
+  <li>
+    <p><strong>Rule:</strong> No more than one master can be connected to any particular slave.</p>
+
+    <p>I used a 2-dimensional <code class="highlighter-rouge">grant</code> variable to help express this.  This is
+most easily understood by examining Fig. 7 on the right.  Imagine that
+each switch’s status was represented by a single bit in this array.
+In my terminology, <code class="highlighter-rouge">grant[N]</code> represents all of the connections associated
+with all of the slaves that might connect to master <code class="highlighter-rouge">N</code>, shown in Fig. 7
+as a vertical bar.  Fig. 7 shows what would happen if <code class="highlighter-rouge">grant[0][2]</code> were
+set, connecting master numbered <code class="highlighter-rouge">0</code> to slave number <code class="highlighter-rouge">2</code>.</p>
+
+    <p>Using this 2-D <code class="highlighter-rouge">grant</code> array, I could easily express this property that
+no more than one master could ever be connected to more than one slave as
+<code class="highlighter-rouge">assert($onehot0(grant[iN]));</code> for every value of the master index, <code class="highlighter-rouge">iN</code>.</p>
+
+    <p>In the <a href="/blog/2019/05/29/demoaxi.html">AXI</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnects</a> I’ve built,
+whether the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">full AXI4
+interconnect</a>
+or <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">AXI-lite interconnect</a>,
+I used two grant variables, <code class="highlighter-rouge">wgrant</code> for writes and <code class="highlighter-rouge">rgrant</code> for reads,
+since the <a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+protocol allows both writes and reads at the same time.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: left; padding: 15px;"><caption>Fig 8. Quick loop up functions, master's perspective</caption><tr><td><img src="/img/crossbar/mgrant.svg" alt="" width="420" /></td></tr></table>
+
+<p>This wasn’t enough to keep the <a href="/blog/2017/06/12/minimizing-luts.html">synthesized logic simple and low
+   cost</a>,
+   so I created two other structures.  The first of these,  <code class="highlighter-rouge">mgrant[iN]</code>, was
+   true if a particular master had been granted access to a slave–any slave.
+   Essentially, <code class="highlighter-rouge">mgrant[iN]</code> was equivalent to the “OR” of all of the elements
+   in the grant array for a particular master, <code class="highlighter-rouge">|grant[iN]</code>.</p>
+
+<p>The second structure was <code class="highlighter-rouge">mindex[iN]</code>, which contained the index of the slave
+   that master <code class="highlighter-rouge">iN</code> was connected to.  Hence, if ever <code class="highlighter-rouge">mgrant[iN]</code> was true,
+   then it must also be true that <code class="highlighter-rouge">grant[iN][mindex[iN]]</code> was also true.
+   Perhaps you may recall <a href="/zipcpu/2019/03/28/return-decoding.html">the post discussing why this approach was so
+   necessary</a> from
+   some time ago.  This index-based reference was my solution to that problem.</p>
+
+<p>This “solution” naturally led to another problem, what if you only have for
+   example 5 slaves?  How many bits should be used for each <code class="highlighter-rouge">mindex</code> value?
+   Well, three obviously.  However, that also meant that any time a value was
+   referenced using the index, such as <code class="highlighter-rouge">slave_ack[mindex[N]]</code>, that a full 8
+   values needed to be defined–even if I knew that only the lower 5 would be
+   used.</p>
+
+<p>All of these various data structures are tightly connected.  As I mentioned
+   above, <code class="highlighter-rouge">mgrant[iN] |-&gt; (grant[iN] == 1&lt;&lt; mindex[iN])</code>.  There was also the
+   corollary, that <code class="highlighter-rouge">!mgrant[iN] |-&gt; (grant[iN] == 0)</code>.  This helped to make
+   certain that any logic I created kept these values properly synchronized.</p>
+
+<table align="center" style="float: right"><caption>Fig 9. Quick loop up functions, slave's perspective</caption><tr><td><img src="/img/crossbar/sgrant.svg" alt="" width="420" /></td></tr></table>
+
+<ol start="3">
+  <li>
+    <p><strong>Rule:</strong> No more than one slave can be connected to any master.  Any unconnected
+slave should neither receive requests nor send replies.</p>
+
+    <p>To capture this, I created two new values: <code class="highlighter-rouge">sgrant[iM]</code>, which would be true
+if slave <code class="highlighter-rouge">iM</code> had been assigned to a master.  Remember how <code class="highlighter-rouge">mgrant[iN]</code> was
+true if any switch in the columns of Fig. 2 above was closed?  <code class="highlighter-rouge">sgrant[iM]</code>
+is the same thing, only acting across the rows.  <code class="highlighter-rouge">sindex[iM]</code> was the
+slave side corollary for the master index, <code class="highlighter-rouge">mindex[iN]</code>, so that any time
+<code class="highlighter-rouge">sgrant[iM]</code> was true, then <code class="highlighter-rouge">grant[sindex[iM]][iM]</code> must also be true.
+(That’s what the <code class="highlighter-rouge">?</code> is intending to express in Fig. 9–evaluated
+across all masters.  No, this is not valid syntax in any language I am
+familiar with, but it fit in the figure.)</p>
+
+    <p>Put together, any time <code class="highlighter-rouge">grant[N][M]</code> was true, then master <code class="highlighter-rouge">N</code> was connected
+to slave <code class="highlighter-rouge">M</code>.  In that case, both <code class="highlighter-rouge">mgrant[N]</code> and <code class="highlighter-rouge">sgrant[M]</code> would be true.
+Further, <code class="highlighter-rouge">mindex[N]</code> would be <code class="highlighter-rouge">M</code>, and <code class="highlighter-rouge">sindex[M]</code> would be <code class="highlighter-rouge">N</code>.</p>
+
+    <p>Yes, keeping track of all of these values, <code class="highlighter-rouge">grant</code>, <code class="highlighter-rouge">mgrant</code>, <code class="highlighter-rouge">mindex</code>,
+<code class="highlighter-rouge">sgrant</code>, and <code class="highlighter-rouge">sindex</code> took a lot of accounting.  As I mentioned above,
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+really helped.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 10. Pseudo-slaves to handle bus errors</caption><tr><td><img src="/img/crossbar/buserr.svg" alt="" width="420" /></td></tr></table>
+
+<ol start="4">
+  <li>
+    <p><strong>Rule:</strong> If a master requests an
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+that doesn’t belong to any slave, the
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a> must send a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+in response.  Further, it must not send the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+response until any other valid responses have been returned, so enforcing
+a strict ordering of operations on the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>–something I
+didn’t have before.</p>
+
+    <p>This necessitated the creation of a special set of slaves, internal to the
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>, which would
+respond to any <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>s.  That meant
+that the slave index, <code class="highlighter-rouge">M</code> wouldn’t just go from <code class="highlighter-rouge">0</code> to <code class="highlighter-rouge">NS-1</code>, but rather
+to <code class="highlighter-rouge">NS</code> in order to reference the “no-peripheral mapped to this address”
+slave.  You can see these extra slaves illustrated in Fig. 10 on the left.</p>
+
+    <p>This special slave ID was unusual, since every master could connect to
+the error slave <code class="highlighter-rouge">NS</code> at the same time.  It’s as though there really were
+<code class="highlighter-rouge">NS+NM</code> slaves, such as are shown in Fig. 10, rather than just the <code class="highlighter-rouge">NS</code>
+slaves connected to the right of the
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>.  That way two
+masters can be receiving <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+responses at the same time without needing to wait for access to the special
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> slave.</p>
+  </li>
+</ol>
+
+<ol start="5">
+  <li>
+    <p><strong>Rule:</strong> The <a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>
+can’t change the grant for a given master while that master is waiting
+for a response from a slave.</p>
+
+    <p>This requires counters.  Every request accepted into the
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>
+needs to increase that counter by one, whereas every response needs to
+decrease the counter by one.  Once the counter reaches zero, the
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>
+can tear down a given connection and set up a new one.</p>
+
+    <p>Checking for whether or not the counter is empty is quite straightforward,
+and I kept a set of flags I called <code class="highlighter-rouge">mempty[N]</code>, one for every master, to
+indicate that there were no outstanding returns pending for that master.</p>
+
+    <p>Before we leave this topic, though, let me ask: have you thought
+about what would happen when the counter overflows?  I think we can all
+agree that would be bad, but how should it be prevented?</p>
+
+    <p>The easy answer would be to just add more bits to the counter to prevent
+this from ever happening in the first place.  I mean, realistically, what’s
+the likelihood that that a 32-bit counter of outstanding transactions would
+ever overflow?  How about a 64-bit counter overflowing?</p>
+
+    <p>I chose a different answer.  I chose instead to keep track of when the
+counter was full, which I kept track of in another array <code class="highlighter-rouge">mfull[N]</code>,  and
+to stall a given master if accepting another
+transaction would cause the counter to overflow.  This wasn’t as easy as it
+sounds, since it took a clock to stop things before I made the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffers</a> external.
+That meant checking for when the counter was near overflow, and stalling if
+there was already something in the pipeline at that time.  Once I made the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffers</a> external,
+this all got much easier.</p>
+
+    <p>There’s also an unfortunate consequence of this rule: if ever a slave
+misbehaves and doesn’t return a response, both the master granted access
+to that slave and any other master attempting to access that slave will be
+locked until a design reset.  Perhaps you’ll remember when I discussed having
+<a href="/blog/2018/02/09/first-cyclonev.html">that problem in a DE-10 Nano
+board</a>.  Finding a
+bug is a challenge when the only way to get the board to respond to you
+again is to reset it knowing that doing so will wipe away the information
+you need to find the bug.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: right"><caption>Fig 11. A Broken slave can break the interconnect</caption><tr><td><img src="/img/crossbar/broken-slave.svg" alt="" width="540" /></td></tr></table>
+
+<ol start="6">
+  <li>
+    <p>(<strong>Implementation Option</strong>:) A bus
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a> may generate an
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+if ever a slave doesn’t respond to a request within a given amount of time.</p>
+
+    <p>This follows from some ugly lessons I’ve had in the past when building
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+components.  Because I use a <a href="/blog/2017/07/08/getting-started-with-wbscope.html">bus based
+“scope”</a>
+to debug my design, if ever a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+component didn’t respond to the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>,
+the master might get stuck waiting for a response–and so I’d never be able
+to access my “scope” to know what was going wrong.</p>
+
+    <p>To deal with this, every
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone bus</a>
+structure I’ve built includes a counter with a timeout.  That way, if an
+errant slave refused to respond to a request (this was pretty common
+before I started working with
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>),
+the design wouldn’t freeze and I could still use the design to discover
+what the fault was.</p>
+
+    <p>Sadly, the way the <a href="/blog/2019/05/29/demoaxi.html">AXI
+protocol</a> is structured,
+this is really hard to do.  Eventually, I created <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">a separate AXI bus
+component</a>
+that I could use to bridge between the “trusted” bus master side and any
+untrusted slave, returning a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+on any violation of the bus protocol by the slave.  Unfortunately, as
+currently built, this <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">AXI bus fault
+isolator</a> also
+limits the throughput of the bus–although not nearly as bad as <a href="/formal/2019/05/13/axifull.html">Xilinx’s
+demo implementations do</a>.
+Perhaps I’ll be able to come back later to fix this.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><caption>Fig 12. Basic Processing Steps</caption><tr><td><img src="/img/crossbar/cbar-channel.svg" alt="" width="720" /></td></tr></table>
+
+<ol start="7">
+  <li>
+    <p><strong>Rule:</strong> Every connection that can stall needs to be connected to a <a href="/blog/2019/05/22/skidbuffer.html">skid
+buffer</a>, as shown in
+Fig. 12 above.  All of my
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbars</a> have an incoming
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>, while
+only the <a href="/blog/2019/05/29/demoaxi.html">AXI</a>
+and <a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbars</a> have return channel
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>s as well.</p>
+
+    <p>Sadly, these sub-module <a href="/blog/2019/05/22/skidbuffer.html">skid
+buffer</a>s weren’t part of
+my initial design approach.  In hind sight, they should’ve been.</p>
+
+    <p>Initially, I instantiated every one of the <a href="/blog/2019/05/22/skidbuffer.html">skid
+buffers</a>
+by hand within each
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>
+I created.  I then verified each
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>
+from the standpoint of the external connections.  This threw all of my
+counters off, since I had to create an equation mapping the number of
+outstanding transactions from the perspective of each master, to the
+number of outstanding transactions from the perspective of each slave,
+and the <a href="/blog/2019/05/22/skidbuffer.html">skid buffers</a>
+got in the middle of that.  If I failed to do so, the design would fail
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>.</p>
+
+    <p>This book-keeping was quite painful.</p>
+
+    <p>On the other hand, once I created and verified a separate 
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>
+module, I went back and tore apart all of those painful
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+properties and rewrote them for simplicity.  Now, when verifying the
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>,
+the <a href="/blog/2019/05/22/skidbuffer.html">skid
+buffer</a>s have been
+removed and replaced with simple pass-through logic.  The proof, I’ve
+judged, is just as valid–since the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>s have
+already been verified separately.</p>
+
+    <p>This almost worked, too.  There was one problem: The
+bus abort capability I’ve written into all of my
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB</a> implementations.
+Eventually, I convinced myself with a bit of bounded model checking that
+this was working, although I haven’t come back to simulate these
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbars</a>
+(yet) to see how they work.</p>
+  </li>
+</ol>
+
+<p>Some particular <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+structures have more or less requirements than others.  For
+example, <a href="/zipcpu/2017/11/07/wb-formal.html">the way I implement
+WB</a>, I insist that the
+cycle line be dropped following any
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+This then implements a bus <em>abort</em>, forcing any pending upstream
+requests to be aborted and leaving any pending transactions in an uncertain
+state.  Unlike <a href="/zipcpu/2017/11/07/wb-formal.html">WB</a>,
+<a href="/blog/2019/05/29/demoaxi.html">AXI</a> doesn’t support any
+aborts.  However, <a href="/blog/2019/05/29/demoaxi.html">AXI</a>
+also has <em>two</em> write channels that need to be synchronized: an
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a> write address
+channel and an <a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+write data channel–something
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> doesn’t
+need to deal with.  The
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI arbiter</a>,
+whether <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">full</a>
+or <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">lite</a>,
+needs to stall any write data channels in order to wait for the
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+to be given before it knows what slave to connect the write data channel to.</p>
+
+<p>Still, most of the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbitration</a>
+code is the same across all three of the
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>s.  Care to take a peek?</p>
+
+<h2 id="examining-the-arbitration-code">Examining the Arbitration Code</h2>
+
+<p>Let’s look at the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">Wishbone
+crossbar</a>’s
+<a href="https://github.com/ZipCPU/wb2axip/blob/7da3df3622404b6c0d90de1191ba0acf6af60310/rtl/wbxbar.v#L356-L471">arbiter</a>
+and see how it’s done.  Both the
+<a href="https://github.com/ZipCPU/wb2axip/blob/7da3df3622404b6c0d90de1191ba0acf6af60310/rtl/axixbar.v#L754-L981">AXI</a>
+and
+<a href="https://github.com/ZipCPU/wb2axip/blob/7da3df3622404b6c0d90de1191ba0acf6af60310/rtl/axilxbar.v#L558-L799">AXI-lite</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>s
+have similar structures and logic, although in those cases the logic is
+duplicated in order to handle the separate read and write channels.</p>
+
+<p>The first step is to find out what master is requesting which slave.  Since this
+code is common to all three
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>s,
+it has been separated <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/addrdecode.v">into its own
+file, <code class="highlighter-rouge">addrdecode.v</code></a>.
+The entire
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+decode operation is driven by the <a href="https://github.com/ZipCPU/wb2axip/blob/7da3df3622404b6c0d90de1191ba0acf6af60310/rtl/addrdecode.v#L44-L55"><code class="highlighter-rouge">SLAVE_ADDR</code> and
+<code class="highlighter-rouge">SLAVE_MASK</code> parameters</a>.
+These two parameters are each one-dimensional implementations of what
+should properly be a 2d array.  There’s one entry of <code class="highlighter-rouge">AW</code> (address width) bits
+per slave.  In order to match an
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>,
+the master’s <a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+request must match the slave’s
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+in <code class="highlighter-rouge">SLAVE_ADDR</code> for every bit where <code class="highlighter-rouge">SLAVE_MASK</code> is true.</p>
+
+<p>We’ll start first with the <code class="highlighter-rouge">none_sel</code> flag though.  This flag is used to 
+indicate that the requested
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+doesn’t match any slave’s
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+range.  To do this, we’ll run a check through a <code class="highlighter-rouge">for</code> loop, checking
+whether or not the requested
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+matches any of the possible
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+requests.  We’ll start by setting <code class="highlighter-rouge">none_sel</code> high if ever there’s a valid
+request, indicated by <code class="highlighter-rouge">i_valid</code>, and then clear it if any slave is found who’s
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a> matches.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Let's assume nothing's been selected, and then check
+</span>		<span class="c1">// to prove ourselves wrong.
+</span>		<span class="c1">//
+</span>		<span class="c1">// Note that none_sel will be considered an error condition
+</span>		<span class="c1">// in the follow-on processing.  Therefore it's important
+</span>		<span class="c1">// to clear it if no request is pending.
+</span>		<span class="n">none_sel</span> <span class="o">=</span> <span class="n">i_valid</span><span class="o">;</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">iM</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">iM</span><span class="o">&lt;</span><span class="n">NS</span><span class="o">;</span> <span class="n">iM</span><span class="o">=</span><span class="n">iM</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(((</span><span class="n">i_addr</span> <span class="o">^</span> <span class="n">SLAVE_ADDR</span><span class="p">[</span><span class="n">iM</span><span class="o">*</span><span class="n">AW</span> <span class="o">+:</span> <span class="n">AW</span><span class="p">])</span>
+					<span class="o">&amp;</span><span class="n">SLAVE_MASK</span><span class="p">[</span><span class="n">iM</span><span class="o">*</span><span class="n">AW</span> <span class="o">+:</span> <span class="n">AW</span><span class="p">])</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span>
+				<span class="n">none_sel</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>We can then populate a <code class="highlighter-rouge">request[M]</code> array structure, so that
+<code class="highlighter-rouge">request[M]</code> will be true if and only if the address of the transaction
+we are examining is requesting access to slave <code class="highlighter-rouge">M</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">iM</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">iM</span><span class="o">&lt;</span><span class="n">NS</span><span class="o">;</span> <span class="n">iM</span><span class="o">=</span><span class="n">iM</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="n">request</span><span class="p">[</span><span class="n">iM</span><span class="p">]</span> <span class="o">=</span> <span class="n">i_valid</span>
+				<span class="o">&amp;&amp;</span><span class="p">(((</span><span class="n">i_addr</span> <span class="o">^</span> <span class="n">SLAVE_ADDR</span><span class="p">[</span><span class="n">iM</span><span class="o">*</span><span class="n">AW</span> <span class="o">+:</span> <span class="n">AW</span><span class="p">])</span>
+					<span class="o">&amp;</span><span class="n">SLAVE_MASK</span><span class="p">[</span><span class="n">iM</span><span class="o">*</span><span class="n">AW</span> <span class="o">+:</span> <span class="n">AW</span><span class="p">])</span><span class="o">==</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+
+		<span class="c1">//
+</span>		<span class="c1">// request[NS] indicates a request forr a non-existent
+</span>		<span class="c1">// slave.  A request that should (eventually) return a bus
+</span>		<span class="c1">// error
+</span>		<span class="c1">//
+</span>		<span class="n">request</span><span class="p">[</span><span class="n">NS</span><span class="p">]</span> <span class="o">=</span> <span class="n">none_sel</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That’s all of the hard address decoding work.  The rest of the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/addrdecode.v">address
+decoder</a>
+just handles how these values are to be returned–whether they are to be
+registered, or held at zero when nothing is requested, or both.</p>
+
+<p>Once the addresses have been decoded to determine which slave is requested,
+the next step is to
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbitrate</a>
+among potentially multiple masters all wanting access to the same slave.
+For my implementations, I chose to do
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbitration</a>
+on a priority basis.  In other words, if a
+master <code class="highlighter-rouge">N2</code> requests a slave <code class="highlighter-rouge">M</code>, the request will not be granted if some
+other higher priority master, we’ll call it <code class="highlighter-rouge">N1</code> where <code class="highlighter-rouge">N1 &lt; N2</code>, has also
+requested the same slave at the same time.  The array of <code class="highlighter-rouge">requested</code> values,
+defined below, captures this idea.  If <code class="highlighter-rouge">requested[N][M]</code> is true, then some
+other master with a higher priority than master <code class="highlighter-rouge">N</code> has requested access to
+slave <code class="highlighter-rouge">M</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">iM</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">iM</span><span class="o">&lt;</span><span class="n">NS</span><span class="o">;</span> <span class="n">iM</span><span class="o">=</span><span class="n">iM</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// For each slave
+</span>			<span class="n">requested</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="n">iM</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="k">for</span><span class="p">(</span><span class="n">iN</span><span class="o">=</span><span class="mi">1</span><span class="o">;</span> <span class="n">iN</span><span class="o">&lt;</span><span class="n">NM</span><span class="o">;</span> <span class="n">iN</span><span class="o">=</span><span class="n">iN</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="c1">// This slave has been requested if a prior
+</span>				<span class="c1">// master has requested it
+</span>				<span class="c1">//
+</span>				<span class="c1">// This includes any master before the last one
+</span>				<span class="n">requested</span><span class="p">[</span><span class="n">iN</span><span class="p">][</span><span class="n">iM</span><span class="p">]</span> <span class="o">=</span> <span class="n">requested</span><span class="p">[</span><span class="n">iN</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="n">iM</span><span class="p">]</span><span class="o">;</span>
+				<span class="c1">//
+</span>				<span class="c1">// As well as if the last master has requested
+</span>				<span class="c1">// this slave.  Only count this request, though,
+</span>				<span class="c1">// if this master could act upon it.
+</span>				<span class="k">if</span> <span class="p">(</span><span class="n">request</span><span class="p">[</span><span class="n">iN</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="n">iM</span><span class="p">]</span> <span class="o">&amp;&amp;</span>
+					<span class="p">(</span><span class="n">grant</span><span class="p">[</span><span class="n">iN</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="n">iM</span><span class="p">]</span>
+					<span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">mgrant</span><span class="p">[</span><span class="n">iN</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">||</span><span class="n">mempty</span><span class="p">[</span><span class="n">iN</span><span class="o">-</span><span class="mi">1</span><span class="p">])))</span>
+					<span class="n">requested</span><span class="p">[</span><span class="n">iN</span><span class="p">][</span><span class="n">iM</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="k">end</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Notice here that I cross-checked the request against those masters that could
+properly respond to it.  That way if a master <code class="highlighter-rouge">N1</code> requests slave <code class="highlighter-rouge">M1</code>,
+but hasn’t yet finished getting the responses from slave <code class="highlighter-rouge">M2</code> that it is
+already connected to (i.e. <code class="highlighter-rouge">mempty[N1]</code> is clear), then a lower priority
+master such as <code class="highlighter-rouge">N2</code> will not be prohibited from connecting to <code class="highlighter-rouge">M1</code>.</p>
+
+<p>Now that we have our address decoding and basic book-keeping out of the way,
+we can look into what the actual
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbitration</a>
+requires.  In this design,
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbitration</a>
+is done on a master by master basis using a variety of different
+variables, some of which I’ve already highlighted and defined above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">//
+</span>	<span class="c1">// Arbitrate among masters to determine who gets to access a given
+</span>	<span class="c1">// channel
+</span>	<span class="k">generate</span> <span class="k">for</span><span class="p">(</span><span class="n">N</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">N</span><span class="o">&lt;</span><span class="n">NM</span><span class="o">;</span> <span class="n">N</span><span class="o">=</span><span class="n">N</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+	<span class="k">begin</span> <span class="o">:</span> <span class="n">ARBITRATE_REQUESTS</span>
+
+		<span class="c1">// This is done using a couple of variables.
+</span>		<span class="c1">//
+</span>		<span class="c1">// request[N][M]
+</span>		<span class="c1">//	This is true if master N is requesting to access slave
+</span>		<span class="c1">//	M.
+</span>		<span class="c1">//
+</span>		<span class="c1">// requested[N][M]
+</span>		<span class="c1">//	True if some other master, prior to N, has requested
+</span>		<span class="c1">//	channel M.  This creates a basic priority arbiter,
+</span>		<span class="c1">//	such that lower numbered masters get access before
+</span>		<span class="c1">//	a greater numbered master
+</span>		<span class="c1">//
+</span>		<span class="c1">// grant[N][M]
+</span>		<span class="c1">//	True if a grant has been made for master N to access
+</span>		<span class="c1">//	slave channel M
+</span>		<span class="c1">//
+</span>		<span class="c1">// mgrant[N]
+</span>		<span class="c1">//	True if master N has been granted access to some slave
+</span>		<span class="c1">//	channel, any channel.
+</span>		<span class="c1">//
+</span>		<span class="c1">// mindex[N]
+</span>		<span class="c1">//	This is the number of the slave channel that master
+</span>		<span class="c1">//	N has been given access to
+</span>		<span class="c1">//
+</span>		<span class="c1">// sgrant[M]
+</span>		<span class="c1">//	True if there exists some master, N, that has been
+</span>		<span class="c1">// 	granted access to this slave, hence grant[N][M] must
+</span>		<span class="c1">//	also be true
+</span>		<span class="c1">//
+</span>		<span class="c1">// sindex[M]
+</span>		<span class="c1">//	This is the index of the master that has access to
+</span>		<span class="c1">//	slave M, assuming sgrant[M].  Hence, if sgrant[M]
+</span>		<span class="c1">//	then grant[sindex[M]][M] must be true
+</span>		<span class="o">//</span></code></pre></figure>
+
+<p>Before assigning any slaves to a given master, the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+needs to know whether any current connection needs to remain connected and
+unchanged.  In other words, if master <code class="highlighter-rouge">N</code> has already been granted
+access to slave <code class="highlighter-rouge">M</code>, has master <code class="highlighter-rouge">N</code> finished its business with that slave?
+For that, we’ll check if this master is making additional requests of
+the same slave that it has already been assigned to.  In the simple check below,
+we check every master <code class="highlighter-rouge">N</code> and every slave <code class="highlighter-rouge">iM</code>.  If a grant has already been
+made between master <code class="highlighter-rouge">N</code> and slave <code class="highlighter-rouge">iM</code>, and a new transaction request from
+that same master <code class="highlighter-rouge">N</code> is being made to the same slave slave <code class="highlighter-rouge">iM</code>, then we want
+to maintain this connection.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">stay_on_channel</span> <span class="o">=</span> <span class="o">|</span><span class="p">(</span><span class="n">request</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&amp;</span> <span class="n">grant</span><span class="p">[</span><span class="n">N</span><span class="p">])</span><span class="o">;</span></code></pre></figure>
+
+<p>That’s only the first reason why we might wish to stay on the channel and
+maintain a given grant.  The other reason why we’d want to maintain a given
+grant is if we are still expecting returns from it.</p>
+
+<p>Handling this requires counting the number of transactions that have been
+issued, minus the number of acknowledgments that have been returned.  A
+variable <code class="highlighter-rouge">mempty[N]</code>, set from the master’s perspective, contains whether
+this count is zero or not.  Hence if this master has never been granted
+access to a slave, or if a grant has been made but we’re still waiting
+for responses, then we need to <code class="highlighter-rouge">stay_on_channel</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">||</span> <span class="o">!</span><span class="n">mempty</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+				<span class="n">stay_on_channel</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>The next step is to determine if the requested channel is even available.
+In this case, if master <code class="highlighter-rouge">N</code> is requesting channel <code class="highlighter-rouge">iM</code>, that is if
+<code class="highlighter-rouge">request[N][iM]</code> is true, and no other master has currently been granted access
+to slave <code class="highlighter-rouge">iM</code> so that <code class="highlighter-rouge">sgrant[iM]</code> is false, and no other (prior) masters
+are also requesting this channel, indicated when <code class="highlighter-rouge">requested[N][iM]</code> is low,
+then this channel is available for reassignment.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">requested_channel_is_available</span> <span class="o">=</span>
+			<span class="o">|</span><span class="p">(</span><span class="n">request</span><span class="p">[</span><span class="n">N</span><span class="p">][</span><span class="n">NS</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">sgrant</span> <span class="o">&amp;</span> <span class="n">requested</span><span class="p">[</span><span class="n">N</span><span class="p">][</span><span class="n">NS</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span><span class="o">;</span>
+
+			<span class="c1">//
+</span>			<span class="c1">// The bus error channel is always available
+</span>			<span class="c1">//
+</span>			<span class="k">if</span> <span class="p">(</span><span class="n">request</span><span class="p">[</span><span class="n">N</span><span class="p">][</span><span class="n">NS</span><span class="p">])</span>
+				<span class="n">requested_channel_is_available</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="c1">// ...
+</span>		<span class="k">end</span></code></pre></figure>
+
+<p>With all of this background work, we are now ready to make a channel grant.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">initial</span>	<span class="n">grant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">initial</span>	<span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">i_mcyc</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+		<span class="k">begin</span>
+			<span class="n">grant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>We’ll only ever adjust any grant given to a particular master if that master
+doesn’t need to <code class="highlighter-rouge">stay_on_channel</code>.  In that case, the master can be granted
+access to any channel that is available, i.e. <code class="highlighter-rouge">requested_channel_is_available</code>
+is true.  Finally, if the master is attempting to make a request of another
+channel, then we’ll release the channel grant.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">stay_on_channel</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">requested_channel_is_available</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+				<span class="n">grant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span>  <span class="o">&lt;=</span> <span class="n">request</span><span class="p">[</span><span class="n">N</span><span class="p">]</span><span class="o">;</span>
+			<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">m_stb</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+			<span class="k">begin</span>
+				<span class="c1">// Master is requesting access to another
+</span>				<span class="c1">// slave, one that isn't yet available.
+</span>				<span class="c1">//
+</span>				<span class="c1">// Release the grant so another master
+</span>				<span class="c1">// can use it.
+</span>				<span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+				<span class="n">grant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="k">end</span></code></pre></figure>
+
+<p>The new variable introduced here, <code class="highlighter-rouge">m_stb[N]</code>, is simply the strobe signal
+output coming from the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/addrdecode.v">address
+decoder</a>
+shown in Fig. 12.</p>
+
+<p>Since we’ve assigned slave number <code class="highlighter-rouge">NS</code> to reference the “no slave at that
+address” channel, this simple logic above handles that grant as well.</p>
+
+<p>I should also point out, getting this right took several iterations, and a
+bit of learning along the way.  Earlier versions of this logic, such as <a href="https://github.com/ZipCPU/wb2axip/blob/c9821fe23abf19a077afe56a9ad61942ab599c4f/rtl/wbxbar.v#L260-L306">this
+one for example</a>,
+were horrendous to follow and/or maintain.  Getting the design to be
+properly simple–that’s taken some work.</p>
+
+<p>From here on out, the rest of the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>’s
+work is book-keeping.</p>
+
+<p>Well, not quite.  Did you notice how many clocks were required for that
+processing?  One.  We calculated quite a few pieces of logic from <code class="highlighter-rouge">requested</code>,
+<code class="highlighter-rouge">stay_on_channel</code>, <code class="highlighter-rouge">requested_channel_is_available</code>, all the way to
+<code class="highlighter-rouge">grant</code> and <code class="highlighter-rouge">mgrant</code> all on the same clock cycle.  Did  you catch that?
+That’s a <em>lot</em> of processing for a single clock.  As a result, the more
+slaves and the more masters get connected to this
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>,
+the slower it will become.  To keep this from ballooning out of control, both
+the <a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>s
+and the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/addrdecode.v">address
+decoder</a>
+have configuration options to add clock cycles in order to break up the
+any paths leading into to this critical path.</p>
+
+<p>There’s also a big difference at this point between
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a> and
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>.
+Unlike <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>,
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+has separate channels for write
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+and write data.
+According to the specification, the data in these channels may arrive at any
+time and in any order.  The write data, for example, might arrive first
+and then the write <a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+or vice versa.  However, the data cannot be routed to the correct slave until
+the <a href="https://en.wikipedia.org/wiki/Physical_address">address</a> is known and has
+been properly decoded.  Therefore the
+<a href="/blog/2017/06/22/simple-wb-interconnect.html">interconnect</a>
+must stall the write data channel, should it arrive at the
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a> early, until the write
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+is provided, decoded, and a grant is given.  Once a grant has been provided,
+it must remain active until all of the write data associated with that grant
+has been accepted.  With
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI</a>,
+that means that the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+must wait until the <code class="highlighter-rouge">WVALID &amp; WLAST</code> signal has been received before
+any write grants referencing this master-slave combination may change.  With
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">AXI-lite</a>,
+that also means that the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+must wait until the write data channel has caught up to the write
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>
+channel before adjusting any write grants.</p>
+
+<h2 id="setting-the-slave-outputs">Setting the slave outputs</h2>
+
+<p>At this point, all the difficult processing has been done.  All that remains
+is to reap the rewards from this hard work.</p>
+
+<p>For example, we can now set our
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+outputs to drive the various slaves.  To do this, we’ll loop through
+every slave channel, and adjust the associated
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+information any time the channel isn’t stalled.  Further, we’ll use the
+<code class="highlighter-rouge">sindex[N]</code>, the slave’s index array indicating which master is associated
+with this slave, to set these values.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">for</span><span class="p">(</span><span class="n">M</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">M</span><span class="o">&lt;</span><span class="n">NS</span><span class="o">;</span> <span class="n">M</span><span class="o">=</span><span class="n">M</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// Values can change any time the slave isn't stalled
+</span>			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">s_stb</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">||</span> <span class="o">!</span><span class="n">s_stall</span><span class="p">[</span><span class="n">M</span><span class="p">])</span> <span class="k">begin</span>
+				<span class="n">o_swe</span><span class="p">[</span><span class="n">M</span><span class="p">]</span>              <span class="o">&lt;=</span> <span class="n">m_we</span><span class="p">[</span><span class="n">sindex</span><span class="p">[</span><span class="n">M</span><span class="p">]]</span><span class="o">;</span>
+				<span class="n">o_saddr</span><span class="p">[</span><span class="n">M</span><span class="o">*</span><span class="n">AW</span>   <span class="o">+:</span> <span class="n">AW</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">m_addr</span><span class="p">[</span><span class="n">sindex</span><span class="p">[</span><span class="n">M</span><span class="p">]]</span><span class="o">;</span>
+				<span class="n">o_sdata</span><span class="p">[</span><span class="n">M</span><span class="o">*</span><span class="n">DW</span>   <span class="o">+:</span> <span class="n">DW</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">m_data</span><span class="p">[</span><span class="n">sindex</span><span class="p">[</span><span class="n">M</span><span class="p">]]</span><span class="o">;</span>
+				<span class="n">o_ssel</span><span class="p">[</span><span class="n">M</span><span class="o">*</span><span class="p">(</span><span class="n">DW</span><span class="o">/</span><span class="mi">8</span><span class="p">)</span><span class="o">+:</span><span class="n">DW</span><span class="o">/</span><span class="mi">8</span><span class="p">]</span><span class="o">&lt;=</span> <span class="n">m_sel</span><span class="p">[</span><span class="n">sindex</span><span class="p">[</span><span class="n">M</span><span class="p">]]</span><span class="o">;</span>
+			<span class="k">end</span>
+
+		<span class="k">end</span>
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>These particular values, however, are the easy ones: they aren’t the control
+signal values, but rather the values that are qualified by the control signal
+values themselves.  As a result, if the valid signal (<code class="highlighter-rouge">o_sstb[M]</code> for
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB</a>,
+<code class="highlighter-rouge">xVALID</code> for
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>)
+is low, these become don’t care values.</p>
+
+<p>The control signals are a touch more complicated.</p>
+
+<p>First, in order to support a bus abort capability, we abort any transaction
+following either a reset or a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+return from the slave.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">for</span><span class="p">(</span><span class="n">M</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">M</span><span class="o">&lt;</span><span class="n">NS</span><span class="o">;</span> <span class="n">M</span><span class="o">=</span><span class="n">M</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+	<span class="k">begin</span>
+
+		<span class="k">initial</span>	<span class="n">o_scyc</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">initial</span>	<span class="n">o_sstb</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="n">s_err</span><span class="p">[</span><span class="n">M</span><span class="p">])</span>
+		<span class="k">begin</span>
+			<span class="n">o_scyc</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">o_sstb</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>The last step of implementing the bus abort is to drop the slave’s
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+cycle line any time the master drops his.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">sgrant</span><span class="p">[</span><span class="n">M</span><span class="p">])</span>
+		<span class="k">begin</span>
+
+			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_mcyc</span><span class="p">[</span><span class="n">sindex</span><span class="p">[</span><span class="n">M</span><span class="p">]])</span>
+			<span class="k">begin</span>
+				<span class="n">o_scyc</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+				<span class="n">o_sstb</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Otherwise, if we aren’t aborting a transaction and a grant has been made then
+we must be in the middle of a valid transaction.  The slave’s cycle line
+needs to be set to reflect that.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+				<span class="n">o_scyc</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
+
+<p>The strobe signal is more complicated.</p>
+
+<p>As you may remember, the
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB</a>
+strobe signal indicates a transaction request, whether for read or write, and
+that it is roughly analogous to the
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>)
+<code class="highlighter-rouge">AxVALID</code> signals.  The first rule of any request is that the request cannot
+change as long as another one is outstanding.  For this reason, we wrap the
+control logic so that any time <code class="highlighter-rouge">o_sstb[M] &amp;&amp; s_stall[M]</code>, that is any time
+the slaves strobe and stall signals are both high, nothing gets changed.
+If <code class="highlighter-rouge">(!o_sstb[M] || !s_stall[M])</code> just reflects the opposite using
+<a href="https://en.wikipedia.org/wiki/De_Morgan%27s_laws">De Morgan’s laws</a>, such
+that <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+values may legitimately be changed without dropping any requests.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">				<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_sstb</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">||</span> <span class="o">!</span><span class="n">s_stall</span><span class="p">[</span><span class="n">M</span><span class="p">])</span></code></pre></figure>
+
+<p>That was the easy part.</p>
+
+<p>The difficult part about the strobe signal is that we can’t just set it to
+the master’s strobe input, <code class="highlighter-rouge">m_stb[sindex[M]]</code>.  We have to first check that
+the master is still requesting this particular slave, such that
+<code class="highlighter-rouge">request[sindex[M]][M]</code> is still true.  Remember, one of the bugs we are hoping
+to fix by creating this
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+is associated with a master accessing a second
+slave before the first has had a chance to respond.  In this case, we can
+check both by simply checking <code class="highlighter-rouge">request[sindex[M]][M]</code> since the request
+signal will never be high unless <code class="highlighter-rouge">m_stb[sindex[M]]</code> is also high.</p>
+
+<p>The unusual requirement is that we also need to check that the channel isn’t
+already too full.  Remember the comment about using counters to count
+transactions, and the requirement that the counters cannot overflow?  If the
+counter is about to overflow, then the channel is full.  We can’t issue
+another transaction in that case, but rather need to wait for some returns
+to come back first.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">					<span class="n">o_sstb</span><span class="p">[</span><span class="n">M</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">request</span><span class="p">[</span><span class="n">sindex</span><span class="p">[</span><span class="n">M</span><span class="p">]][</span><span class="n">M</span><span class="p">]</span>
+					  <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">mfull</span><span class="p">[</span><span class="n">sindex</span><span class="p">[</span><span class="n">M</span><span class="p">]]</span><span class="o">;</span>
+			<span class="k">end</span></code></pre></figure>
+
+<p>Finally, if there’s been no grant to this slave at all, then both cycle line
+and strobe line’s can be cleared.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="n">o_scyc</span><span class="p">[</span><span class="n">M</span><span class="p">]</span>  <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">o_sstb</span><span class="p">[</span><span class="n">M</span><span class="p">]</span>  <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>We’ve now decoded the
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>,
+and connected the slave to the master requesting
+a connection.  We’ve even sent the details of the request to the slave.  What
+we haven’t done is return any of the details from the slave back to the master.
+That’s the next step.</p>
+
+<h2 id="returning-values-to-the-master">Returning values to the master</h2>
+
+<p>There are two types of values that need to be returned to the master.  The
+first is are the acknowledgments and data returned from the slave.  With
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB</a>,
+these are easy.  We can use the <code class="highlighter-rouge">mindex[]</code> as a pointer to just
+copy the slave’s return values to the master.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">for</span><span class="p">(</span><span class="n">N</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">N</span><span class="o">&lt;</span><span class="n">NM</span><span class="o">;</span> <span class="n">N</span><span class="o">=</span><span class="n">N</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+		<span class="k">begin</span>
+
+			<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="n">m_stall</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+				<span class="n">o_mack</span><span class="p">[</span><span class="n">N</span><span class="p">]</span>   <span class="o">=</span> <span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">s_ack</span><span class="p">[</span><span class="n">mindex</span><span class="p">[</span><span class="n">N</span><span class="p">]]</span><span class="o">;</span>
+				<span class="n">o_merr</span><span class="p">[</span><span class="n">N</span><span class="p">]</span>   <span class="o">=</span> <span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">s_err</span><span class="p">[</span><span class="n">mindex</span><span class="p">[</span><span class="n">N</span><span class="p">]]</span><span class="o">;</span>
+				<span class="n">o_mdata</span><span class="p">[</span><span class="n">N</span><span class="o">*</span><span class="n">DW</span> <span class="o">+:</span> <span class="n">DW</span><span class="p">]</span> <span class="o">=</span> <span class="n">s_data</span><span class="p">[</span><span class="n">mindex</span><span class="p">[</span><span class="n">N</span><span class="p">]]</span><span class="o">;</span></code></pre></figure>
+
+<p>The stall signal is a bit more involved, just because there are more reasons
+why we might stall.  We default the stall signal to one, then allow it to be
+cleared <em>if</em> the we have an active grant to a given slave, <em>and</em> a request to
+that slave, <em>and</em> if that slave isn’t also stalled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">				<span class="k">if</span> <span class="p">(</span><span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+					<span class="c1">// Possibly lower the stall signal
+</span>					<span class="n">m_stall</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="n">s_stall</span><span class="p">[</span><span class="n">mindex</span><span class="p">[</span><span class="n">N</span><span class="p">]]</span>
+					    <span class="o">||</span> <span class="o">!</span><span class="n">request</span><span class="p">[</span><span class="n">N</span><span class="p">][</span><span class="n">mindex</span><span class="p">[</span><span class="n">N</span><span class="p">]]</span><span class="o">;</span></code></pre></figure>
+
+<p>However, if the channel is full–that is if our counter is near rolling over,
+then we need to stall this channel as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">				<span class="k">if</span> <span class="p">(</span><span class="n">mfull</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+					<span class="n">m_stall</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
+
+<p>As with many things, there are exceptions.</p>
+
+<p>For example, if the master has requested a non-existent
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a>, or if
+the transaction has timed out, then we need clear the stall line, accept
+a transaction, and return a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">				<span class="k">if</span> <span class="p">(</span><span class="n">grant</span><span class="p">[</span><span class="n">N</span><span class="p">][</span><span class="n">NS</span><span class="p">]</span> <span class="o">||</span><span class="p">(</span><span class="n">timed_out</span><span class="p">[</span><span class="n">N</span><span class="p">]</span><span class="o">&amp;&amp;!</span><span class="n">o_mack</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
+				<span class="k">begin</span>
+					<span class="n">m_stall</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+					<span class="n">o_mack</span><span class="p">[</span><span class="n">N</span><span class="p">]</span>   <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+					<span class="n">o_merr</span><span class="p">[</span><span class="n">N</span><span class="p">]</span>   <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+				<span class="k">end</span></code></pre></figure>
+
+<p>Sadly, this timeout signal only works because of the bus <em>abort</em> capability
+implemented within the
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB standard</a>
+I use.  It doesn’t work on the
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>s.</p>
+
+<p>Finally, if the master drops his cycle line, aborting any ongoing transactions,
+then we need to make certain that nothing more gets returned.  Any ongoing
+transactions will be left in an undetermined state.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">				<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">m_cyc</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+				<span class="k">begin</span>
+					<span class="n">o_mack</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+					<span class="n">o_merr</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+				<span class="k">end</span>
+			<span class="k">end</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>I use this bus abort capability primarily for two reasons.  First, following
+any <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>,
+the master will naturally want to abort any ongoing transactions.  This
+implementation was chosen from the perspective of a
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>.
+If a software program receives a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>,
+the <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> doesn’t really
+care what other transactions might succeed or fail–the software program has
+already failed.  This simplifies the cleanup.  The same is true of the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/peripherals/wbdmac.v">DMA</a>:
+following any
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>,
+the correct answer is to abort any efforts at further transactions.</p>
+
+<p><a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>,
+however, doesn’t have a way of signaling a bus abort condition, nor does
+it have a way of implementing one: every transaction request <em>must</em> receive a
+response.  This includes burst read responses as well–the
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+bus is still required to return every beat of a burst read response even if all
+of them will indicate <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>s.</p>
+
+<p>This lack of a bus abort makes implementing a timeout difficult.  Imagine, if
+you will, that the
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>
+detects a broken channel.  Perhaps the
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI slave</a>
+has failed to return a response, or perhaps that response is to an
+ID for which nothing is pending, or perhaps it sets the <code class="highlighter-rouge">xLAST</code> flag too early,
+either way, there’s no way to recover since there’s no way to indicate to the
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI slave</a> that the master
+wishes to discard anything it might still wish to respond to.</p>
+
+<p><a href="/zipcpu/2017/11/07/wb-formal.html">WB</a> doesn’t have that
+problem since all the master needs to do is to deassert the cycle line
+for the slave to know to reset any transactions in progress.</p>
+
+<p>The way to handle this properly is to assign a timeout counter to every
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a> burst.  Then, if the
+slave fails to respond or responds inappropriately, <em>every response following</em>
+is to be held as an error.  This is how my <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">AXI bus fault
+isolator</a>
+worked initially.  The reason for this approach is simply that there’s no way
+to know if a response, following an error of some type, is to be treated as a
+valid response or a continuation of the fault.</p>
+
+<p>The problem with this approach is that there’s no way to recover.</p>
+
+<p>This is why I went back and updated the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">AXI bus fault
+isolator</a>
+to add to it the ability to reset the entire (broken) downstream core, using
+the <code class="highlighter-rouge">S_AXI_ARESETN</code> signal.  Once the downstream slave then comes back from
+the reset condition, it is reattached to the bus.  Until that time, as long
+as it is either in the fault condition or in the reset condition, the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">AXI
+bus fault
+isolator</a>
+simply returns <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>s for every transaction
+request.</p>
+
+<h2 id="composing-slave-and-master-properties">Composing slave and master properties</h2>
+
+<p>The last step of the <a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>
+design process was to <a href="/blog/2017/10/19/formal-intro.html">formally
+verify</a> that the design
+worked, or equivalently to verify that it still worked following any changes.
+Changes?  Yes, I made a lot of changes along the way, especially as I learned
+more and more about how to do this.</p>
+
+<p>The first and easy step in this process was to connect a
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+bus property file to every connection coming in or going out of the
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>,
+as shown in Fig. 13.  We’ve already discussed this property file for both
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> and
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a> on the blog.
+In general, having such a file makes it really easy to verify that a given
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+component obeys the rules of the road.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 13.  Bus property files are connected to each of the input and output buses</caption><tr><td><img src="/img/crossbar/composing-bus-properties.svg" alt="" width="540" /></td></tr></table>
+
+<p>The difficult part of this task is
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>.  In
+order to pass
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>,
+the internal state variables of each formal property file need to be
+related to the registers within the design, and to the state variables found
+in each of the other formal property files.</p>
+
+<p>For example, consider the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> bus.
+The <a href="/zipcpu/2017/11/07/wb-formal.html">formal property file</a>
+maintains a counter of outstanding transactions in order to be able to make
+certain that 1) every request gets a response, and 2) that no responses are
+issued without a prior request.  These counters need to be matched.  For
+example, suppose master <code class="highlighter-rouge">N</code> is connected to slave <code class="highlighter-rouge">M</code>, so that <code class="highlighter-rouge">grant[N][M]</code>
+is true.  In that case, the number of outstanding transactions from the
+perspective of the master must be matched to the outstanding transactions
+counter within the slave.</p>
+
+<p>This isn’t as trivial as it sounds.</p>
+
+<p>Transactions issued by the master might be waiting in the decoder.  Similarly,
+transactions in any
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>s
+need to be counted.  In the end, you need to have an assertion that
+one value, based upon the master’s transaction counter, equals a similar
+value based upon the slave’s transaction counter.</p>
+
+<p>Let’s see if we can make any sense of how this is done.  Within
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">this design</a>,
+<code class="highlighter-rouge">f_moutstanding[N]</code> is the counter containing the number of outstanding
+transactions from the perspective of the master, and <code class="highlighter-rouge">f_soutstanding[M]</code>
+contains the same counter from the perspective of the slave.</p>
+
+<p>The check itself is done across all masters.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">for</span><span class="p">(</span><span class="n">N</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">N</span><span class="o">&lt;</span><span class="n">NM</span><span class="o">;</span> <span class="n">N</span><span class="o">=</span><span class="n">N</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+	<span class="k">begin</span> <span class="o">:</span> <span class="n">CHECK_OUTSTANDING</span>
+
+		<span class="o">//</span> <span class="o">...</span></code></pre></figure>
+
+<p>The first step is to make certain that the master’s transaction count includes
+at least enough to keep our arithmetic from overflowing.  This means that
+if there’s a valid transaction coming out of the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/addrdecode.v">decoder</a>,
+and if the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/addrdecode.v">decoder</a>
+outputs were registered, then it must be accounted for in the master’s count.
+Similarly, if the return response is being buffered, then there must be
+a value in the master’s counter accounting for the valid value in that
+buffer as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_mcyc</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">f_moutstanding</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&gt;=</span>
+				<span class="p">((</span><span class="n">OPT_BUFFER_DECODER</span> <span class="o">&amp;&amp;</span> <span class="n">dcd_stb</span><span class="p">[</span><span class="n">N</span><span class="p">])</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span>
+				<span class="o">+</span> <span class="p">(</span><span class="n">o_mack</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">OPT_DBLBUFFER</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>We can now subtract these two values from the master’s counter to create
+a new value, <code class="highlighter-rouge">n_outstanding</code>, containing the number of transactions that have
+been sent to the slave.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">n_outstanding</span> <span class="o">=</span> <span class="n">f_moutstanding</span><span class="p">[</span><span class="n">N</span><span class="p">]</span>
+				<span class="o">-</span> <span class="p">((</span><span class="n">OPT_BUFFER_DECODER</span> <span class="o">&amp;&amp;</span> <span class="n">dcd_stb</span><span class="p">[</span><span class="n">N</span><span class="p">])</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span>
+				<span class="o">-</span> <span class="p">((</span><span class="n">o_mack</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">OPT_DBLBUFFER</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The last step is to match this count to the slave’s count.  So, we’ll
+loop through all possible slave connections.  For any bus master <code class="highlighter-rouge">N</code>
+connected to slave <code class="highlighter-rouge">M</code>, this number of outstanding transactions is required
+to match the number of outstanding slave transactions.  Well, almost.  The
+slave hasn’t yet counted any transaction it hasn’t yet accepted.  It might
+also be that <code class="highlighter-rouge">o_scyc[iM]</code> (the slave’s cycle line) is low, or an error
+received and so the slave has aborted its transaction but the master hasn’t
+yet aborted it, etc., etc.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_mcyc</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">mgrant</span><span class="p">[</span><span class="n">N</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">iM</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">iM</span><span class="o">&lt;</span><span class="n">NS</span><span class="o">;</span> <span class="n">iM</span><span class="o">=</span><span class="n">iM</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">grant</span><span class="p">[</span><span class="n">N</span><span class="p">][</span><span class="n">iM</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">o_scyc</span><span class="p">[</span><span class="n">iM</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_serr</span><span class="p">[</span><span class="n">iM</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">o_merr</span><span class="p">[</span><span class="n">N</span><span class="p">])</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">n_outstanding</span>
+				<span class="o">==</span> <span class="o">{</span><span class="mb">1'b0</span><span class="o">,</span><span class="n">f_soutstanding</span><span class="p">[</span><span class="n">iM</span><span class="p">]</span><span class="o">}</span>
+					<span class="o">+</span><span class="p">(</span><span class="n">o_sstb</span><span class="p">[</span><span class="n">iM</span><span class="p">]</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>The key here is that this assertion <em>must be an assertion of equality</em>.
+If the two counters are not related to each other <em>exactly</em>, the
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+engine is guaranteed to fail.  (I should know–I keep trying to use inequalities
+for this check, and then getting corrected by the solver.)</p>
+
+<p>With <a href="/formal/2018/12/28/axilite.html">AXI-lite</a>,
+this check is just a touch more involved.  Unlike
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>,
+there’s no bus abort.  Unlike
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> which has only
+the one counter, 
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a> requires
+counters for the number of outstanding read transactions, write address
+and write data transactions.
+<a href="/formal/2019/05/13/axifull.html">AXI</a> has even more state
+to track, in order to make certain that the number of transactions with a
+given ID, and the number of beats per burst, all match the data within the
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>’s internal registers.</p>
+
+<h2 id="crossbar-options">Crossbar Options</h2>
+
+<p>One of the annoying realities of these separate
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>s
+is the options
+they can be configured with.  Sure, there’s the easy options: the number of
+masters, <code class="highlighter-rouge">NM</code>, and the number of slaves, <code class="highlighter-rouge">NS</code>, are both configurable.  The
+<a href="https://en.wikipedia.org/wiki/Physical_address">address</a> ranges
+of the various slaves are configurable as well.  Further, as you’ve gathered
+from above, the size of the counters used to determine how many transactions
+are outstanding is also adjustable.  The size of this counter is controlled
+by the parameter <code class="highlighter-rouge">LGMAXBURST</code>.  After that, though, I started to get greedy.</p>
+
+<p>The first option I created was the <code class="highlighter-rouge">OPT_LOWPOWER</code> option.  This option is
+common to all three of the
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a>s.  The jury is still
+out regarding whether this is useful or not (I haven’t measured it), however
+many bus lines can travel long distances on a chip.  If the lines can be held
+at zero any time they are not in use, that is any time <code class="highlighter-rouge">cyc</code> is zero for
+<a href="/zipcpu/2017/11/07/wb-formal.html">WB</a> or <code class="highlighter-rouge">AxVALID</code> is zero
+for <a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>, then no energy
+needs to be spent to charge those
+lines.  This comes at the cost of extra required logic, but I still think it
+might help lower the overall power required.  I’m looking forward to measuring
+if this has any effect.</p>
+
+<p>For the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">WB
+crossbar</a>,
+there’s also an option to register the return values from the
+slave, <code class="highlighter-rouge">OPT_DBLBUFFER</code>.  There’s also the option of setting a timeout,
+<code class="highlighter-rouge">OPT_TIMEOUT</code>, so that any return
+that doesn’t come back in time for the timeout can be turned into an
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+and a subsequent bus abort.  Here, I got greedy again.  I added an additional
+register to control whether or not a request should timeout <em>before</em> it even
+gets to the slave.  This I call a starvation timeout, and its an indication
+that a particular master isn’t getting access to the slave fast enough.
+Perhaps another master is hogging the slave.  Perhaps it’s a well used slave
+and this master doesn’t have enough of a priority.  Either way, with the
+starvation timeout parameter set, <code class="highlighter-rouge">OPT_STARVATION_TIMEOUT=1'b1</code>, each master
+will be guaranteed a return in a fixed and known number of time-steps.</p>
+
+<p>If only I could do that with
+<a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>.
+Although I haven’t done that with the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">AXI-lite
+crossbar</a>,
+that might be easy enough to be doable still.</p>
+
+<p>One of the parameters the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI</a> and
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">AXI-lite</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbars</a> share that the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">WB crossbar</a>
+doesn’t have is a linger option, <code class="highlighter-rouge">OPT_LINGER</code>.  The idea behind this option is
+that if master <code class="highlighter-rouge">N</code> has just finished talking to slave <code class="highlighter-rouge">M</code>, then that connection
+is likely to be needed again in the near future.  Once the channel becomes
+idle, therefore, the
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+will wait <code class="highlighter-rouge">OPT_LINGER</code> clocks before removing the grant.  If master <code class="highlighter-rouge">N</code> wants
+to talk to slave <code class="highlighter-rouge">M</code> again, the grant is already there waiting for him and
+he won’t have to wait for it.  Of course, it will
+only linger if no other master wants access to this particular slave.  This is
+therefore a useful, though optional, configuration parameter which might
+impact performance.</p>
+
+<p>Of course, the sad reality of any of these options is that the
+<a href="https://en.wikipedia.org/Crossbar_switch">crossbar</a> really needs to be
+<a href="/blog/2017/10/19/formal-intro.html">verified</a>
+for every possible parameter setting.  Hence verifying the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">WB crossbar</a>
+requires 48 proofs (36 assertion based, 12 cover based), whereas the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilxbar.v">AXI-lite crossbar</a>
+requires 12 proofs (6 assertion based, 6 cover based).  The full
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI crossbar</a>,
+as currently configured, requires 8 assertion based proofs.  This is really
+incomplete, since it doesn’t (yet) have a set of cover-based proofs
+to show that not only will it not violate any properties, but that it can
+actually properly complete transactions in the first place.  For now, though,
+you can just consider this last piece a work in progress–even though I’ve
+done enough testing with various <code class="highlighter-rouge">cover()</code> checks to be confident that
+the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI
+crossbar</a>,
+would work.</p>
+
+<h2 id="xilinxs-interconnect">Xilinx’s Interconnect</h2>
+
+<p>Once I had formally verified my own
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnects</a>, I became curious
+about how hard it might be to <a href="/blog/2017/10/19/formal-intro.html">formally
+verify</a> <a href="https://www.xilinx.com/support/documentation/ip_documentation/axi_interconnect/v2_1/pg059-axi-interconnect.pdf">Xilinx’s AXI
+interconnect</a>.
+If you check out Vivado’s IP Catalog, you’ll find an entry for a
+<code class="highlighter-rouge">AXI interconnect RTL</code> which, when instantiated, will create a Verilog copy
+of their <a href="https://www.xilinx.com/support/documentation/ip_documentation/axi_interconnect/v2_1/pg059-axi-interconnect.pdf">their
+interconnect</a>.</p>
+
+<table align="center" style="float: right"><caption>Fig 14. Xilinx offers an interconnect in their IP catalog</caption><tr><td><img src="/img/crossbar/xilinx-intercon-ip.png" alt="" width="781" /></td></tr></table>
+
+<p>I spent some time looking through this (after I’d built <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">my
+own</a>)
+and I’ve learned a lot from it.</p>
+
+<p>First, they have two different types of
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnects</a>
+implemented.  The first type offers grants to slaves based upon read or write
+requests.  This is different from my own grants above which are based upon
+either write requests or read requests.  In other words, if you request
+to read from a peripheral from this first type of
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>, you’ll get a
+write grant as well.  It’s not yet clear to me what will happen if you request
+both read and write grants at the same time, though.  This particular
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a> ignores the <code class="highlighter-rouge">AxID</code>
+values when routing–much like <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">my
+own</a>.  Not only
+that, this version of Xilinx’s
+<a href="/formal/2019/05/13/axifull.html">AXI</a>
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a> might easily
+mask the <a href="/formal/2019/05/13/axifull.html">AXI</a> bugs found
+in their demonstration slave core.</p>
+
+<p>The other type of
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>
+they support grants access to both read and write requests separately, and
+uses the <code class="highlighter-rouge">AxID</code> field to route the returns back to the slave that requested
+the transaction.  This was how I had always thought an <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI
+interconnect</a> would
+be created–that is, until I tried building my own.  The reason why I don’t
+route bus returns based upon the <code class="highlighter-rouge">BID</code> or <code class="highlighter-rouge">RID</code> fields is simply because you’d
+need another
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>–this
+time for the return channel.  The first
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+already costs a minimum of two clock cycles of latency.  This second
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)#Bus_arbiter">arbiter</a>
+would need to consume a similar amount of resources on the return.  Adding
+four clocks to every transaction seems excessive.  So, while it’s doable,
+I didn’t find it worth the performance cost.</p>
+
+<p>The other thing I found while browsing Xilinx’s
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a> code, were a large
+number of translators that could bridge from one bus type to another.  Their
+<a href="https://en.wikipedia.org/Crossbar_switch">interconnect</a>
+it seems is capable of instantiating <a href="/blog/2017/10/20/cdc.html">clock domain
+crossing</a> bridges, bridging from
+AXI3 to <a href="/formal/2019/05/13/axifull.html">AXI4</a>,
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+to <a href="/formal/2019/05/13/axifull.html">AXI4</a>,
+<a href="/formal/2019/05/13/axifull.html">AXI4</a>,
+to <a href="/formal/2018/12/28/axilite.html">AXI-lite</a>,
+<a href="/formal/2019/05/13/axifull.html">AXI4</a> with one size
+<code class="highlighter-rouge">AxID</code> values to <a href="/formal/2019/05/13/axifull.html">AXI4</a> with
+another, and so on.  It’s quite configurable, although the small budget
+hobbyist should beware: each of these translations costs resources within
+your design.</p>
+
+<p>Of those bridges, the one that surprised me was the
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a> to
+<a href="/formal/2019/05/13/axifull.html">AXI4</a> bridge.
+Whereas <a href="/formal/2018/12/28/axilite.html">AXI-lite</a> is a
+very capable protocol, capable of high speed operation just as fast if not
+faster than the full <a href="/formal/2019/05/13/axifull.html">AXI4</a>
+protocol, Xilinx’s bridge code crippled the
+<a href="/formal/2019/05/13/axifull.html">AXI4</a> generated
+transactions so that no more than one read or one write would ever be
+outstanding at any given time.  The bridge also cost several clock cycles,
+which is unusual since an
+<a href="/formal/2019/05/13/axifull.html">AXI4</a> transaction can be
+created from an <a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+transaction by <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilite2axi.v">fixing and ignoring the unused
+fields</a>.
+No matter how I looked it over, I couldn’t see any reason for building their
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a> to
+<a href="/formal/2019/05/13/axifull.html">AXI4</a> bridge in this
+fashion.</p>
+
+<p>Perhaps this explains why the bugs in their
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+demonstration core have gone unnoticed for so long?</p>
+
+<p>The sad reality, however, of both of these observations is that some day
+Xilinx will update <a href="https://www.xilinx.com/support/documentation/ip_documentation/axi_interconnect/v2_1/pg059-axi-interconnect.pdf">their
+interconnect</a>,
+and all of a sudden a lot of <a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI
+slaves</a>, written based upon
+their <a href="/formal/2019/05/13/axifull.html">demonstration code</a>,
+will start failing.</p>
+
+<p>I guess that means that if you haven’t started
+<a href="/blog/2017/10/19/formal-intro.html">formally verifying</a>
+your
+<a href="/formal/2019/05/13/axifull.html">AXI</a>
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+components, you should start doing so now.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Building your own
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)">crossbar interconnect</a>
+may be intense, but it is certainly possible to do.  I will say this, though,
+I’m not sure I could’ve done it without the formal property files for either
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>,
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>,
+or the <a href="/formal/2019/05/13/axifull.html">AXI4</a>
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> protocols.</p>
+
+<p>I should also mention that the proofs themselves aren’t necessarily all that
+fast to accomplish.  While the
+<a href="/blog/2017/10/19/formal-intro.html">formal</a>
+tools can often find bugs quickly, proving that there are no bugs can be much
+harder.  As a result, my initial development on each of these
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)">crossbars</a> was
+pretty quick.  It then slowed down.  At one point, it took over 50 hours
+to verify the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v">AXI
+crossbar</a> in one
+of its configurations.  Creating submodules to contain the <a href="/blog/2019/05/22/skidbuffer.html">skid
+buffer</a>s really helped,
+dropping the maximum proof time down to 22 minutes.  Sure, it takes time, but
+it’s quite doable.</p>
+
+<p>The biggest thing I haven’t discussed about full
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)">crossbar interconnects</a>
+is their logic cost.  That full
+<a href="https://en.wikipedia.org/wiki/Arbiter_(electronics)">crossbar</a>
+doesn’t come cheap, and certainly not for any sizable number of masters or
+slaves.  Worse, the cost doesn’t scale linearly as the number of masters or
+slaves increases.  Instead of opening that discussion now, let me simply invite
+you to take any of the arbiters discussed here and to build it using
+<a href="">Yosys</a>
+to see how much it will cost as you vary the parameters.</p>
+
+<p>Finally, I would still like to come back to this topic and walk through some
+of my brand new <a href="https://zipcpu.com/blog/2019/05/29/demoaxi.html">AXI</a>
+cores: the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v">bus fault
+isolator</a>, the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axi2axilite.v">AXI to AXI-lite bridge</a>, the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilite2axi.v">AXI-lite to AXI bridge</a>, or perhaps even the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbm2axisp.v">Wishbone to AXI</a>
+bridge that I use to get high speed access to the
+<a href="https://en.wikipedia.org/wiki/DDR3_SDRAM">DDR3 SDRAM</a> memory.  These we’ll do
+<a href="https://www.blueletterbible.org/kjv/heb/6/3">if the Lord permits</a>.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Thus saith the LORD, Stand ye in the ways, and see, and ask for the old paths, where is the good way, and walk therein, and ye shall find rest for your souls. But they said, We will not walk therein.  (Jer 6:16)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
