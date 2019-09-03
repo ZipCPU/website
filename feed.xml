@@ -6,14 +6,544 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 03 Sep 2019 11:59:40 -0400</pubDate>
-    <lastBuildDate>Tue, 03 Sep 2019 11:59:40 -0400</lastBuildDate>
+    <pubDate>Tue, 03 Sep 2019 16:04:07 -0400</pubDate>
+    <lastBuildDate>Tue, 03 Sep 2019 16:04:07 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Understanding AutoFPGA&#39;s address assignment algorithm</title>
+        <description>Some time ago, I figured out a basic address assignment algorithm for use in
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html).
+At the encouragement of [my twitter](https://twitter.com/ZipCPU) followers, I
+thought it might be valuable to share this algorithm here.
+
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html),
+as you may recall, connects peripherals ([and now multiple masters
+in the dev branch](https://github.com/ZipCPU/autofpga/tree/dev)) to any
+respective buses you might wish to assign them to.  While
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)
+is primarily a copy-paste design facility with some calculation mixed in,
+address assignment is one of several exceptions to this rule.
+
+Consider as an example the bus structure shown in Fig. 1.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;CAPTION&gt;Fig 1. Example multi-level bus structure&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/generic-bus-diagram.svg&quot; ALT=&quot;&quot; WIDTH=&quot;720&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+In this structure, you can see three bus masters, together with four basic
+slaves, four `DOUBLE`-type slaves, and four `SINGLE`-type slaves.  Slave one
+in particular provides access to a second bus having two slaves on it.
+
+To assign addresses to all of these peripherals,
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)
+generates and maintains a list of buses found within the design.  Each bus
+is composed of a number of peripherals (the PLIST), and one or more masters
+(the MLIST).  Certain special &quot;subbus&quot; or &quot;arbiter&quot; masters are able to cross
+from one bus to another, making it possible to have hierarchical bus structures,
+such as Fig. 1 shows above.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;CAPTION&gt;Fig 2. Example multi-level bus structure&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/bus-lists.svg&quot; ALT=&quot;&quot; WIDTH=&quot;420&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)s
+first task is to [split each bus into three
+parts](/zipcpu/2019/08/30/subbus.html): The first is for
+peripherals of type `SINGLE`.  These are single register peripherals whose
+register is immediately available for reading or writing, and who don&#39;t stall
+the bus.  The second set of peripherals, those of type `DOUBLE`, can have
+more registers internal to them.  This set requires a single clock period to
+return a value from a bus request.  As with the `SINGLE` list, this set is
+not allowed to stall the bus either.  The last set of peripherals contains all
+other types of peripherals.
+
+For [WB peripherals](/zipcpu/2017/05/29/simple-wishbone.html),
+the entire `SINGLE` peripheral set is turned into a `DOUBLE` peripheral, and
+then that peripheral is turned into a regular peripheral of the normal variety.
+While this is captured in Figs. 1 and 2 above, I haven&#39;t yet decided if I will
+do the same thing for the
+[AXI-lite](/formal/2018/12/28/axilite.html) interface or not.
+
+Address assignment then starts at the lowest level of the bus structure, and
+then works its way up to the top.  Within any given level, the `SINGLE` set is
+assigned first and formed into its own peripheral, then the `DOUBLE` set,
+and then peripheral assignment is done on the rest of the bus.
+
+Let&#39;s look at an example from one of my more recent projects.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;CAPTION&gt;Fig 3. Abbreviated bus design from a recent project&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/sonar-design.svg&quot; ALT=&quot;&quot; WIDTH=&quot;720&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+In this project there&#39;s your basic
+[ZipCPU](/about/zipcpu.html), and then
+[flash](/blog/2019/03/27/qflexpress.html),
+SDRAM, network, and [SD-Card](https://github.com/ZipCPU/sdspi)
+peripherals.  Indeed, this much of the design is based upon my
+[VideoZip design](https://github.com/ZipCPU/videozip).  Now, using
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html),
+I can add a basic SONAR transmit controller and a boot ROM section so my
+customer doesn&#39;t need to load code into the design himself.  (The boot ROM
+slave isn&#39;t shown in Fig. 3 above.)  Finally, there&#39;s a data recorder shown
+above as the &quot;DMA&quot; in the picture.  If you look carefully, you&#39;ll notice this
+same slave exists on the bus in two places: once where for the control port
+where it receives its commands, and again for the memory access portion
+where it masters the bus.  Xilinx users might be familiar with the similar
+[AXIS2MM data mover
+peripheral](https://www.xilinx.com/support/documentation/ip_documentation/axi_datamover/v5_1/pg022_axi_datamover.pdf),
+but this particular one is my own WB creation and no real relation to theirs.
+
+Let&#39;s spend a moment to see how
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)
+handles this address assignment problem.
+
+## Address Decoding
+
+The first step to understanding how address assignment works is to understand
+how addresses are decoded.  [As we&#39;ve discussed
+before](/blog/2019/07/17/crossbar.html), address decoding is
+done with two values: an address and a mask assigned on a per-slave basis.  A
+particular peripheral is selected if the requested address matches the slave&#39;s
+address everywhere a mask bit is set.
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;&lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;peripheral&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;valid_request&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;requested_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SLAVE_MASK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SLAVE_ADDR&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+You might also equivalently write,
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;&lt;span class=&quot;n&quot;&gt;request&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;peripheral&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;valid_request&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;requested_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;^&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SLAVE_ADDR&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;SLAVE_MASK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+Both should generate the same logic.
+
+In general, the goal of address assignment is to both minimize the number of
+mask bits and the number of address bits at the same time.
+
+Sound simple?  Let&#39;s find out how this works.
+
+## Easy Address Assignment
+
+Just to illustrate the issue of address assignment, let&#39;s start out with a
+basic set of peripherals and assign an address to each of them.  I&#39;ve chosen
+a set of 12-peripherals for this purpose, shown in Fig. 4 on the right.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;CAPTION&gt;Fig 4. Example slave peripherals&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/sample-plist.png&quot; ALT=&quot;&quot; WIDTH=&quot;296&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+1. The first &quot;peripheral&quot; is the null space.
+
+   My initial designs didn&#39;t include this null space.  Shall we say I got
+   burned and then painfully learned the wisdom of my ways?
+
+   The story dates back to before I implemented illegal instruction detection
+   in the [ZipCPU](/about/zipcpu.html),
+   feeling at the time that it was &quot;optional&quot;.  (I don&#39;t feel this way any
+   more.)  Then one day something went wrong.  Somewhere, a pointer got set
+   to address zero.  Worse, all of my peripheral addresses were packed near
+   zero at the time.  The result was that the
+   [CPU](/about/zipcpu.html) started
+   wildly writing errant data to the peripheral address space.
+
+   By the time I had realized what was happening, the
+   [CPU](/about/zipcpu.html)
+   had written to the flash configuration control register and switched
+   some of the one-time programmable configuration bits.  My
+   [Arty](https://store.digilentinc.com/arty-a7-artix-7-fpga-development-board-for-makers-and-hobbyists),
+   while usable, has never been the same since.
+
+   I&#39;ve also learned to add illegal instruction detection and bus error
+   [bus](https://en.wikipedia.org/wiki/Bus_(computing))
+   [error](https://en.wikipedia.org/wiki/Bus_error) detection to the
+   [CPU](/about/zipcpu.html),
+   and similarly a null space to my address assignments.
+
+2. The next couple of peripherals in this example set are [Wishbone
+   Scopes](/blog/2017/07/08/getting-started-with-wbscope.html).
+   These require only two addresses, 4-bytes each, one for control and one
+   for data.
+
+3. I also have a [microphone peripheral](https://github.com/ZipCPU/wbpmic)
+   with a similar addressing scheme--one address for control and one for data.
+
+4. The next peripheral is my [WBUART
+   peripheral](https://github.com/ZipCPU/wbuart32).  This has transmit and
+   receive registers, as well as protocol control and FIFO status registers.
+   [This
+   peripheral](https://github.com/ZipCPU/wbuart32/blob/master/rtl/wbuart.v)
+   therefore requires address space for four 32-bit registers.
+
+5. My [RGMII](https://github.com/ZipCPU/videozip/tree/enet/rtl/ethernet) and
+   [RMII](https://github.com/ZipCPU/openarty/tree/autoarty/rtl/enetpackets.v)
+   controllers need two address regions--one for packet
+   memory and another for the controller.  The
+   [controller](https://github.com/ZipCPU/videozip/tree/enet/rtl/ethernet/enetpackets.v)
+   itself requires eight 32-bit registers to control the transmitter, the
+   receiver, the MAC address,
+   and to some feedback counters to capture the number of aborted packets.
+
+6. These are followed by the [network management data port](https://github.com/ZipCPU/videozip/blob/master/rtl/enetctrl.v).  My network
+   management controller provides a separate address for everything in
+   the [MDIO](https://en.wikipedia.org/wiki/Management_Data_Input/Output)
+   address space, so it requires 128 bytes of address space.
+
+7. The network packet memory needs to be sufficiently large to hold both a
+   received packet as well as the packet to be transmitted next.  Let&#39;s pick
+   a memory area 32,768 bytes wide (two 16kB packets) knowing that we can
+   adjust this for other architectures.
+
+8. While I don&#39;t typically use a first-stage boot-loader, one of the projects
+   I&#39;m working on requires it.  That project requires a boot-ROM so we&#39;ll throw
+   it in here.  A block-ROM of 256kB is more than sufficient to read a
+   program from an SD-card and copy it to RAM.
+
+9. We&#39;ll then scrap together whatever&#39;s left of our FPGA block RAM components
+   in order to create a [1MB block RAM
+   peripheral](/zipcpu/2018/07/13/memories.html).
+
+10. We also have a [flash
+   peripheral](/blog/2019/03/27/qflexpress.html) in this
+   sample list.  It seems there&#39;s a large set of
+   [flash](https://en.wikipedia.org/wiki/Flash_memory)
+   peripherals stuck at 24-bit addressing, so this will give us a
+   [flash](https://en.wikipedia.org/wiki/Flash_memory)
+   size of 16MB.
+
+11. Our final peripheral is a [DDR3
+   SDRAM](https://en.wikipedia.org/wiki/DDR3_SDRAM) having 512MB of memory.
+   My current approach to this is to use the basic MIG controller, coupled
+   with a [Wishbone to AXI
+   bridge](https://github.com/ZipCPU/wb2axisp/blob/master/rtl/wbm2axisp.v).
+   As you&#39;ll see in a moment, the sheer size of this particular peripheral will
+   dominate much of how our address assignment algorithm will work.
+
+Now, let me ask, how would you assign addresses to these peripherals?
+
+Ideally, what we might want would be a one-hot addressing scheme where
+you could tell which peripheral was addressed by a single bit in the
+address space.  While this sounds like an awesome idea, it fails in
+practice any time an errant program accesses an address with more than one
+of these otherwise one-hot bits set.  If both peripherals respond,
+... &quot;bad&quot; things will happen.  The bus, for example, might lock up until
+the next power cycle.  This is usually quite &quot;bad&quot;.
+
+This would also break the [fundamental rule of all bus
+work](/zipcpu/2017/11/07/wb-formal.html): for every request,
+there is one and only one response.
+
+No, we want to make certain instead that our address assignment method works
+in such a way that only one slave will ever be addressed at a time.  It doesn&#39;t
+matter if &quot;non-allocated&quot; addresses select that slave, but it does matter if any
+addresses select more than one slave at a time.
+
+Perhaps the easiest way to do address assignment might be to first find
+the slave with the biggest address width, and then assign an address space
+that big to every slave.  Since the
+[SDRAM](https://en.wikipedia.org/wiki/DDR3_SDRAM)
+requires an address space of
+`0x2000_0000` bytes, we&#39;ll assign every peripheral that many bytes and just
+count up.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: left; padding: 15px&quot;&gt;&lt;CAPTION&gt;Fig 5. Example slave peripherals&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/simple-assignment.png&quot; ALT=&quot;&quot; WIDTH=&quot;643&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+As you can see from Fig. 5 on the left, we overran our 32-bit address
+space and now need a 33-bit address space.
+You can also see that our 8-byte peripherals were assigned 512 MBs of
+address space each.  This would sort of be like running a parcel shipping
+business and only supporting one size container--train box cars.
+
+Practically, this will never work.
+
+The [ZipCPU](/about/zipcpu.html)
+only supports a 32-bit address space (i.e. 30-bit word address space), and
+of that address space there&#39;s a reserved portion at the end from
+`0xff00_0000` to `0xffff_ffff`.
+
+Before we abandon this approach though, let&#39;s see what else we might learn
+from it.  For example, the address decoder could decode all of these separate
+peripheral address ranges with a simple 4-bit lookup table, checking only
+address bits 33-29 as indicated by the mask, `0x1_e000_0000`.
+
+While this is a low-logic decoder, it does have a consequence.  Low-logic
+means that peripherals with a small address range may exist at multiple
+locations in the address map.  To continue our parcel shipping analogy, many
+loaves of bread might find in a package big enough to hold a sofa--why
+only pack one peripheral in such a large address space?
+
+Further, consider how the [UART
+peripheral](https://github.com/ZipCPU/wbuart32) exists from `0x8000_000f` to
+`0x9fff_ffff` even though it only uses four registers within that range.
+What happens, then, is that all of the addresses within this range will
+alias into the same four peripheral registers, allowing the
+[UART](https://github.com/ZipCPU/wbuart32)
+to be addressed anywhere in that address region.  We&#39;ll touch more on this
+in the next section.
+
+For now, we can summarize our success, or lack thereof, by two metrics--the
+address width required to access all of these peripherals (33 bits--too many),
+and the number of mask bits necessary to select between them, 4-bits.
+
+Can we do better?
+
+## Tightly packing addresses
+
+When I first started trying to handle address assignment, I would pack as many
+peripherals as I could into a given address area.  Here&#39;s how that algorithm
+worked:
+
+1. I&#39;d first sort all the peripherals, leaving the null space at zero of course.
+
+   Perhaps you&#39;ve noticed that I&#39;ve already sorted the peripherals listed
+   in Fig. 4 above.
+
+2. I&#39;d initialize my work by setting a `start_address` either to 0.
+
+3. For each peripheral, starting with the &quot;empty&quot; null-space and working down
+   the list, I&#39;d add to the `start_address` the size of the peripheral, minus
+   one byte.
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;	&lt;span class=&quot;n&quot;&gt;pa&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;peripheral&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;address_width&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;periphera&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;base_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;start_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pa&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+{: start=&quot;4&quot; :}
+
+4. This would be guaranteed to overflow if there weren&#39;t enough bits to
+   support my requested address range.  For example, suppose the start address
+   was `0x40` and I wanted to allocate space for the [MDIO 
+   peripheral](https://github.com/ZipCPU/videozip/blob/master/rtl/enetctrl.v)--requiring
+   a register space of `0x80` octets.  If you add these two together, you&#39;d
+   get `0x40 + 0x80 = 0xc0`.  Subtracting one brings you to `0xbf`.
+
+5. Now I can trim off the bottom bits, to guarantee the peripheral can use
+   an address mask.
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;	&lt;span class=&quot;n&quot;&gt;pa&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;peripheral&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;address_width&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;periphera&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;base_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1l&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pa&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+{: start=&quot;6&quot; :}
+
+6. To follow our example from above, this would force the [MDIO
+   peripheral](https://github.com/ZipCPU/videozip/blob/master/rtl/enetctrl.v)
+   needing `0x80` bytes of address space to have a start address equal to
+   `0x80`--plenty of room, and with a guaranteed 7-bits to reference values
+   within the peripheral.
+
+7. We can then increment our start address to be ready for the next peripheral.
+   The new start address must be just following our assigned address space.
+   So, for our 
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;	&lt;span class=&quot;n&quot;&gt;start_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;peripheral&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;base_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1ul&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pa&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+{: start=&quot;8&quot; :}
+
+8. Then, as a first pass to knowing what mask bits we require, we set our
+   mask bits to be the next address bit over.
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;	&lt;span class=&quot;n&quot;&gt;periheral&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;mask_bits&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1l&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pa&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+{: start=&quot;9&quot; :}
+
+9. Finally, go back and repeat for all peripherals.
+
+This sounds confusing.  Perhaps a picture or two might help.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;CAPTION&gt;Fig 6. Address assignment: three scopes and a serial port&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/uart-plus-scopes.svg&quot; ALT=&quot;&quot; WIDTH=&quot;280&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+The two [scopes](/blog/2017/07/08/getting-started-with-wbscope.html)
+and the [microphone](https://github.com/ZipCPU/wbpmic) all use two words of
+address space.  We can therefore pack them tightly together.  However, when
+we get to the [UART](https://github.com/ZipCPU/wbuart32),
+we need an address that&#39;s aligned with four bus words.  Rounding up to the
+nearest address that&#39;s aligned with four bus words is going to require
+stuffing two words of unused space into our address space as shown in Fig.
+6 on the right.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: left; padding: 15px&quot;&gt;&lt;CAPTION&gt;Fig 7. Adding the network control port&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/network-plus-uart.svg&quot; ALT=&quot;&quot; WIDTH=&quot;420&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+Once we&#39;ve assigned the
+[scopes](/blog/2017/07/08/getting-started-with-wbscope.html)
+and the [UART](https://github.com/ZipCPU/wbuart32), it&#39;s now time to assign an
+address to the [network control
+port](https://github.com/ZipCPU/openarty/tree/autoarty/rtl/enetpackets.v).
+This peripheral needs an address aligned to eight 32-bit words.  However,
+if you shuffle everything to an eight word width, you&#39;ll find that the network
+control addresses don&#39;t fit unless you skip some more space.
+
+As you can see, we&#39;re working from the smaller peripheral to the larger
+ones.  At each level, the peripheral needs to be assigned to an address
+aligned to the size of the peripheral.
+
+That&#39;s what the algorithm above does.
+
+As a last step, we&#39;ll measure the total number of bits required to do this
+address decoding (30 bits), and then trim any mask bits to just that many bits.
+The result would be a set of base addresses and masks describing a &quot;full
+address decoder&quot;.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;CAPTION&gt;Fig 8. Full address decoding&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/full-address-decoding.png&quot; ALT=&quot;&quot; WIDTH=&quot;589&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+This time, you&#39;ll notice from Fig. 8 above that we&#39;ve done much better at
+minimizing the number of address bits than we did in our first attempt shown
+in Fig. 5 above.  But 27 mask bits?  Not so much.
+
+If low logic were important to us, and it has always been to me since more
+logic costs more money, we might choose to just check the minimum mask bits
+necessary to separate peripherals.  This would be a &quot;partial address decoding&quot;,
+since it would leave holes in the address space.  You can see how this might
+work in Fig. 9 below.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: left; padding: 15px&quot;&gt;&lt;CAPTION&gt;Fig 9. First cut at partial address decoding&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/first-pass-partial.png&quot; ALT=&quot;&quot; WIDTH=&quot;589&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+If you count number of bits used in the masks of Fig. 9, you&#39;ll get eleven
+non-zero bits.  Eleven mask bits would mean that decoding a peripheral&#39;s
+address would require a comparator with a length somewhere between one
+bit (the [SDRAM](https://en.wikipedia.org/wiki/DDR3_SDRAM))
+and 11-bits (the [WB
+Scopes](/blog/2017/07/08/getting-started-with-wbscope.html)).
+Decoding addresses using an 11-bit mask would [require between two and three
+LUTs per slave](/blog/2017/06/12/minimizing-luts.html)
+depending on your architecture.
+
+While this kind of &quot;partial address decoding&quot; is both common and cost
+effective, it&#39;s been known to surprise those who aren&#39;t familiar with it.
+Consider as an example address `0x210_0000`.  Since the
+block RAM&#39;s mask only checks bits `0x2110_0000`, our address decoding
+algorithm above will map this address to the block RAM--even though the
+block RAM&#39;s official address space only exists between `0x10_0000` and
+`0x1f_ffff`.  On the other hand, `0x20c_0000` would map to our block `ROM`,
+`0x30c_0000` would map to our [Flash
+peripheral](/blog/2019/03/27/qflexpress.html),
+and `0x4003_0000` would map to our first [WB
+Scope](/blog/2017/07/08/getting-started-with-wbscope.html)).
+This isn&#39;t a bug, but it can be a rather surprising consequence
+the address decoding algorithm.
+
+So, all in all, we did okay here with our second attempt at address assignment.
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html), however,
+has a better approach to generating a &quot;partial address decoding&quot; mask, which
+we&#39;ll discuss in the next section.
+
+
+## AutoFPGAs Address Assignment Algorithm
+
+What we&#39;ve done above nearly describes
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)&#39;s
+address assignment algorithm.  There&#39;s only one piece missing: minimizing
+the required size of the mask.
+
+To handle this,
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)
+takes a first pass through the peripheral list to
+calculate the minimum total address size.  It then increases the minimum
+peripheral address size as long as the total address width remains less
+than the minimum address width, and as long as the number of mask
+bits goes down.
+
+How shall the minimum total address size be calculated?  Just the way we did
+it in our last section: add peripherals to a bus and calculate the address
+width.  The number of relevant bits is then given by the difference between
+the full address size and the bloated minimum size given to every slave.
+
+For example, if we look through our example slave set, you&#39;ll see that the
+maximum slave size that doesn&#39;t increase increase the address width is 25 bits.
+Once chosen, each slave is checked for its address size.  If the slaves
+address size is less than 25 bits, it is replaced by 25 bits in the
+algorithm above.  The algorithm then continues as before.
+
+For the slave set example we&#39;ve been working with today, the result then
+looks like Fig. 10 below.
+
+&lt;TABLE align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;CAPTION&gt;Fig 10. Minimizing mask size for a given address width&lt;/CAPTION&gt;&lt;TR&gt;&lt;TD&gt;&lt;IMG SRC=&quot;/img/address-assignment/final-assignment.png&quot; ALT=&quot;&quot; WIDTH=&quot;589&quot;&gt;&lt;/A&gt;&lt;/TD&gt;&lt;/TR&gt;&lt;/TABLE&gt;
+
+You might notice that the base address just increments from one peripheral
+to the next--that&#39;s the minimum address size amount.  Further, the peripheral&#39;s
+are just one step away from each other up until the last peripheral--the
+[SDRAM](https://en.wikipedia.org/wiki/DDR3_SDRAM) again.
+
+Looking at Fig. 10 again, you&#39;ll notice that the total address width is just
+one more than the [SDRAM](https://en.wikipedia.org/wiki/DDR3_SDRAM)&#39;s
+address width.  This is the minimum possible address width we could&#39;ve
+achieved.  Similarly, you&#39;ll also notice that the address calculation now
+fits in a 5-bit mask.  Since Xilinx chips allow packing two 5-LUTs into a
+single 6-LUT as long as the wires are the same, that means we can do our
+address decoding with only six pairs of 5-LUTs.
+
+## Bus Hierarchies
+
+This same basic approach maps quite nicely to bus hierarchies as well,
+where one bus master is a slave to another bus above it.
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)
+handles bus hierarchies by simply walking the bus tree from the bottom on
+up.
+
+1. Start at the lowest bus in the hierarchy.  Assign addresses to it.
+   Once accomplished, you&#39;ll then know the address width of this sub-bus
+   within the hierarchy.
+
+   This width is used to fill key tags within an bus-translator or arbiter
+   components, allowing them to be adjusted for the width of the bus
+   they are working with.
+
+2. Once you then move up in the hierarchy, you can treat each bus beneath
+   as a self-contained slave.
+
+Where this starts to get interesting is if you have multiple tops to the
+bus tree, and those tops each have a different perspective of the
+address map.  I&#39;ve already had this problem once with both the
+[ZipCPU](/about/zipcpu.html) and the
+debugging bus
+occupying the top of the tree.  My solution was rather hackish to force
+a specific arrangment of the two buses, but I&#39;m likely going to need to
+revisit it in the future.
+
+Since I&#39;m only just now starting to handle multipl-masters with
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html), rather
+than using an
+[arbiter](https://github.com/ZipCPU/zipcpu/blob/master/ex/wbarbiter.v)
+to neck down every bus to a single master, I&#39;m not quite sure how this
+is going to impact things ... yet.
+
+## Conclusions
+
+I&#39;m sure there are more complicated address assignment algorithms out there,
+but this one has worked rather nicely for me for some time.
+
+It&#39;s not perfect.  One of the particular limitations of this algorithm
+as written is that it doesn&#39;t (yet) handle the case where some peripherals
+have pre-assigned addresses and others need to be assigned around those.
+This means that every time your run
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)
+the address structure might change.  That&#39;s not necessarily a good thing
+when you&#39;ve already delivered a product to your client and you just want
+to add a new piece of hardware to the address decoder without obsoleting
+all of the software you&#39;ve already written.  In other words, allowing
+the address space to be fixed is something I am very interested in
+addressing in the future.
+
+On the other hand, if you have control over all of the parts of a project and
+have no problems rebuilding all of your software on every reconfiguration, then
+[AutoFPGA](/zipcpu/2017/10/05/autofpga-intro.html)
+might be the solution you need.  Not only does it move things around, but it
+then updates a series of header and data files that you can then use to keep
+running the same software once recompiled.  As a result, if I simply run
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-bash&quot; data-lang=&quot;bash&quot;&gt;&lt;span class=&quot;gp&quot;&gt;$ &lt;/span&gt;make autodata
+&lt;span class=&quot;gp&quot;&gt;$ &lt;/span&gt;make&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+all of the addresses may get reassigned, but all of the software will rebuilt
+at the same time to support the new address space.  On the other hand,
+address reassignment isn&#39;t automatic--if I don&#39;t run `make autodata` then
+the design should work as is with the current address assignments.
+
+What do you think?  Feel free to drop me a line or re-post this article
+if you felt this material was valuable.
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;But he said unto them, Give ye them to eat. And they said, We have no more but five loaves and two fishes; except we should go and buy meat for all this people.  For they were about five thousand men. And he said to his disciples, Make them sit down by fifties in a company.  (Luke 9:13-14)&lt;/em&gt;</description>
+        <pubDate>Tue, 03 Sep 2019 00:00:00 -0400</pubDate>
+        <link>https://zipcpu.com/zipcpu/2019/09/03/address-assignment.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/zipcpu/2019/09/03/address-assignment.html</guid>
+        
+        
+        <category>zipcpu</category>
+        
+      </item>
     
       <item>
         <title>Quiz #5: Immediate vs Concurrent Assertions</title>
@@ -1434,598 +1964,6 @@ I’ve blogged about that many users have been struggling with and from.&lt;/p&g
         
         
         <category>quiz</category>
-        
-      </item>
-    
-      <item>
-        <title>Planning an Intermediate Design Tutorial</title>
-        <description>&lt;p&gt;I’ve been known for wandering through &lt;a href=&quot;/digilent/2017/05/18/most-common-digilent-support-requests.html&quot;&gt;an FPGA forum or two, and I’ve see some
-common and reocurring
-themes&lt;/a&gt;.
-One of them is, “My design isn’t working and I don’t know why
-not.”  It’s the reason I dedicated this blog to keeping individuals out of
-“&lt;a href=&quot;/blog/2017/05/19/fpga-hell.html&quot;&gt;FPGA Hell&lt;/a&gt;” as I called it.&lt;/p&gt;
-
-&lt;p&gt;Indeed, I saw such a post again just this morning.  Someone had a MicroBlaze
-design that wasn’t starting.  It worked on an older board, but not the newer
-revision of the board.  What might be wrong?&lt;/p&gt;
-
-&lt;p&gt;If all you know is that, “My design doesn’t start,” you don’t have much to
-debug from.&lt;/p&gt;
-
-&lt;p&gt;This was one of the reasons why one of my first blog topics was how to build
-a &lt;a href=&quot;/blog/2017/06/16/dbg-bus-forest.html&quot;&gt;debugging bus&lt;/a&gt;
-followed by the &lt;a href=&quot;/blog/2017/07/08/getting-started-with-wbscope.html&quot;&gt;wishbone
-scope&lt;/a&gt;.
-Why?  Because this is how I debug problems like that.  Using the two of those,
-I can typically trace anything going wrong down to a trace between two
-interfaces.  At that point, you can then visually “see” what’s going on.&lt;/p&gt;
-
-&lt;p&gt;Sadly, if all you have are the vendor tools, it’s very hard to “see” what’s
-going on.  Worse, I find myself quick to blame someone else’s code when I
-don’t see a problem in my own–even if I can’t figure out what the problem is.&lt;/p&gt;
-
-&lt;p&gt;It was for this reason that I &lt;a href=&quot;/fpga-hell.html&quot;&gt;dedicated the blog&lt;/a&gt; to keeping individuals out of
-“&lt;a href=&quot;/blog/2017/05/19/fpga-hell.html&quot;&gt;FPGA Hell&lt;/a&gt;”.
-One of the problems associated with blogging, however, is that my articles
-1) tend not to be arranged in any particular order, and 2) tend not to get
-updated over time.&lt;/p&gt;
-
-&lt;p&gt;This was my first reason for writing a &lt;a href=&quot;/tutorial&quot;&gt;beginner’s
-tutorial&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;The second reason for writing a &lt;a href=&quot;/tutorial/&quot;&gt;beginner’s
-tutorial&lt;/a&gt; was in response to problems
-I’ve seen with the more traditional instruction.  For example, I’ve seen
-students confuse “testbench” constructs with “synthesizable” constructs and
-then wonder why their design doesn’t work.  I’ve seen students create bench
-tests that provide less test coverage of their code than “modern” swimwear.&lt;/p&gt;
-
-&lt;p&gt;Indeed, I &lt;a href=&quot;/blog/2017/10/19/formal-intro.html&quot;&gt;once had the same problem in my own
-designs&lt;/a&gt;: My own test
-coverage left me
-&lt;a href=&quot;/zipcpu/2017/12/28/ugliest-bug.html&quot;&gt;chasing bugs in my designs over late nights, and GB traces containing the
-bug&lt;/a&gt;
-… somewhere … within them.  It was specifically for this reason that I
-&lt;a href=&quot;/blog/2018/01/22/formal-progress.html&quot;&gt;fell in love with formal
-verification&lt;/a&gt; so
-quickly–it finds the bugs within your design that my own testbenches were
-always missing.&lt;/p&gt;
-
-&lt;p&gt;When no one listened to me hollering about the way I felt things “should” be
-done, I decided to try writing a &lt;a href=&quot;/tutorial&quot;&gt;tutorial&lt;/a&gt;
-myself to help teach what’s missing.&lt;/p&gt;
-
-&lt;p&gt;So far, that
-&lt;a href=&quot;/tutorial&quot;&gt;tutorial&lt;/a&gt;
-has been well received.  Sure, I’ve had some welcome but less than flattering
-comments.  Perhaps the biggest one regards
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-and the C++ nature of the &lt;a href=&quot;/tutorial&quot;&gt;tutorial&lt;/a&gt;.
-Why should C++ be required when your goal is to learn Verilog and FPGA design.
-I get it.  A similar comment regards “make” files we used.  However, you can’t
-do things like &lt;a href=&quot;/blog/2018/11/29/llvga.html&quot;&gt;this VGA
-simulator&lt;/a&gt; without some basic
-software background, and a lot of folks are coming into the FPGA community
-with that background–much like me.  For them, at least, it makes sense.&lt;/p&gt;
-
-&lt;p&gt;That said, there’s a strong need in the community for teaching materials that
-will teach “From blinky to AXI,” and while &lt;a href=&quot;/tutorial&quot;&gt;my own
-tutorial&lt;/a&gt; gets past blinky, it doesn’t make it
-anywhere near &lt;a href=&quot;/2019/05/29/demoaxi.html&quot;&gt;AXI&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;So let me present some of my thoughts today regarding how this might be fixed.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-problem-with-the-intermediate-tutorial&quot;&gt;The problem with the intermediate tutorial&lt;/h2&gt;
-
-&lt;p&gt;There’s a couple of reasons why I have yet to start on an intermediate FPGA
-tutorial.  One is that I sell my services and … things have been quite busy
-as of late.  (Sorry, but this blog is a &lt;em&gt;hobby&lt;/em&gt; of mine rather than something
-that puts food on the table for my family.)  The second reason is that the
-next step really requires a lot of design-ware that few students would like
-to build.&lt;/p&gt;
-
-&lt;p&gt;Allow me to explain.&lt;/p&gt;
-
-&lt;p&gt;Many of the FPGA designs I’ve worked with involve some kind of bus master
-together with several bus slaves.  The common task, then, for the FPGA designer
-is to build a new bus slave.  A classic example of this might be to create a
-new piece of hardware to add to a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;’s
-capabilities, such as is shown in Fig. 1 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1. A typical CPU based design&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/im-tutorial/tut-im-cpu.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The task of the student is then to build this new slave.  Perhaps he has several
-such slaves he’d like to build.&lt;/p&gt;
-
-&lt;p&gt;Were I to build this the way my mathematical background requires, I’d want
-to teach everything from the bus master, to the S(D)RAM memory controller,
-to the &lt;a href=&quot;/blog/2017/06/22/simple-wb-interconnect.html&quot;&gt;bus interconnect&lt;/a&gt; before the student gets to their first bus slave.
-You know, learn multiplication before square roots.  In this case, that’d be …&lt;/p&gt;
-
-&lt;p&gt;&lt;em&gt;BORING!&lt;/em&gt;&lt;/p&gt;
-
-&lt;p&gt;I mean, seriously, would you want to know how to build a
-&lt;a href=&quot;https://www.teachengineering.org/lessons/view/cub_dams_lesson03&quot;&gt;lock and dam&lt;/a&gt;
-just to go canoing on the river?&lt;/p&gt;
-
-&lt;p&gt;Here’s another example design that’s common among FPGAs: you want to process
-data, say an image perhaps.  That means you want to read the image from memory
-(there’s not enough room in block RAM to store most images), process it however,
-and then store it back into memory again.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2. A basic processing pipeline&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/im-tutorial/tut-im-procbare.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;While this might be a typical signal or image processing application, there’s
-a missing piece to it: the design usually begins and ends with Matlab or, in
-my case, &lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;Octave&lt;/a&gt;.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;First, you build your design in
-  &lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;Octave&lt;/a&gt; and prove that your algorithm
-  works&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Along the way, you discover how to measure the performance of your
-  algorithm, and you learn how to communicate (i.e. plot) that performance.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Now you want to put it on an FPGA.  So, you build your data processing
-  algorithm to put it on the FPGA.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;It’s now the big moment: As you are synthesizing your brand-new algorithm
-in order to place it into an FPGA design, you suddenly realize that you
-have no way of getting your data set into or out of memory.  Worse, even
-if you do realize that, you have no easy way to get it in or out of
-&lt;a href=&quot;https://www.gnu.org/software/octave&quot;&gt;Octave&lt;/a&gt; from your design, even if you
-were to get it into memory.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;You can see the problem illustrated below in Fig. 3,&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3. A traditional data streaming problem&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/im-tutorial/tut-im-procpipe.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Of course, what I haven’t mentioned is that the end goal of this sort of stream
-processing task is typically not to process the data within memory, but rather
-to receive the data on some signal or video feed, process it, and then to
-forward the output back to a similar feed.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. From input to output&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/im-tutorial/tut-im-procpipeio.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Where’s the tutorial to teach that?&lt;/p&gt;
-
-&lt;p&gt;There isn’t one (that I know of).  (I don’t really know of that many.)&lt;/p&gt;
-
-&lt;p&gt;Hence, the reality is that a lot of individuals end up using the vendor tools
-and vendor design components and have no idea what’s going wrong when they
-don’t work.&lt;/p&gt;
-
-&lt;p&gt;As an example, a recent Xilinx user wrote that he’d written a lot of data into
-his Xilinx stream processor and no data ever came out.  Why not?  Eventually,
-after some back and forth, he realized he’d never marked the &lt;em&gt;end&lt;/em&gt; of the
-data packet.  Now, without using your own code, or at least something that’s
-open source, how would you ever find a bug like that?&lt;/p&gt;
-
-&lt;p&gt;My point in all of this is simply that, when your goal is data processing,
-you don’t really want to build all of that miracle glueware shown in Fig. 3
-above–just like you didn’t want to build the interconnect and the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
-shown in the example before that, in Fig. 1.&lt;/p&gt;
-
-&lt;p&gt;Yes, I understand that most FPGA vendors provide cores and logic that can
-handle all of this middle ware.  Personally, I have a couple of problems
-with using these cores.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;First, and perhaps most important, if you ever need to switch hardware
-  vendors, you’ll have to tear apart your design and rebuild it for the new
-  cores using their new interfaces.&lt;/p&gt;
-
-    &lt;p&gt;This includes switching design flows, even for the same hardware.  For
-example, if there were an open source tool chain, would you be able to get
-by without the vendor supplied cores?  How about if you wanted to use
-an open source simulator, like
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;?
-Know of any good &lt;a href=&quot;/2019/07/17/crossbar.html&quot;&gt;open source
-interconnects&lt;/a&gt;?  Or tools to
-connect your components to said open source interconnects?&lt;/p&gt;
-
-    &lt;p&gt;Or have you not noticed that I have
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; based designs for
-&lt;a href=&quot;https://github.com/ZipCPU/icozip&quot;&gt;iCE40&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/zipversa&quot;&gt;ECP5&lt;/a&gt;,
-&lt;a href=&quot;https://github.com/ZipCPU/openarty/tree/autoarty&quot;&gt;Xilinx&lt;/a&gt;, &lt;em&gt;and&lt;/em&gt;
-&lt;a href=&quot;/zipcpu/2019/03/12/arrowzip.html&quot;&gt;Intel&lt;/a&gt;?  Yes, it
-is doable.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Second, the purpose of the intermediate tutorial we are discussing would be
-for learning.  It’s one thing to use a vendor’s core when you have a product
-that’s due on a tight schedule.  Sure, I get it, go for it.  I’m not knocking
-that at all.  On the other hand, if you want to learn design, then doesn’t
-it make sense to spend your time learning how to build your own versions
-of the basic building blocks before you turn around and use those from a
-vendor?&lt;/p&gt;
-
-    &lt;p&gt;Worse, wouldn’t it be a shame if you learned how to design using vendor
-based building blocks but then … had to switch tools and discovered that
-you no longer knew anything because you could no longer use the cores and
-tools you were familiar with?  For example, have you ever tried simulating
-Xilinx’s AXI interconnect using &lt;a href=&quot;https://www.youtube.com/watch?v=en8JMz7v3LU&quot;&gt;the fastest
-simulator&lt;/a&gt;
-out there?  (Hint: it’s not Vivado.)&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;My point here is simply this: there’s a need for instruction material that
-goes past basic serial port I/O in a vendor independent fashion.&lt;/p&gt;
-
-&lt;h2 id=&quot;tutorial-goals&quot;&gt;Tutorial Goals&lt;/h2&gt;
-
-&lt;p&gt;As always, one of the goals of the tutorial is to have the widest applicability
-possible.  That means it needs to share FPGA design concepts and strategies
-in a vendor independent fashion.  That means I can’t really use vendor code in
-my tutorial.  That includes all the vendor glueware, bus interconnects, etc.&lt;/p&gt;
-
-&lt;p&gt;My apologies to all of you big-named vendors out there.  On the other hand,
-after trying to answer questions from clueless forum posters, wouldn’t you
-rather have customer’s who knew how to debug their own designs?&lt;/p&gt;
-
-&lt;p&gt;So, here was my thought: Using entirely open source tools, so that the design
-components could be verified with
-&lt;a href=&quot;https://symbiyosys.readthedocs.io/en/latest&quot;&gt;SymbiYosys&lt;/a&gt; and then simulated
-using &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;,
-create a set of lessons similar to those shown
-in Fig. 5 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5. Proposed intermediate tutorial structure&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/im-tutorial/tut-intermediate.svg&quot; alt=&quot;&quot; width=&quot;720&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The lessons would use
-&lt;a href=&quot;/zipcpu/2017/10/05/autofpga-intro.html&quot;&gt;AutoFPGA&lt;/a&gt;
-to connect all of the parts and pieces together.  In every lesson, the goal
-would be to be able to formally verify any new components, then to run the
-design in a
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-based simulation, and then in actual hardware.&lt;/p&gt;
-
-&lt;p&gt;The lesson sequence would start out by discussing some of your basic slave
-design components.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;The first lesson would start out by creating a &lt;a href=&quot;/zipcpu/2019/02/09/cpu-blinky.html&quot;&gt;very simple “blinky”
-design&lt;/a&gt;,
-but this time using the
-&lt;a href=&quot;/zipcpu/2017/10/05/autofpga-intro.html&quot;&gt;AutoFPGA&lt;/a&gt;
-generated &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone
-bus&lt;/a&gt;.  Commands sent
-from the host over the &lt;a href=&quot;/blog/2017/06/16/dbg-bus-forest.html&quot;&gt;debugging
-bus&lt;/a&gt; would be used
-to turn LEDs on and off.&lt;/p&gt;
-
-    &lt;p&gt;For those who don’t recall the &lt;a href=&quot;https://github.com/ZipCPU/dbgbus/blob/master/hexbus/README.md&quot;&gt;debugging bus
-articles&lt;/a&gt;, a
-“&lt;a href=&quot;/blog/2017/06/16/dbg-bus-forest.html&quot;&gt;debugging bus&lt;/a&gt;” is
-my term for a bus, internal to an FPGA, that can be accessed and commanded
-from host (PC) software.  Even better, I like to run my &lt;a href=&quot;/blog/2017/06/16/dbg-bus-forest.html&quot;&gt;debugging
-bus&lt;/a&gt; software &lt;a href=&quot;/blog/2017/06/17/why-network-debugging.html&quot;&gt;over
-a network&lt;/a&gt;,
-allowing me to interact with either my design or its simulation from
-anywhere on my local network.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The second lesson would involve simply &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;creating an audio
-tone&lt;/a&gt;.
-This would be very similar to the first lesson, but might involve a couple
-of bus addresses, to allow the developer to control amplitude and frequency
-from their external computer as one example.  The tone itself could be
-played using a basic &lt;a href=&quot;{ site.baseurl }}/dsp/2017/09/04/pwm-reinvention.html&quot;&gt;PWM
-controller&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The third lesson would be quick, just showing how to connect a &lt;a href=&quot;/zipcpu/2018/07/13/memories.html&quot;&gt;block
-RAM&lt;/a&gt; to the bus as
-well as how to verify RAM based slaves.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;We’d then discuss building a “&lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;bus
-scope&lt;/a&gt;”.  If you’ve
-read my blog much, you’ll know that I use what I call a “&lt;a href=&quot;/blog/2017/07/08/getting-started-with-wbscope.html&quot;&gt;wishbone
-scope&lt;/a&gt;”.
-You’d be amazed at the &lt;a href=&quot;/2017/09/14/even-i-get-stuck.html&quot;&gt;bugs you can find and
-diagnose&lt;/a&gt; using
-something like this.&lt;/p&gt;
-
-    &lt;p&gt;This is somewhat different from using vendor tools (chipscope, ILA, etc),
-simply because it is bus based.  This will allow you greater control of the
-scope, eventually allowing you to control it from your embedded
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;–but
-we’re not there yet.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The final slave in this section of the course would be your &lt;a href=&quot;/blog/2018/08/16/spiflash.html&quot;&gt;basic xSPI
-flash memory controller&lt;/a&gt;.
-This could be done either with SPI or
-&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;QSPI&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Voila, the first section of an intermediate Verilog tutorial.&lt;/p&gt;
-
-&lt;p&gt;The second section of the tutorial would focus on bus masters, rather than bus
-slaves.&lt;/p&gt;
-
-&lt;ol start=&quot;6&quot;&gt;
-  &lt;li&gt;It would begin with a set of lessons on creating a video output.&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;(6) The first might discuss &lt;a href=&quot;/blog/2018/11/29/llvga.html&quot;&gt;outputting a fixed test
- pattern&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;(7) That lesson would be followed with a stream processing lesson where
-a “sprite” of some type would be added to the video stream.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;(8) The next lesson would be (generic) on &lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous
-FIFOs&lt;/a&gt;.  Although this
-is really a video independent topic, it’s really a necessary background
-for the next lesson&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;(9) The final video lesson would be on how to &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/wbvgaframe.v&quot;&gt;stream pixels from a (fixed)
-memory location&lt;/a&gt;
-to the video controller and hence to the VGA screen.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;All of this would be simulatable using
-  &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;.
-  Perhaps painfully simulatable, but simulatable none the less.&lt;/p&gt;
-
-&lt;ol start=&quot;10&quot;&gt;
-  &lt;li&gt;
-    &lt;p&gt;We’ll then move back to a quick bus slave, to learn how to &lt;a href=&quot;https://github.com/ZipCPU/wbpmic&quot;&gt;control a basic
-SPI A/D controller&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Once we have a way to ingest samples, the next lesson would discuss how
-to record samples from something like an A/D controller to memory, in order
-to later be read out using the debugging bus.&lt;/p&gt;
-
-    &lt;p&gt;At this point, you should be able to ingest your pipeline processing
-algorithm into a design.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Finally, before getting into
-  &lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
-  design, we’d work our way through a basic
-  hardware controller–something that could read “instructions” from a memory,
-  and then use them to control a hardware output.  In this case, it should be
-  possible to build a basic music box–perhaps something that could play
-  “&lt;a href=&quot;https://www.youtube.com/watch?v=Qwa0c8VO71s&quot;&gt;Music Box Dancer&lt;/a&gt;”?&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;That would end the basic set of lessons on building bus masters.&lt;/p&gt;
-
-&lt;p&gt;The next group of lessons would focus on building a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;.  This would not
-be about &lt;a href=&quot;https://www.amazon.com/Computer-Architecture-Quantitative-John-Hennessy/dp/012383872X&quot;&gt;ISA design&lt;/a&gt; (Sorry, I know my limits), but rather on
-implementing some increasingly complex
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;s.&lt;/p&gt;
-
-&lt;ol start=&quot;13&quot;&gt;
-  &lt;li&gt;
-    &lt;p&gt;The first lesson would discuss just a simple, very basic, microcontroller.
-  I haven’t yet decided what ISA I’d use, or if there’s one available that has
-  a nice tool suite with it, but you get the idea.&lt;/p&gt;
-
-    &lt;p&gt;In this lesson, the student would implement such a simple
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A &lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
-really &lt;a href=&quot;//zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;needs a debugging
-interface&lt;/a&gt;, so
-we’d add one.  This would allow us to start and stop our
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;,
-using the same debugging bus that’s supported us so far, and perhaps even
-read registers and state from it.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;That would lead us right into building an &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/host/zipload.cpp&quot;&gt;ELF program
-loader&lt;/a&gt;.
-This could be just something basic that can read a compiled file and load
-it into either flash or (block) RAM.  Of course, this would also require
-an ELF-based tool chain, and so likely a proper
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Instruction_set_architecture&quot;&gt;ISA&lt;/a&gt;
-as well.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;We can then move to a lesson on &lt;a href=&quot;/zipcpu/2017/08/23/cpu-pipeline.html&quot;&gt;pipelined
-CPUs&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;This one I haven’t quite figured out yet, but I’d like to offer something
-more complex than the basic state-machine based microcontroller.&lt;/p&gt;
-
-    &lt;p&gt;While one option might be to use the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; here,
-I want an option that presents some amount of learning to the
-student–rather than just following a script.&lt;/p&gt;
-
-    &lt;p&gt;Perhaps one option might be adding a special instruction (or two, or four)
-to the &lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;.
-Another option might be to restructure the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt; for some
-purpose (such as MMU integration as an example).  We’ll see.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;How fast your CPU works is really dependent upon where it’s memory is found,
-and linker scripts provide the means of adjusting where your memory is found
-within your design.  We’ll discuss how to read, write, and adjust linker
-scripts so you have an idea of what’s going on within your design.&lt;/p&gt;
-
-    &lt;p&gt;The student should be able to load a CPU (either theirs or mine) so that it
-runs from &lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;Flash&lt;/a&gt;, block RAM,
-block ROM, or … wherever.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;This really then feeds nicely into understanding &lt;a href=&quot;/zipcpu/2018/02/12/zbasic-intro.html&quot;&gt;how a bootloader
-works&lt;/a&gt;.
-Once you know how to place program instructions (wherever), it’s important
-to be able to copy them to where you need them.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The next lesson would focus on how to build a &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v&quot;&gt;cache
-controller&lt;/a&gt;.
-I’d provide the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; to any one
-who wished to use it at this point, although I could understand why a
-student might rather wish to use their own.  I’m not (yet) set on this
-course of action.&lt;/p&gt;
-
-    &lt;p&gt;Of course, as with all of these designs, part of the lesson would discuss
-how to go about formally verifying the design.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Finally, we’d discuss the &lt;a href=&quot;https://en.wikipedia.org/wiki/Design_of_the_FAT_file_system&quot;&gt;FAT
-filesystem&lt;/a&gt;,
-so that the CPU could access files on an external &lt;a href=&quot;https://en.wikipedia.org/wiki/SD_Card&quot;&gt;SD Card&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;Yes, the course will show how this can be done from simulation too.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;I think this progression builds nicely, one lesson upon the next, with the
-bus components being built growing every more capable.  Further, while
-I like this progression of lessons, I’ve noted that with all of my
-tutorials students have found it valuable to pick up in the middle
-as their interest and needs dictate.&lt;/p&gt;
-
-&lt;h2 id=&quot;hardware-required&quot;&gt;Hardware required&lt;/h2&gt;
-
-&lt;p&gt;Unlike the &lt;a href=&quot;/tutorial&quot;&gt;beginner’s tutorial&lt;/a&gt;, once we get
-past lesson one, special hardware will be required for the following lessons.
-Well, either that or the student might choose (instead) to build the design
-in the simulator alone and just go on.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 6. Proposed hardware requirements&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/im-tutorial/generic-hw.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Judging from the hardware we’ve discussed above, to complete all of the lessons
-you’d need:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;A &lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;Flash memory&lt;/a&gt;
-controller (most FPGAs have this)&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A VGA port.&lt;/p&gt;
-
-    &lt;p&gt;While I’d love to do &lt;a href=&quot;https://en.wikipedia.org/wiki/HDMI&quot;&gt;HDMI&lt;/a&gt;,
-and while HDMI isn’t really all that much more
-difficult, the I/O’s required for HDMI are a touch more challenging
-to do in a &lt;em&gt;generic hardware&lt;/em&gt; fashion.&lt;/p&gt;
-
-    &lt;p&gt;Perhaps this &lt;a href=&quot;https://store.digilentinc.com/pmod-vga-video-graphics-array&quot;&gt;dual Pmod VGA
-peripheral&lt;/a&gt;
-would serve our purpose well here.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;While I’d like to avoid any external RAM controllers, the Video lesson
-really requires a significant amount of RAM (typically external) in order
-to handle streaming from a memory buffer.&lt;/p&gt;
-
-    &lt;p&gt;This may require an AXI lesson mid-tutorial.&lt;/p&gt;
-
-    &lt;p&gt;Perhaps the best way to handle this in an intermediate course would be to
-offer vendors an opportunity to post and share how to interact with their
-xDDR SDRAM controllers.  I know I have several SDRAM controllers available
-to work from, and even an &lt;a href=&quot;https://github.com/ZipCPU/icozip/blob/master/rtl/icozip/sramdev.v&quot;&gt;SRAM controller&lt;/a&gt;.  I would also expect that the
-&lt;a href=&quot;https://github.com/enjoy-digital/litedram&quot;&gt;litedram&lt;/a&gt; authors might be
-willing to support this project as well.  (Maybe I should ask them?)&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A simple PWM based audio controller, such as might be used with &lt;a href=&quot;https://store.digilentinc.com/pmod-amp2-audio-amplifier&quot;&gt;this
-  PMod audio device&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;A SPI based A/D.  For this, I was thinking of something similar to
-  &lt;a href=&quot;http://store.digilentinc.com/pmod-mic3-mems-microphone-with-adjustable-gain&quot;&gt;Digilent’s audio
-  PMod&lt;/a&gt;,
-  for which I already have both &lt;a href=&quot;https://github.com/ZipCPU/wbpmic/blob/master/rtl/smpladc.v&quot;&gt;(verified) example
-code&lt;/a&gt; as well
-as a decent &lt;a href=&quot;https://github.com/ZipCPU/wbpmic/blob/master/bench/cpp/micnco.cpp&quot;&gt;emulator&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Finally, in order to use the &lt;a href=&quot;https://en.wikipedia.org/wiki/SD_Card&quot;&gt;SD
-Card&lt;/a&gt;.  and read and parse a &lt;a href=&quot;https://en.wikipedia.org/wiki/Design_of_the_FAT_file_system&quot;&gt;FAT file
-filesystem&lt;/a&gt;,
-you’d need a design with an SD card reader on it.  My current &lt;a href=&quot;https://github.com/ZipCPU/sdspi&quot;&gt;SD card
-controller&lt;/a&gt; is SPI based, so I might
-start there.  On the other hand, one of my current projects is to upgrade
-that controller to be fully SDIO compliant, so we might do even better.&lt;/p&gt;
-
-    &lt;p&gt;For those that do not have an SD card on their board, there does exist
-a &lt;a href=&quot;https://store.digilentinc.com/pmod-sd-full-sized-sd-card-slot&quot;&gt;PMod SD&lt;/a&gt;
-which might work nicely for this purpose as well.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Sadly, not all entry level development boards have all of this hardware,
-so whether or not this list is too aggressive or not is an important question.&lt;/p&gt;
-
-&lt;h2 id=&quot;from-blinky-to-axi--wheres-the-axi&quot;&gt;“From Blinky to AXI” … where’s the AXI?&lt;/h2&gt;
-
-&lt;p&gt;So I started by saying that a tutorial “From Blinky to AXI” would be a valuable
-contribution.  Sadly, the proposed tutorial above doesn’t (yet) discuss
-&lt;a href=&quot;/blog/2019/05/29/demoaxi.html&quot;&gt;AXI&lt;/a&gt;.
-I haven’t quite decided on how to handle that.&lt;/p&gt;
-
-&lt;p&gt;I could leave the AXI work for a future “AXI only” tutorial, or I might work
-it into this tutorial, or I might just leave it within the
-&lt;a href=&quot;/blog/2019/05/29/demoaxi.html&quot;&gt;blog&lt;/a&gt;.
-Another approach might be to provide the bus with a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/wb2axilite.v&quot;&gt;WB to AXI-lite
-bridge&lt;/a&gt;, and
-then to make all of the devices using
-&lt;a href=&quot;/blog/2019/01/12/demoaxilite.html&quot;&gt;AXI-lite&lt;/a&gt;.
-I’m not quite certain right now.&lt;/p&gt;
-
-&lt;p&gt;I am open to ideas, if you’d like to share them.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
-
-&lt;p&gt;Whew!  While I like this overview of what would be next, I’m not certain any
-(potential) students would be interested in something quite this intensive.&lt;/p&gt;
-
-&lt;p&gt;I’d love to hear your thoughts.  I intend to create a &lt;a href=&quot;https://www.reddit.com/r/ZipCPU/comments/crbyrw/planning_an_intermediate_design_tutorial/&quot;&gt;Reddit post&lt;/a&gt;
-with this article, and hear any comments that might be shared.  Feel free to
-join in the discussion.&lt;/p&gt;
-
-&lt;p&gt;My own first thought is to note that, while
-&lt;a href=&quot;/zipcpu/2017/10/05/autofpga-intro.html&quot;&gt;AutoFPGA&lt;/a&gt;
-handles multiple slave integration easily, it doesn’t (yet) handle multiple
-masters.  The good news is that I’m going to have to fix that already for
-a contract I’m working on, so that’s likely to get fixed quickly.&lt;/p&gt;
-
-&lt;p&gt;Of course, all of this would only be if the &lt;a href=&quot;https://www.blueletterbible.org/kjv/jas/4/15&quot;&gt;Lord
-wills&lt;/a&gt;–so we’ll have to see
-if any of this ever gets off of the ground in the first place, but your
-thoughts would be welcome either way.&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;And whatsoever ye do in word or deed, do all in the name of the Lord Jesus, giving thanks to God and the Father by him. (Col 3:17)&lt;/em&gt;</description>
-        <pubDate>Fri, 16 Aug 2019 00:00:00 -0400</pubDate>
-        <link>https://zipcpu.com/blog/2019/08/16/intermediate.html</link>
-        <guid isPermaLink="true">https://zipcpu.com/blog/2019/08/16/intermediate.html</guid>
-        
-        
-        <category>blog</category>
         
       </item>
     
