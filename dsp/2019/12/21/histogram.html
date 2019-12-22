@@ -1,0 +1,1502 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Using a Histogram to Debug A/D Data Streams</title>
+  <meta name="description" content="My favorite part of any signal processing application is the part where yousit down and draw out what you’re going to build.  It’s my favorite part becauseno...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/dsp/2019/12/21/histogram.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/#training">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Using a Histogram to Debug A/D Data Streams</h1>
+    <p class="post-meta"><time datetime="2019-12-21T00:00:00-05:00" itemprop="datePublished">Dec 21, 2019</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>My favorite part of any signal processing application is the part where you
+sit down and draw out what you’re going to build.  It’s my favorite part because
+nothing ever goes wrong on the drawing board.</p>
+
+<table align="center" style="float: right"><caption>Fig 1. Four tools for datapath debugging</caption><tr><td><img src="/img/histogram/datapathdebug.svg" alt="" width="360" /></td></tr></table>
+
+<p>But let’s face it, things do go wrong, and you are going to need to be
+able to find out what.</p>
+
+<p>One of my themes in this blog is that you should prepare, early on in any
+project, for the tools you will need to accomplish that project.  For
+example, you should build and prove your <a href="/blog/2017/06/16/dbg-bus-forest.html">debugging
+bus</a> early on.  Then,
+later on, you can use this ability to <a href="/blog/2019/11/14/sdspi.html">communicate with your design while
+it’s in the lab</a> so that your
+design can tell you what’s going right or wrong.</p>
+
+<p>In this game, logic is your friend: use it.</p>
+
+<p>That said, let’s take a quick look at four things that can be quite helpful
+when trying to go from an signal source to your data processing application:</p>
+
+<table align="center" style="float: left"><caption>Fig 2. Sample counting</caption><tr><td><img src="/img/histogram/samplcounter.svg" alt="" width="240" /></td></tr></table>
+
+<ol>
+  <li>
+    <p>Sample counting</p>
+
+    <p>Sample counting should be your first step, before everything else.  Sadly,
+from my own personal experience, adding an internal data sample counter
+has tended to be an afterthought that ends up getting placed into every
+project only after things start going wrong.  Typically,
+the A/D isn’t properly configured, the internal clocks within the design
+aren’t set right, that resampling filter didn’t quite get the rates
+right or maybe something else.</p>
+
+    <p>Counting samples, and comparing the incoming sample rate to the
+system clock rate can be very valuable when trying to narrow down
+the source of your lack of data, or even when trying to find where
+samples are getting dropped (or added) into an application.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: center"><caption>Fig 3. Counter Injection</caption><tr><td><img src="/img/histogram/blkcounter.svg" alt="" width="760" /></td></tr></table>
+
+<ol start="2">
+  <li>
+    <p>Counter injection</p>
+
+    <p>Often there’s a long path with lots of things on it going from the digital
+signal source to output data.  In one of my early projects, this path
+included packing data into words and then writing it to an SD card only
+to be read later.  In another project, the data needed to be first given
+an exponent, then packed into blocks, placed into a FIFO, and sent over
+the Ethernet.</p>
+
+    <p>Even though none of these steps involved any filtering or control loops, 
+there were still a lot of places where things might’ve gone wrong.  As an
+example, in the SD card project, the SD cards we were using would tend to
+become busy mid-stream and so drop samples whenever our FIFO didn’t have
+enough depth within it.  (Worse, we were using an extremely small, low-power
+design to record a GPS signal that couldn’t afford data loss.  Because
+the chip was so small, there wasn’t much block RAM available for a deeper
+FIFO.  Yes, it was a recipe for a project failure.  In the end, we needed
+to get creative to get around this bug …)</p>
+
+    <p>One easy way to diagnose problems like this is by injecting a counter into
+the data path.  You can then compare the counter against the signal on the
+other end of the transmission to verify that nothing was lost in the FIFO,
+that the SD card didn’t skip samples any where, that no network packets
+were dropped, or worse.</p>
+
+    <p>This is such a valuable capability to have, that I’ve often placed it
+into every signal source controller I’ve built.</p>
+  </li>
+  <li>
+    <p>Histogram checking</p>
+
+    <p>This is going to be our topic today, so let’s come back to this in a bit.</p>
+  </li>
+  <li>
+    <p>Fourier Transform</p>
+
+    <p>Finally, when the samples all look good, it becomes time to go look at
+a <a href="/dsp/2018/10/02/fft.html">Fourier transform</a> of the
+incoming data.  I personally like the <a href="https://en.wikipedia.org/wiki/Short-time_Fourier_transform">Short-Time Fourier Transform
+(STFT)</a> the
+best.  A nice <a href="https://github.com/ZipCPU/fftdemo">rastered image</a>,
+presenting the
+<a href="https://en.wikipedia.org/wiki/Short-time_Fourier_transform">STFT</a>
+of your data can reveal a lot of what’s going on within.  You can see
+if there’s some bursty noise, what sort of always-on interferes might be
+coming in from your system, whether you are struggling with self-noise and
+more.  Indeed, this is a very valuable analysis step–it just doesn’t tell
+you much if your signal was corrupted earlier in the processing chain, and
+your samples were replaced by something else.</p>
+
+    <p>As an example, I’ve worked on many signal processing systems that were
+buffer based.  In these systems, you’d process one buffer, then get the
+next to process it.  Very often, filtering implementations would require
+overlap between the buffers.  A common problem was always making sure
+there was no dropped (or inserted) data between the buffers.  The counter
+injection check above could find this easily.  However, if you skip the
+counter injection check and instead go straight to taking an
+<a href="/dsp/2018/10/02/fft.html">FFT</a> of the broken data,
+then you may well convince yourself you have a wideband interference
+issue after which you’ll then go looking in the wrong place to find the
+source.</p>
+  </li>
+</ol>
+
+<p>Today, though, let’s look at how a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+might help you diagnose data sampling problems, and then look at some
+examples of how you might <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">implement a
+histogram</a>
+in an FPGA.</p>
+
+<h2 id="the-power-of-a-histogram">The Power of a Histogram</h2>
+
+<p>A <a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+is defined as a chart of sample counts, estimating the probability
+that an input voltage will get mapped to a particular digital value.  If done
+well, it should approximate the <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability
+distribution</a>
+of the underlying data source.</p>
+
+<table align="center" style="float: right"><caption>Fig 4. Ideal Gaussian histogram</caption><tr><td><img src="/img/histogram/hgauss.png" alt="" width="460" /></td></tr></table>
+
+<p>A classic example of what a <a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+might look like is shown in Fig. 4.  on the left.</p>
+
+<p>You should be able to recognize this shape as a <a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian bell shaped
+curve</a>.  It’s the distribution you should expect from thermal noise.
+If everything goes well, this is what you should see coming into your system
+when everything is working but no “signal” is present.  In other words, this
+is what things will look like before you turn your transmitter on.</p>
+
+<p>What’s even better about this picture is that, since a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a> is a visual
+picture, it’s easy to tell from a chart whether or not what you are receiving
+matches this shape.  Pattern recognition is very powerful.</p>
+
+<table align="center" style="float: left"><caption>Fig 5. Ideal Sinewave Histogram</caption><tr><td><img src="/img/histogram/hsinwav.png" alt="" width="460" /></td></tr></table>
+
+<p>So, if that’s what a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+of noise (i.e. no signal) should look like, what should a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+of some form of signal look like?  Fig. 5 on the right shows the
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+of what you might expect from a
+<a href="/dsp/2017/12/09/nco.html">sine wave</a>
+under the uncommon laboratory conditions of pure signal with little noticeable
+noise.</p>
+
+<p>Unlike the
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a>
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>,
+this one looks more like Batman’s head as I term it.  Notice the pointy
+“ears”, beyond which there’s no signal counts at all.  In a perfect
+world, this is what your
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>,
+of noiseless signal should reveal.</p>
+
+<p>Of course, we don’t live in a perfect world, and so I’m not sure I’ve ever
+seen a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+looking this clean generated by anything other than a
+<a href="/dsp/2017/12/09/nco.html">digital NCO</a>
+that never touched the analog domain.  So what should this
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+look like if your sine wave has been corrupted by some amount of
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a>
+noise?</p>
+
+<p>Unfortunately, the probability math starts getting really complicated when
+combining signals.   For example, adding a
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a>
+to a
+<a href="/dsp/2017/12/09/nco.html">sinewave</a>
+in time results in a <a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>
+of the two <a href="https://en.wikipedia.org/wiki/Probability_distribution">probability distributions
+functions</a>.  For
+anyone who wishes to try to evaluate this
+<a href="https://en.wikipedia.org/wiki/Convolution">convolution</a>,
+good luck–the math can get quite challenging.</p>
+
+<table align="center" style="float: right"><caption>Fig 6. Sinewave plus Noise</caption><tr><td><img src="/img/histogram/hsingauss.png" alt="" width="460" /></td></tr></table>
+
+<p>For the simple minded like me, it’s worth knowing that convolution with a
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a> acts like
+<a href="https://en.wikipedia.org/wiki/Low-pass_filter">low-pass filtering</a>
+the Batman head, smoothing over those sharp “ears”.  As a result, with a bit
+of noise, your signal might look like Fig. 6 on the right.</p>
+
+<p>This is what you should hope to see when evaluating a signal from an A/D:
+either a nice
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a>
+when no signal is present, or a smoothed Batman’s head when it is.  Well,
+that or something else depending on how your signal is defined.  It shouldn’t
+be too hard to figure it out in <a href="https://www.gnu.org/software/octave">Octave</a>.</p>
+
+<p>But, what else might you see?</p>
+
+<table align="center" style="float: left"><caption>Fig 7. Noise, but with a DC bias</caption><tr><td><img src="/img/histogram/hbias.png" alt="" width="460" /></td></tr></table>
+
+<p>Two very common problems in A/D systems are bias and scale problems.
+Fig. 7, on the left, shows what bias might look like.  This particular
+signal was generated from a
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a>
+with a non-zero mean, and represents much of what you might receive
+if you had an input of both electronic noise added together with some
+amount of direct-current leakage onto your signal path.  Note how the signal
+is no longer symmetric about zero.</p>
+
+<p>Okay, I’ll admit to the purists here that I cheated when drawing Fig. 7.  I
+used <a href="https://www.gnu.org/software/octave">Octave</a> and a theoretical bell
+shape shifted to the right.  The result is pretty, but practically erroneous.
+Specifically, the far right bin should also include all of the counts from
+samples that ended up out of range.</p>
+
+<table align="center" style="float: right"><caption>Fig 8. Clipping shows up in a histogram</caption><tr><td><img src="/img/histogram/hclipped.png" alt="" width="460" /></td></tr></table>
+
+<p>Speaking of “out of range”, the second common problem you might have is scale.
+Many receivers require some form of gain prior to going into the sampler.
+Getting the right amount of gain can be a challenge.  As an example, Fig. 8 on
+the right shows what might happen if you overdrive the incoming signal.
+Yes, take that headset off quickly before you lose the last of your hearing, and
+lower the gain while your system is still usable.</p>
+
+<p>If this ever happens to you, you’ll notice two overused bins at the minimum
+and maximum sample values out of the digitizer.  This should be
+a pattern to look for, and an indication of when to fix things.  It’s caused by
+the voltage going into the system being out of range for the A/D.  If it’s
+too high, it will be returned as the maximum value, and too low as the minimum
+value.  If the two edge peaks aren’t even, it’s a sign you have problems with
+both bias and scale together.</p>
+
+<p>To make matters worse, the incoming signal is distorted if you ever start
+getting peaks at the edges of your
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+like this.  Your job, as the
+responsible engineer, is to make sure the scale gets adjusted properly
+so that the end points either have no counts within them or nearly none–in
+order to know your system has little to no distortion within it.</p>
+
+<p>These sorts of
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+results are the normal things you should be expecting to be debugging with
+the analog signal engineer and a proper
+<a href="https://en.wikipedia.org/wiki/Oscilloscope">oscilloscope</a>.</p>
+
+<p><a href="https://en.wikipedia.org/wiki/Histogram">Histogram</a>s
+can also be used to find and diagnose the not-so-normal things
+that might go wrong.  For example, can you guess what’s going wrong in
+Fig. 9?</p>
+
+<table align="center" style="float: left"><caption>Fig 9. What went wrong here?</caption><tr><td><img src="/img/histogram/hmismsb.png" alt="" width="460" /></td></tr></table>
+
+<p>In this case, the top bit of the data sample got corrupted by what appears to
+be random data, creating the appearance of two nearly identical
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a>
+shapes.  Alternatively, your data might be off cut, and so the samples might
+include the LSB from one sample followed by <code class="highlighter-rouge">MSB:1</code> of another.</p>
+
+<p>Off cut data is important to recognize, especially since some particular
+LVDS protocols can be a challenge to synchronize to the sample boundaries
+of.</p>
+
+<table align="center" style="float: right"><caption>Fig 10. How about now?</caption><tr><td><img src="/img/histogram/hmislsb.png" alt="" width="460" /></td></tr></table>
+
+<p>Another possibility is that your LSB might be corrupted.  In this case, you’ll
+see something looking closer to a comb, as shown in Fig. 10 on the right.</p>
+
+<p>As one final example, let me draw your attention to Fig. 11 on the left.
+In this case, the top two bits of the sample value have been corrupted,
+but the rest look good.  Notice how our
+<a href="https://en.wikipedia.org/wiki/Normal_distribution">Gaussian</a>
+shape has been split into four jumbled parts?</p>
+
+<table align="center" style="float: left"><caption>Fig 11. Mis-mapped top two bits</caption><tr><td><img src="/img/histogram/hquartr.png" alt="" width="460" /></td></tr></table>
+
+<p>Remember, no A/D is perfect.  You aren’t likely to see shapes this clean
+in reality, but the general rules above still apply.</p>
+
+<p>The good thing about all of this is that the human brain can detect patterns
+very easily, and being able to visually see these patterns is the power
+and reason for calculating and plotting a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>.
+Consider how many faults we just diagnosed by examining the patterns
+above–each was distinct, and each indicated a different form of fault.</p>
+
+<p>So, if a <a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>.
+is so valuable, how shall we measure one?</p>
+
+<h2 id="calculating-a-histogram">Calculating a Histogram</h2>
+
+<p>Perhaps the easiest way is to record a set of samples and then download
+them into a program where you can do ad-hoc and scripted data manipulation.
+I will often use <a href="https://www.gnu.org/software/octave">Octave</a> for this
+purpose, but I am also aware that much of the engineering community likes
+to use <a href="https://www.mathworks.com/products/matlab.html">Matlab</a>.  (I just
+can’t afford <a href="https://www.mathworks.com/products/matlab.html">Matlab</a>, and
+<a href="https://www.gnu.org/software/octave">Octave</a> tends to do everything I need.)</p>
+
+<p>My first rule of digital logic design is that all FPGA logic shall be
+pipelined so as to be able to process at least one sample per system clock.
+Throughput is your friend, embrace it!</p>
+
+<p>My second rule is that all signal processing blocks should be controllable
+across a bus of some type.  That means, you should be able to read status
+from within the system, turn on and off various signaling elements, adjust
+gains, etc. all from a
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+connected to your design.  This
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+can be within your FPGA, such as the
+<a href="/about/zipcpu.html">ZipCPU</a> that lies within many of my own
+designs, or it can be <a href="/blog/2017/06/17/why-network-debugging.html">external to your design, communicating to your
+design</a> via some
+form of <a href="/blog/2017/06/16/dbg-bus-forest.html">debugging bus</a>.</p>
+
+<p>In the first DSP design I built, I used a <a href="/dsp/2017/08/19/simple-filter.html">recursive
+averager</a> to measure the
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+of an incoming signal.</p>
+
+<table align="center" style="float: center"><caption>Fig 12. An IIR peripheral for a histogram</caption><tr><td><img src="/img/histogram/iirhist.svg" alt="" width="760" /></td></tr></table>
+
+<p>I would write to my <a href="/zipcpu/2017/05/29/simple-wishbone.html">bus
+peripheral</a> the
+sample value I wanted to measure the probability of, and also a averaging
+coefficient.  Then, on every sample, if the sample matched the chosen address I
+would average a one else a zero.  Using the
+<a href="/dsp/2017/08/19/simple-filter.html">recursive averager</a>
+we studied earlier, this might look like,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">iiravg</span> <span class="p">#(</span><span class="o">.</span><span class="n">LGALPHA</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">IW</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">OW</span><span class="p">(</span><span class="n">BUS_WIDTH</span><span class="p">))</span>
+	<span class="n">iir</span><span class="p">(</span><span class="n">i_clk</span><span class="o">,</span> <span class="n">i_reset</span><span class="o">,</span> <span class="n">i_ce</span><span class="o">,</span>
+		<span class="p">(</span><span class="n">i_sample</span> <span class="o">==</span> <span class="n">chosen_sample</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="o">,</span> <span class="n">hist_output</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The <a href="/zipcpu/2017/05/29/simple-wishbone.html">bus
+peripheral</a> the
+could then set <code class="highlighter-rouge">chosen_sample</code> and read the <code class="highlighter-rouge">hist_output</code> result.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_wb_stb</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_we</span><span class="p">)</span>
+		<span class="n">chosen_sample</span> <span class="o">&lt;=</span> <span class="n">i_wb_data</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">o_wb_stall</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">o_wb_ack</span> <span class="o">&lt;=</span> <span class="n">i_wb_stb</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">o_wb_data</span> <span class="o">&lt;=</span> <span class="n">hist_output</span><span class="o">;</span></code></pre></figure>
+
+<p>This worked great for me in the past when I only wanted to examine one or
+two bins.  The advantage of using this method is that the
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+output is always available to be read.  No scaling is needed, the decimal point
+is right where you want it and you are reading a fractional number.  Even
+better, the logic involved with building this is quite simple, and so it can
+be done when hardware is at a premium.</p>
+
+<p>The disadvantage with this approach comes when you want to measure more than
+one bin.  In that case, you might walk through the various sample values,
+wait for the averager to settle and then read the result before moving on.
+This was my go-to solution until I actually tried it.  I then swallowed
+hard and convinced myself that I liked the result, but I also realized
+the solution would be completely unworkable with an A/D having 5-bits or more.</p>
+
+<p>Another approach I tried was to run a series of <a href="/dsp/2017/08/19/simple-filter.html">recursive
+averagers</a>,
+each focused on a different sample.</p>
+
+<table align="center" style="float: center"><caption>Fig 13. An IIR peripheral for a histogram</caption><tr><td><img src="/img/histogram/multiiir.svg" alt="" width="760" /></td></tr></table>
+
+<p>The problem with this multi-average approach is simply that the
+<a href="/dsp/2017/08/19/simple-filter.html">recursive averager</a>
+approach doesn’t scale well to large numbers of potential sample values.</p>
+
+<p><a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">Another
+approach</a>
+is needed, which we’ll discuss building today: the block average approach to
+generating a <a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>.
+This approach will be centered around using a block RAM element to keep the
+logic down.</p>
+
+<p>The concept of a block average is really quite simple, and it’s easy to write
+out in C.  You simply pass to your block processing routine a set of <code class="highlighter-rouge">nsamples</code>
+samples, captured in a <code class="highlighter-rouge">data</code> array, as well as an array to capture the
+resulting
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">calculate_histogram</span><span class="p">(</span><span class="kt">int</span> <span class="n">nsamples</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">data</span><span class="p">,</span> <span class="kt">int</span> <span class="o">*</span><span class="n">histogram</span><span class="p">)</span> <span class="p">{</span></code></pre></figure>
+
+<p>The first step is to clear the
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a> array.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">NUM_ADC_BITS</span><span class="p">);</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">histogram</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>After that, we’ll walk through all of our sample points, and increment the
+bin counter in the <a href="https://en.wikipedia.org/wiki/Histogram">histogram</a> memory
+once for every sample in our incoming data.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">nsamples</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">histogram</span><span class="p">[</span><span class="n">data</span><span class="p">[</span><span class="n">k</span><span class="p">]]</span><span class="o">++</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>That seems easy enough.  It’s even easy enough to write out most of the
+hardware necessary to do this.</p>
+
+<table align="center" style="float: right"><caption>Fig 14. Updating a memory single-cycle</caption><tr><td><img src="/img/histogram/memupdate.svg" alt="" width="480" /></td></tr></table>
+
+<p>Not bad, but can we <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">build it in
+Verilog</a>?</p>
+
+<p>Well, sort of and … not quite.  I mean, the operation is fairly easy to
+describe in Verilog.  Just like the hardware diagram above, it looks easy.
+The problem is that, just because you can describe it in Verilog doesn’t mean
+it can properly map to hardware.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span><span class="p">)</span>
+	<span class="n">mem</span><span class="p">[</span><span class="n">i_sample</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">mem</span><span class="p">[</span><span class="n">i_sample</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>Indeed, as we’ve written it out, this is language compliant.  Even better, it’s
+likely to work quite well in a
+<a href="/blog/2018/08/22/what-is-simulation.html">simulator</a>.
+It’s just not likely to map well to all of the different
+varieties of FPGA hardware.</p>
+
+<p>To capture the problem, I introduced several <em>rules</em> for using block RAM
+within my <a href="/tutorial">beginners tutorial</a>.  These rules
+help to guarantee that your design will successfully map into block RAM rather
+than flip-flops.</p>
+
+<ol>
+  <li><strong>Rule:</strong> When reading from memory, only the read from memory logic shall
+happen on any given clock.  This shall happen within its own always block,
+with nothing more than a (potential) clock enable line controlling it.</li>
+</ol>
+
+<p>One reason for this rule is that not all FPGA hardware supports reading from
+block RAM and processing the result on the same clock.  Notably the
+<a href="/formal/2018/07/21/zipcpu-icoboard.html">iCE40 series</a>
+can only read directly into an attached set of flip-flops (the one clock
+requirement), and from there any value read can only enter into your design
+logic on the next clock cycle.  Even for those FPGAs that can read from a memory
+directly into an operation, many of them have limited sizes of memory that can
+support this.  While 5-bit A/Ds would work well, wider 10-bit A/Ds could easily
+overload this capability.</p>
+
+<p>While unfortunate, it is also a reality that if you want to create code that
+can work efficiently on multiple FPGA architectures then you will need to
+support the lowest common denominator.  That means we’re going to need to
+split our read out into a separate clock cycle.  The result might then
+look something like,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="c1">// Read from memory on the first cycle
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="n">memval</span> <span class="o">&lt;=</span> <span class="n">mem</span><span class="p">[</span><span class="n">i_sample</span><span class="p">]</span><span class="o">;</span>
+
+<span class="c1">// Keep track of which sample we are examining,
+// and whether or not we'll need to write this
+// updated value to memory
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="o">{</span> <span class="n">r_ce</span><span class="o">,</span> <span class="n">r_sample</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">i_ce</span><span class="o">,</span> <span class="n">i_sample</span> <span class="o">};</span>
+
+<span class="c1">// Finally, write to memory on the next cycle
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">r_ce</span><span class="p">)</span>
+	<span class="n">mem</span><span class="p">[</span><span class="n">r_sample</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">memval</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;;</span></code></pre></figure>
+
+<p>While this gets us closer, there are still two more block RAM rules.</p>
+
+<ol start="2">
+  <li><strong>Rule:</strong> When writing to memory, nothing but the memory write shall exist
+within that logic block.  That is, you should only ever write from a
+register to memory, never from a LUT’s output to memory.</li>
+</ol>
+
+<p>This issue is more timing driven than hardware architecturally driven.
+Part of the issue here has to deal with the fact that block RAM memories
+tend only to be located on specific parts of the FPGA.  They aren’t
+necessarily uniformly sprinkled around the fabric.  As a result, there may
+be an unpredictable distance from your logic to the memory, and going from
+flip-flop to memory helps to mitigate any timing problems there.</p>
+
+<p>This now means that we’ll need to take three clocks to update one value in our
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a> estimate.
+Our first clock will be used to read from memory, our second clock
+will add one to the result, and our third clock will write the updated result
+back to memory.  Fig. 15 attempts to diagram how this might work.</p>
+
+<table align="center" style="float: center"><caption>Fig 15. Three clock cycles to update a histogram</caption><tr><td><img src="/img/histogram/mempipeline.svg" alt="" width="760" /></td></tr></table>
+
+<p>Again, on its face, this looks like it should be doable.  The
+Verilog to describe this operation remains straightforward.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="c1">//
+// First clock: read from memory
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="c1">// Take a whole clock to read from memory
+</span>	<span class="n">memval</span> <span class="o">&lt;=</span> <span class="n">mem</span><span class="p">[</span><span class="n">i_sample</span><span class="p">]</span><span class="o">;</span>
+
+<span class="c1">// and keep track of the sample value
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="n">r_sample</span> <span class="o">&lt;=</span> <span class="n">i_sample</span>
+
+<span class="c1">// Second clock: add one to the memory value, and
+// move r_sample into the next clock cycle as memaddr
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">cepipe</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="k">begin</span>
+	<span class="n">memnew</span> <span class="o">&lt;=</span> <span class="n">memval</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="n">memaddr</span><span class="o">&lt;=</span> <span class="n">r_sample</span><span class="o">;</span>
+<span class="k">end</span>
+
+<span class="c1">// Last clock: write the result back
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">cepipe</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+	<span class="c1">// Take a whole clock to write to memory
+</span>	<span class="n">mem</span><span class="p">[</span><span class="n">memaddr</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">memnew</span><span class="o">;</span>
+
+<span class="c1">//
+// Don't forget we'll need to keep track of the
+// original i_ce value, and delay it by two cycles
+// to get it into the third clock period.
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="c1">// Delay i_ce to control our write-to-mem action
+</span>	<span class="n">cepipe</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">cepipe</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">,</span> <span class="n">i_ce</span> <span class="o">};</span></code></pre></figure>
+
+<p>That is, it looks doable until you start getting into the details.  For
+example, what happens if you receive the same sample value for several
+clocks in a row?  Let’s say we receive sample value <code class="highlighter-rouge">0</code> for 7 clocks in a row.</p>
+
+<table align="center" style="float: center"><caption>Fig 16. Updating the same sample for many clocks in a row</caption><tr><td><img src="/img/histogram/trace-wo-bypass.svg" alt="" width="760" /></td></tr></table>
+
+<p>After receiving <code class="highlighter-rouge">i_sample=0</code>, we read from memory.  Let’s suppose we start from
+zero for the sake of simplicity.  Therefore, <code class="highlighter-rouge">memval=0</code> on the next clock
+cycle, <code class="highlighter-rouge">memnew=1</code> on the cycle after that, and <code class="highlighter-rouge">mem[0]=1</code> on the following
+cycle.  Finally, on the next cycle <code class="highlighter-rouge">memval</code> can read the value <code class="highlighter-rouge">1</code> from memory.</p>
+
+<p>The result is that after receiving our value across seven different clock
+cycles, we’ve only marked three counts into our bin counter–not seven.</p>
+
+<p>Remember our goal of high throughput?  We want to be able to process every
+sample at a rate as high as our FPGA will allow.  That means we want to be
+able to accumulate one sample per clock across several clocks as we did above.</p>
+
+<p>This is going to be a problem.  We’re going to need to solve it in order
+to build a good generic
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>.
+That said, we’ll come back to this again when we have the formal tools
+helping us out.  That’ll make it a lot easier to work out.</p>
+
+<p>There’s also the issue of initializing our array that we haven’t yet discussed.
+This brings us to the last rule for block RAM allocation:</p>
+
+<ol start="3">
+  <li><strong>Rule:</strong> You can’t initialize all of a memory at the same
+time.  You can only start
+the memory with known contents, and then write to one address in memory
+(or not) on any subsequent clock tick.</li>
+</ol>
+
+<p>This may be more of an FPGA rule than an
+<a href="/blog/2017/10/13/fpga-v-asic.html">ASIC</a> rule.  The
+problem is that most FPGA block RAMs have no capability for adjusting
+every value of the memory at once.  You can access one, or sometimes
+two, values at a time but never clear the whole array.</p>
+
+<p>This particular rule is even more annoying than the last two, and it’s going
+to take some work to accomplish.  The good news, though, is that we’ve now
+got an open clock between our memory read and our memory write that we
+can use for … whatever logic we want.  This will be where we place our
+initialization.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="c1">// Second clock tick, after reading from memory
+// into memavg.
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">initializing</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="c1">// Clear another address of memory
+</span>	<span class="c1">// as part of our reset cycle
+</span>	<span class="n">memaddr</span> <span class="o">&lt;=</span> <span class="n">memaddr</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="n">memnew</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+	<span class="c1">// Add one to the last sample value
+</span>	<span class="c1">// we've seen from our input
+</span>	<span class="n">memaddr</span> <span class="o">&lt;=</span> <span class="n">r_sample</span><span class="o">;</span>
+	<span class="n">memnew</span>  <span class="o">&lt;=</span> <span class="n">memval</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+<span class="k">end</span>
+
+<span class="c1">// Keep track of which step in our pipeline
+// is processing input data, and use it to
+// turn on memory writes
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">initializing</span><span class="p">)</span>
+	<span class="c1">// Write to memory, ignore incoming
+</span>	<span class="c1">// data when resetting
+</span>	<span class="n">cepipe</span> <span class="o">&lt;=</span> <span class="mb">3'b010</span><span class="o">;</span>
+<span class="k">else</span>
+	<span class="n">cepipe</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">cepipe</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">,</span> <span class="n">i_ce</span> <span class="o">};</span>
+
+<span class="c1">// Finally, if cepipe[1] is ever true, write our
+// result (or zero) to our histogram memory
+</span><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">cepipe</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+	<span class="n">mem</span><span class="p">[</span><span class="n">memaddr</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">memnew</span><span class="o">;</span></code></pre></figure>
+
+<p>Okay, so we’re going to need more than that, but you should be able to get the
+gist of the idea from just that alone.</p>
+
+<p>A simple and fairly basic state machine can then be used to control our
+reset.  The states will look like: 1) Reset, 2) Initialize memory,
+3) Count samples, 4) Switch memories, 5) Initialize the new memory,
+6) Count samples into the new memory, and so forth.</p>
+
+<table align="center" style="float: left"><caption>Fig 17. Double-memory histogram state machine</caption><tr><td><img src="/img/histogram/fsm.svg" alt="" width="560" /></td></tr></table>
+
+<p>By using two separate memory sections, one will always be valid and available
+to be read.  That way, while we are resetting and then accumulating counts to
+generate a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+in one memory section, the other section will hold the counts from the last
+average.  In this manner, user code will not need to synchronize to the
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>–it will always be there.</p>
+
+<p>Of course, one disadvantage is that something might happen while we are
+resetting the
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+memory that would then be missed.  Whether that is important to you or not is
+application dependent.  Similarly, how you go about fixing the problem is also
+application dependent.  On some applications, data might arrive slow enough
+that a FIFO can hold on to it during our reset, but I digress.</p>
+
+<p>For now, let’s turn to examining how we are going to build this.</p>
+
+<h2 id="the-formal-contract">The Formal Contract</h2>
+
+<p>Before diving into
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">the details</a>,
+let’s just quickly examine at a top level how we might verify a
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">histogram</a>.
+I like to call this the <em>contract</em>: a formal description of how a design
+is supposed to work that then forms the framework for laying the details out.
+In this case, our contract consists of little more than a counter.</p>
+
+<p>First, we’ll pick the address of an arbitrary value in memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="p">(</span><span class="o">*</span> <span class="n">anyconst</span> <span class="o">*</span><span class="p">)</span> <span class="kt">reg</span>	<span class="p">[</span><span class="n">AW</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_addr</span><span class="o">;</span></code></pre></figure>
+
+<p>Or rather, we’ll let the solver pick an arbitrary address–that way we can be
+assured that the properties of the memory at the chosen address could easily
+be applied to all all memory locations.  This is the purpose of the
+<code class="highlighter-rouge">(* anyconst *)</code> attribute.</p>
+
+<p>Next, we’ll create a counter to describe how many times we’ve seen this value.
+These will become the counts that we read from our design across the bus
+later on.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_this_counts</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">start_reset</span> <span class="o">||</span> <span class="n">resetpipe</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Clear our special value on or during any reset
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">activemem</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="p">])</span>
+			<span class="n">f_this_counts</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span> <span class="o">&amp;&amp;</span> <span class="o">{</span> <span class="n">activemem</span><span class="o">,</span> <span class="n">i_sample</span> <span class="o">}</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">)</span>
+		<span class="c1">// In all other cases, if we see somthing, accumulate  it
+</span>		<span class="n">f_this_counts</span> <span class="o">&lt;=</span> <span class="n">f_this_counts</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>Remember, we’ve chosen to use two memories–one where we accumulate values,
+and the second which we can later read from using the system bus.  The value
+<code class="highlighter-rouge">activemem</code> above captures which memory we are examining.  Hence, if <code class="highlighter-rouge">i_ce</code>
+is ever true, that is if we have a new sample, and if <code class="highlighter-rouge">i_sample</code> matches
+the special sample we’re going to examine during our proof, then <code class="highlighter-rouge">f_this_counts</code>
+should increment.</p>
+
+<p>Now we just have to prove, later on, that this value actually matches the
+value in memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_this_counts</span> <span class="o">==</span> <span class="n">mem</span><span class="p">[</span><span class="n">f_addr</span><span class="p">])</span><span class="o">;</span></code></pre></figure>
+
+<p>Only … our three clock addition is going to make this comparison a bit more
+difficult.</p>
+
+<p>At any rate, that’s our goal–matching that value, but in memory.  Let’s
+see how we can go about getting there.</p>
+
+<h2 id="building-the-histogram-peripheral">Building the Histogram Peripheral</h2>
+
+<p>It’s now time to build <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">our
+peripheral</a>.
+Let’s pick some number of counts we wish to average together, and how big
+our incoming samples will be (<code class="highlighter-rouge">AW</code> bits).</p>
+
+<p>We can then declare the I/O port list for our module.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="c1">//
+</span><span class="k">module</span>	<span class="n">histogram</span> <span class="p">#(</span>
+	<span class="k">parameter</span>	<span class="n">NAVGS</span> <span class="o">=</span> <span class="mi">65536</span><span class="o">,</span>
+	<span class="k">localparam</span>	<span class="n">ACCW</span> <span class="o">=</span> <span class="p">$</span><span class="nb">clog2</span><span class="p">(</span><span class="n">NAVGS</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span>
+	<span class="k">localparam</span>	<span class="n">DW</span> <span class="o">=</span> <span class="mi">32</span><span class="o">,</span>
+	<span class="k">parameter</span>	<span class="n">AW</span> <span class="o">=</span> <span class="mi">12</span><span class="o">,</span>
+	<span class="k">localparam</span>	<span class="n">MEMSZ</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="p">))</span>
+	<span class="p">)</span> <span class="p">(</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="n">i_clk</span><span class="o">,</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="n">i_reset</span><span class="o">,</span>
+	<span class="c1">//
+</span>	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="n">i_wb_cyc</span><span class="o">,</span> <span class="n">i_wb_stb</span><span class="o">,</span> <span class="n">i_wb_we</span><span class="o">,</span>
+	<span class="kt">input</span>	<span class="kt">wire</span> <span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_wb_addr</span><span class="o">,</span>
+	<span class="kt">input</span>	<span class="kt">wire</span> <span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_wb_data</span><span class="o">,</span>
+	<span class="kt">input</span>	<span class="kt">wire</span> <span class="p">[</span><span class="n">DW</span><span class="o">/</span><span class="mi">8</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_wb_sel</span><span class="o">,</span>
+	<span class="kt">output</span>	<span class="kt">reg</span>		<span class="n">o_wb_stall</span><span class="o">,</span>
+	<span class="kt">output</span>	<span class="kt">reg</span>		<span class="n">o_wb_ack</span><span class="o">,</span>
+	<span class="kt">output</span>	<span class="kt">reg</span> <span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">o_wb_data</span><span class="o">,</span>
+	<span class="c1">//
+</span>	<span class="kt">input</span>	<span class="kt">wire</span>		<span class="n">i_ce</span><span class="o">,</span>
+	<span class="kt">input</span>	<span class="kt">wire</span> <span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_sample</span><span class="o">,</span>
+	<span class="c1">//
+</span>	<span class="kt">output</span>	<span class="kt">reg</span>		<span class="n">o_int</span>
+	<span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>I’m going to try something new this time–building the design for one of two
+bus structures, either
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+or
+<a href="/blog/2019/05/29/demoaxi.html">AXI</a>.  To keep
+our notation constant across both, we’ll create a new clock value, <code class="highlighter-rouge">clk</code>,
+and a new reset value, <code class="highlighter-rouge">reset</code>.  We also want to capture when a bus write is
+taking place.  We’ll later use that as an out of cycle cue of when to start
+accumulating values into our
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+bins.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">wire</span>	<span class="n">clk</span>   <span class="o">=</span> <span class="n">i_clk</span><span class="o">;</span>
+	<span class="kt">wire</span>	<span class="n">reset</span> <span class="o">=</span> <span class="n">i_reset</span><span class="o">;</span>
+	<span class="kt">wire</span>	<span class="n">bus_write</span> <span class="o">=</span> <span class="n">i_wb_cyc</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_we</span><span class="o">;</span></code></pre></figure>
+
+<p>Memory really needs to start initialized, so let’s give all of our memory an
+initial value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">integer</span>	<span class="n">ik</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="k">begin</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">ik</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">ik</span><span class="o">&lt;</span><span class="n">MEMSZ</span><span class="o">;</span> <span class="n">ik</span><span class="o">=</span><span class="n">ik</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="n">mem</span><span class="p">[</span><span class="n">ik</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Much to my surprise, this turned out to be an intensive process for
+<a href="https://symbiyosys.readthedocs.io/en">SymbiYosys</a>–particularly because
+the memory is so large (2^10 entries).  So, instead, I simplified this process
+for the formal proof and turned it instead into,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">mem</span><span class="p">[</span><span class="n">f_addr</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>But we’ll have more on that later when we get to our formal verification
+section.</p>
+
+<p>We’re also going to need to count samples going into our
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>, so we know
+when we’ve accumulated a full (parameterized) <code class="highlighter-rouge">NAVGS</code> counts.  Here we have
+a basic counter that just counts up on any new sample, but never quite reaches
+<code class="highlighter-rouge">NAVGS</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">count</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">start_reset</span> <span class="o">||</span> <span class="n">resetpipe</span><span class="p">)</span>
+		<span class="n">count</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">count</span> <span class="o">==</span> <span class="n">NAVGS</span><span class="p">[</span><span class="n">ACCW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+			<span class="n">count</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">count</span> <span class="o">&lt;=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Why not?  Because when we get to one less than <code class="highlighter-rouge">NAVGS</code>, we are going to set
+a flag indicating we want to start a reset cycle, <code class="highlighter-rouge">start_reset</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">start_reset</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">start_reset</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">count</span> <span class="o">==</span> <span class="n">NAVGS</span><span class="p">[</span><span class="n">ACCW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+			<span class="n">start_reset</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>I mentioned above that I also wanted to be able to command a reset from the
+bus, so let’s allow a bus write to initiate a reset cycle as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">bus_write</span><span class="p">)</span>
+			<span class="n">start_reset</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>Two other little details: we don’t want to start a reset cycle if we are already
+in one, unless we get an actual reset signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">resetpipe</span><span class="p">)</span>
+			<span class="n">start_reset</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">reset</span><span class="p">)</span>
+			<span class="n">start_reset</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Getting this to only recycle once, and to make certain that every memory
+value got cleared on reset, took more work than I was expecting.  One part of
+that work is a signal that we are on the first clock of our reset sequence.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">first_reset_clock</span> <span class="o">&lt;=</span> <span class="n">start_reset</span><span class="o">;</span></code></pre></figure>
+
+<p>The second part is a flag I call <code class="highlighter-rouge">resetpipe</code>.  The idea with this signal is that
+if ever <code class="highlighter-rouge">resetpipe</code> is true, we are then in a reset cycle where we zero out
+our memory, otherwise we’ll be in normal operation.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">resetpipe</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">start_reset</span> <span class="o">||</span> <span class="n">first_reset_clock</span><span class="p">)</span>
+		<span class="n">resetpipe</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">&amp;</span><span class="n">memaddr</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span>
+		<span class="n">resetpipe</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>There’s one last part to our reset: once we get to the maximum number of counts,
+we’ll want to switch memories.  Further, on any memory switch, we’ll set a
+user interrupt–so an attached
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+can know that there’s new
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+data which may be examined.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">activemem</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">o_int</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_int</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">start_reset</span> <span class="o">&amp;&amp;</span> <span class="n">count</span> <span class="o">==</span> <span class="n">NAVGS</span><span class="p">[</span><span class="n">ACCW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">activemem</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">activemem</span><span class="o">;</span>
+			<span class="n">o_int</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">reset</span><span class="p">)</span>
+			<span class="n">o_int</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Put together, a memory swap and reset re-initialization should look something
+like the trace shown in Fig. 18 below.</p>
+
+<table align="center" style="float: center"><caption>Fig 18. Internal memory reset</caption><tr><td><img src="/img/histogram/reset-cycle.svg" alt="" width="780" /></td></tr></table>
+
+<p>The basic sequence is that, when we get to the end of our count, <code class="highlighter-rouge">start_reset</code>
+goes high.  <code class="highlighter-rouge">resetpipeline</code> then goes high on the next count and stays high
+while we write zeros across all of our memory.  Once we’ve cleared all memory,
+we’ll start accumulating into our
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+into the just cleared bins again.</p>
+
+<p>Notice that change in <code class="highlighter-rouge">activemem</code>, noting that we switched histogram banks.
+At the same time we switched banks, we also issued an <code class="highlighter-rouge">o_int</code> to indicate
+that the new data was now valid in the older bank.</p>
+
+<p>In a moment, we’ll start working our way through the three cycles required
+by a bin update.  I’m going to use a three bit shift register, <code class="highlighter-rouge">cepipe</code>, to
+capture when new or valid data works its way through our pipeline in what I
+like to call a <a href="/blog/2017/08/14/strategies-for-pipelining.html">travelling clock enable
+(CE)</a>
+approach.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">cepipe</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">resetpipe</span><span class="p">)</span>
+		<span class="n">cepipe</span> <span class="o">&lt;=</span> <span class="mb">3'b010</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">cepipe</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">cepipe</span><span class="p">[</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">,</span> <span class="n">i_ce</span> <span class="o">};</span></code></pre></figure>
+
+<p>That’s all of the necessary preliminary work.  Now let’s work our way through
+those three clock cycles.</p>
+
+<p>On our first clock cycle, we’ll read from memory,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">memval</span> <span class="o">&lt;=</span> <span class="n">mem</span><span class="p">[</span><span class="o">{</span> <span class="n">activemem</span><span class="o">,</span> <span class="n">i_sample</span> <span class="o">}</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>and record the address we read from–since we’ll need to know that again later.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">r_sample</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">activemem</span><span class="o">,</span> <span class="n">i_sample</span> <span class="o">};</span></code></pre></figure>
+
+<p>On the next clock cycle, we’ll want to add one to <code class="highlighter-rouge">memval</code>, and then write it
+back to memory.  Only … it’s not that easy.</p>
+
+<p>To clear this up, let’s allow that we are going to write to <code class="highlighter-rouge">memaddr</code> a value
+of <code class="highlighter-rouge">memnew</code>.  While we are in the middle of a reset cycle, we’ll increment this
+address across all memory spaces and write zeros into all spaces.  The only
+exception is on the first clock tick, when <code class="highlighter-rouge">first_reset_clock</code> is active.  On
+that tick, we’ll make sure that we are starting from the beginning of memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">memaddr</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">memnew</span>  <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">resetpipe</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">memnew</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="c1">//
+</span>		<span class="n">memaddr</span> <span class="o">&lt;=</span> <span class="n">memaddr</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">first_reset_clock</span><span class="p">)</span>
+			<span class="n">memaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">memaddr</span><span class="p">[</span><span class="n">AW</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">activemem</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span></code></pre></figure>
+
+<p>Now that the reset is out of the way, we’ll want to write a new value to
+what was the <code class="highlighter-rouge">i_sample</code> bin from the last clock tick, but now the <code class="highlighter-rouge">r_sample</code>
+bin.  From that memory, we read <code class="highlighter-rouge">memval</code> and so now we want to update it and
+place the update into <code class="highlighter-rouge">memnew</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">memaddr</span> <span class="o">&lt;=</span> <span class="n">r_sample</span><span class="o">;</span>
+
+		<span class="c1">// We haven't used this value yet, so it's memory
+</span>		<span class="c1">// copy is up to date--add one to it
+</span>		<span class="n">memnew</span>  <span class="o">&lt;=</span> <span class="n">memval</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>Of course, the problem is … what if we just updated this value in the last
+cycle?  That is, what if we are now writing <code class="highlighter-rouge">memnew</code> to <code class="highlighter-rouge">memaddr</code>?  It’ll take
+two clock cycles before we can read it back again!  We can avoid this problem
+with a simple check that we are writing to <code class="highlighter-rouge">memaddr</code> on this cycle, and just
+add one to our current accumulator.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">cepipe</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">r_sample</span> <span class="o">==</span> <span class="n">memaddr</span><span class="p">)</span>
+			<span class="n">memnew</span>  <span class="o">&lt;=</span> <span class="n">memnew</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>This is sometimes known as operand forwarding–rather than going through
+a register file, we’re short-circuiting the operation and going straight back
+into our accumulator.</p>
+
+<p>Only … that’s not enough.  If we had written to memory on the last cycle, it
+would still  take us another clock to read that value back.  So let’s set up
+a second stage of operand forwarding as well, to grab the value that was just
+written to memory—but skipping the memory read.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">cepipe</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="n">r_sample</span> <span class="o">==</span> <span class="n">bypass_addr</span><span class="p">)</span>
+			<span class="n">memnew</span>  <span class="o">&lt;=</span> <span class="n">bypass_data</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This is how we’ll go about avoiding the problems shown in Fig. 16 above.</p>
+
+<p>We’re finally on our third clock tick.  At this point, we simply write
+our <code class="highlighter-rouge">memnew</code> value to memory at address <code class="highlighter-rouge">memaddr</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">cepipe</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+		<span class="n">mem</span><span class="p">[</span><span class="n">memaddr</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">memnew</span><span class="o">;</span></code></pre></figure>
+
+<p>There’s one last step required: we need to keep track of the last value written
+to memory, lest we want to bypass the memory and go straight back into our
+accumulator as described above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">bypass_data</span> <span class="o">&lt;=</span> <span class="n">memnew</span><span class="o">;</span>
+		<span class="n">bypass_addr</span> <span class="o">&lt;=</span> <span class="n">memaddr</span><span class="o">;</span> 
+	<span class="k">end</span></code></pre></figure>
+
+<p>All that’s left now is to work our way through the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+<a href="/zipcpu/2017/05/29/simple-wishbone.html">peripheral logic</a>.</p>
+
+<p>At this point, this is easy.  On any clock tick, we read from the
+address given by <code class="highlighter-rouge">i_wb_addr</code> and the memory bank that we aren’t currently
+writing into.  That’ll give us clear access to a clean
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>,
+rather than one that’s still updating.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_wb_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">o_wb_data</span><span class="p">[</span><span class="n">ACCW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">mem</span><span class="p">[</span><span class="o">{</span> <span class="o">!</span><span class="n">activemem</span><span class="o">,</span> <span class="n">i_wb_addr</span> <span class="o">}</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>We’ll also immediately acknowledge any request, and keep our
+stall line low so we can accept requests at all times.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">o_wb_ack</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">reset</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_stb</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">o_wb_stall</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<h2 id="adjusting-this-to-handle-axi">Adjusting this to handle AXI</h2>
+
+<p>For those who want to adjust this core to work with an
+<a href="/blog/2019/05/29/demoaxi.html">AXI4 bus</a>,
+this transformation can be done quite easily.  First, you’ll want to use either
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axildouble.v">AXILDOUBLE</a> or
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axildouble.v">AXIDOUBLE</a>
+to simplify out the protocol.  Once done, the bus has been simplified for
+you.  For example, all of the ready signals in the simplified slave may be
+assumed to be high, and <code class="highlighter-rouge">AWVALID</code> and <code class="highlighter-rouge">WVALID</code> are the same signal.  This
+makes interacting with the <a href="/blog/2019/05/29/demoaxi.html">AXI4 bus much easier than it was the last time
+we tried this</a>.</p>
+
+<p>First, we’d adjust the name of  our clock and reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">wire</span>	<span class="n">clk</span>   <span class="o">=</span> <span class="n">S_AXI_ACLK</span><span class="o">;</span>
+	<span class="kt">wire</span>	<span class="n">reset</span> <span class="o">=</span> <span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="o">;</span>
+	<span class="kt">wire</span>	<span class="n">bus_write</span> <span class="o">=</span> <span class="n">S_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_WSTRB</span> <span class="o">!=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>We can also assign <code class="highlighter-rouge">bus_write</code> based upon <code class="highlighter-rouge">S_AXI_AWVALID</code> alone, and use that
+to initiate a reset sequence.</p>
+
+<p>Further down in our file, we’ll set our return values.  In particular, we’ll
+want to return the read data into <code class="highlighter-rouge">S_AXI_RDATA</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">S_AXI_RDATA</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">S_AXI_RDATA</span><span class="p">[</span><span class="n">ACCW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">mem</span><span class="p">[</span><span class="o">{</span> <span class="o">!</span><span class="n">activemem</span><span class="o">,</span>
+			<span class="n">S_AXI_ARADDR</span><span class="p">[$</span><span class="nb">clog2</span><span class="p">(</span><span class="n">C_AXI_DATA_WIDTH</span><span class="p">)</span><span class="o">-</span><span class="mi">3</span> <span class="o">+:</span> <span class="n">AW</span><span class="p">]</span> <span class="o">}</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Finally, we’ll just hold the read and write responses at a constant “OKAY”
+value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">S_AXI_BRESP</span> <span class="o">=</span> <span class="mb">2'b00</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">S_AXI_RRESP</span> <span class="o">=</span> <span class="mb">2'b00</span><span class="o">;</span></code></pre></figure>
+
+<ul>
+  <li>Note that the AXI4 peripheral code above is only representative.  It has
+not been (yet) been properly formally verified.</li>
+</ul>
+
+<p>I find this easier to work with than the full
+<a href="/blog/2019/05/29/demoaxi.html">AXI4 protocol</a>.  It gets
+past all of the problems others have had, although it will only work in
+the context of using a pre-protocol processor such as
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axildouble.v">AXILDOUBLE</a>
+for AXI-lite or
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axildouble.v">AXIDOUBLE</a>
+for pre-processing AXI4.</p>
+
+<p>That’s it!  You now have a working
+<a href="/blog/2019/05/29/demoaxi.html">AXI4 peripheral</a>, for almost
+as little work
+as would be required for building a straight <a href="/zipcpu/2017/05/29/simple-wishbone.html">Wishbone
+peripheral</a>.  The
+protocol pre-processor takes care of all of the back-pressure issues, AXI4 IDs,
+AXI4 burst transactions, and so forth–making your job building a bus slave
+much simpler.</p>
+
+<h2 id="formally-verifying-our-histogram">Formally Verifying our Histogram</h2>
+
+<p>Now that we’ve gotten this far, let’s see what it takes to formally verify
+this design.</p>
+
+<p>We’ll start with the obligatory <code class="highlighter-rouge">f_past_valid</code> register, that then gives us
+access to being able to use <code class="highlighter-rouge">$past()</code> in an assertion later on.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">FORMAL</span>
+	<span class="c1">// ...
+</span>
+	<span class="kt">reg</span>	<span class="n">f_past_valid</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">f_past_valid</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">f_past_valid</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>We’ll also use <code class="highlighter-rouge">f_mem_data</code> as short-hand for the value in our solver-chosen
+memory address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">f_mem_data</span> <span class="o">=</span> <span class="n">mem</span><span class="p">[</span><span class="n">f_addr</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>Since we skipped initializing the whole memory in order to make the proof run
+faster, let’s just assume that the initial value is zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">mem</span><span class="p">[</span><span class="n">f_addr</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Functionally, this acts the same within a formal environment as
+<code class="highlighter-rouge">initial mem[f_addr] = 0;</code> would, but I hesitate to modify
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">the core</a>’s
+operational logic in the formal verification section.</p>
+
+<p>Next, since the <a href="/zipcpu/2017/05/29/simple-wishbone.html">Wishbone
+interface</a>
+is so simple, I’m going to take a risk and not include my <a href="/zipcpu/2017/11/07/wb-formal.html">formal Wishbone
+property file</a>.  Instead,
+I’ll just assume that if <code class="highlighter-rouge">i_wb_cyc</code> is low then <code class="highlighter-rouge">i_wb_stb</code> must be low as well.
+That’ll at least make the traces look closer to what we want, even if it doesn’t
+functionally affect anything we are doing above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_wb_cyc</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(</span><span class="o">!</span><span class="n">i_wb_stb</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>You’ve seen above how we are going to accumulate bin counts
+into <code class="highlighter-rouge">f_this_counts</code>.  Here’s where that code lies.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_this_counts</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">start_reset</span> <span class="o">||</span> <span class="n">resetpipe</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Clear our special value on or during any reset
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">activemem</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="p">])</span>
+			<span class="n">f_this_counts</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_ce</span> <span class="o">&amp;&amp;</span> <span class="o">{</span> <span class="n">activemem</span><span class="o">,</span> <span class="n">i_sample</span> <span class="o">}</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">)</span>
+		<span class="c1">// In all other cases, if we see our special value,
+</span>		<span class="c1">// accumulate  it
+</span>		<span class="n">f_this_counts</span> <span class="o">&lt;=</span> <span class="n">f_this_counts</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>Further, to keep track of the register forwarding issue, I’m going to create
+another value similar to the <code class="highlighter-rouge">cepipe</code> register for watching the update of our
+special value work its way through our logic.  In this case, it’s going to be
+for watching any request for our special operand as it transits through the
+system.  Hence, if <code class="highlighter-rouge">f_this_pipe[0]</code>, <code class="highlighter-rouge">memval</code> should equal the value from our
+special address and <code class="highlighter-rouge">r_sample</code> should match <code class="highlighter-rouge">i_sample</code>.  If <code class="highlighter-rouge">f_this_pipe[1]</code>,
+then we’ve just added one to the value from our bin and so forth.  The only
+special trick is that we want to clear this value during the reset cycles.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_this_pipe</span> <span class="o">=</span> <span class="mb">3'b000</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">resetpipe</span><span class="p">)</span>
+		<span class="n">f_this_pipe</span> <span class="o">&lt;=</span> <span class="mb">3'b000</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">f_this_pipe</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">f_this_pipe</span><span class="p">[</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">,</span> <span class="p">(</span><span class="o">!</span><span class="n">start_reset</span> <span class="o">&amp;&amp;</span> <span class="n">i_ce</span>
+				<span class="o">&amp;&amp;</span> <span class="n">activemem</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="p">]</span>
+				<span class="o">&amp;&amp;</span> <span class="n">i_sample</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span> <span class="o">};</span></code></pre></figure>
+
+<p>Now let’s go check our counter.  During a reset cycle, the counter should be
+zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">resetpipe</span> <span class="o">&amp;&amp;</span> <span class="n">activemem</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="p">])</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_this_counts</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Otherwise, if we aren’t updating the value, then it should match what’s in
+our block RAM.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">f_this_pipe</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_this_counts</span> <span class="o">==</span> <span class="n">f_mem_data</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p><a href="/blog/2018/03/10/induction-exercise.html">Induction</a>
+will require just a touch more work.</p>
+
+<p>In the case of
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>,
+if ever <code class="highlighter-rouge">f_this_pipe</code> indicates only a single value,
+then it’s the value we just read from memory into <code class="highlighter-rouge">memval</code> following seeing
+<code class="highlighter-rouge">i_sample</code> at the input.  It should be identical to what our <code class="highlighter-rouge">f_this_counts</code>
+value was one clock ago–that is before it just got updated.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_this_pipe</span> <span class="o">==</span> <span class="mb">3'b001</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">memval</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">f_this_counts</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Now, once we add one to this value, it should equal our counter post update
+as well–just one clock later, only it is now kept in <code class="highlighter-rouge">memnew</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_this_pipe</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">memnew</span> <span class="o">&lt;=</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">f_this_counts</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, if <code class="highlighter-rouge">f_this_pipe[2]</code> is ever true, then we’ve just written to memory.
+The value in <code class="highlighter-rouge">bypass_data</code> should match <code class="highlighter-rouge">f_this_counts</code> just after it was
+updated–only now we’re two clocks later.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_this_pipe</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">bypass_data</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">f_this_counts</span><span class="o">,</span><span class="mi">2</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Let’s also check writing to the data.  As you may recall, we write to the
+memory on the third clock of our pipeline, whenever the <code class="highlighter-rouge">cepipe[1]</code> bit of
+our shift register is true.  On the clock after any such write,
+our counts value (two clocks ago) should now match what’s in memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">f_past_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">cepipe</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+			<span class="o">&amp;&amp;</span> <span class="o">{</span> <span class="n">activemem</span><span class="o">,</span> <span class="n">memaddr</span> <span class="o">}</span> <span class="o">==</span> <span class="n">f_addr</span>
+			<span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">resetpipe</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_mem_data</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">f_this_counts</span><span class="o">,</span><span class="mi">2</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, we also need to check that <code class="highlighter-rouge">f_mem_data</code> is properly reset as part of
+the reset cycle.  Note that the check below checks the memory bank, kept in
+<code class="highlighter-rouge">f_addr[AW]</code> against the active memory bank separate from the inequality
+checking whether or not the current bank has been cleared or not.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">resetpipe</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">first_reset_clock</span>
+			<span class="o">&amp;&amp;</span> <span class="n">activemem</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="p">]</span>
+			<span class="o">&amp;&amp;</span> <span class="n">memaddr</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_mem_data</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, one other check on <code class="highlighter-rouge">f_this_pipe</code>: If ever any of its values are true,
+the corresponding <code class="highlighter-rouge">cepipe</code> value must be true as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">resetpipe</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">((</span><span class="n">f_this_pipe</span> <span class="o">&amp;</span> <span class="n">cepipe</span><span class="p">)</span> <span class="o">==</span> <span class="n">f_this_pipe</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>If this looks like just a bunch of minutia, its not nearly as bad as it looks.
+I started with just some very simple properties, like the two listed below:
+that the data in memory could never exceed <code class="highlighter-rouge">NAVGS</code> nor could our counter ever
+exceed that value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_mem_data</span> <span class="o">&lt;=</span> <span class="n">NAVGS</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_this_counts</span> <span class="o">&lt;=</span> <span class="n">NAVGS</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>This led to the need to also assert that our number of counts needed to be
+less than the counter, <code class="highlighter-rouge">count</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">start_reset</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">resetpipe</span> <span class="o">&amp;&amp;</span> <span class="n">activemem</span> <span class="o">==</span> <span class="n">f_addr</span><span class="p">[</span><span class="n">AW</span><span class="p">])</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_this_counts</span> <span class="o">&lt;=</span> <span class="n">count</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>While these assertions might seem quite straightforward, working through the
+design so as to pass
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+then lead to many of the other assertions I’m presenting here.  Then, once
+the design passed
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+at 80 steps, I shortened the length to 10 steps.  When the final assertion was
+in place to verify the design at 10 steps, I was then able to shorten the
+proof further to 6, where it stands today.</p>
+
+<p>Let’s take a moment to look through the reset sequence next.  In particular,
+we want to make certain that the <code class="highlighter-rouge">count</code> remains at zero throughout the reset
+sequence.  It will start incrementing again once we start accepting samples
+again after the reset sequence is complete.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">resetpipe</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">count</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Similarly, we’ll want to check that we can get into and start a reset properly.
+In particular, we want to initiate a reset anytime we accept a value while
+the count it just less than <code class="highlighter-rouge">NAVGS</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="o">!</span><span class="n">reset</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">start_reset</span> <span class="o">&amp;&amp;</span> <span class="n">i_ce</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">bus_write</span><span class="p">)</span>
+		<span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">count</span> <span class="o">==</span> <span class="n">NAVGS</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>Once we start this sequence, we’ll want to change our memory bank, <code class="highlighter-rouge">activemem</code>,
+set an interrupt, <code class="highlighter-rouge">o_int</code>, reset the count, <code class="highlighter-rouge">count == 0</code>, and raise the
+<code class="highlighter-rouge">start_reset</code> flag.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">assert</span><span class="p">(</span><span class="n">o_int</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">($</span><span class="nb">changed</span><span class="p">(</span><span class="n">activemem</span><span class="p">))</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">start_reset</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">count</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>If you look at this another way, we want to assert an outgoing interrupt
+anytime we switch memory banks (except following a reset) and at no other times.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">reset</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">changed</span><span class="p">(</span><span class="n">activemem</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_int</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_int</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>That’s enough to pass
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>,
+but … does the design even work?</p>
+
+<h2 id="cover-checks">Cover Checks</h2>
+
+<p>To convince ourselves
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">this design</a>
+actually works, rather than just passing a set of abstract property checks,
+we’ll run some cover checks on the design.</p>
+
+<p>In particular, let’s prove that we can actually achieve a data count equal
+to the number of averages we are doing.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">f_mem_data</span> <span class="o">==</span> <span class="n">NAVGS</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>You can now see in the <a href="/blog/2017/07/31/vcd.html">trace</a>
+below how this looks.</p>
+
+<table align="center" style="float: center"><caption>Fig 19. Cover check--counting up to the full sample size</caption><tr><td><a href="/img/histogram/cover_trace.png"><img src="/img/histogram/cover_trace.png" alt="" width="780" /></a></td></tr></table>
+
+<p>The trace starts out with a reset, and then walks through clearing all memory.
+We then accept sixteen samples of <code class="highlighter-rouge">4'hd</code>–exactly <code class="highlighter-rouge">NAVGS</code>.  The design then
+switches memory banks and starts the reset on the new memory bank–exactly
+like we wanted!</p>
+
+<p>Well, almost.  I mean, you could get picky.  For example, the design re-enters
+the reset state several times at the end because we never kept <code class="highlighter-rouge">i_reset</code> from
+going high again, but this doesn’t really impact what I wanted to show.  If
+we had wanted to get fancier, we could’ve added more criteria to the <code class="highlighter-rouge">cover()</code>
+command.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Calculating a
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>
+of your incoming data is a very basic analysis task
+that you will want to be prepared to accomplish as you build any system.
+There are lots of bugs you can diagnose just by looking over the resulting
+<a href="https://en.wikipedia.org/wiki/Histogram">histogram</a>, as we’ve seen above.
+Further, if you choose to use a <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">block histogram calculation
+routine</a>,
+the logic can be really straightforward.</p>
+
+<p>That said, it wasn’t as simple as you might think.  In particular, the three
+rules of block RAM memory added to the complexity–even though they helped
+make certain our design fit into a block RAM in a first place.  These rules
+forced us to read from memory in one cycle, calculate an updated value on the
+next, and finally write the result on the third.  Further, since you can’t
+clear all of a memory at once, you can also see how a basic state machine
+can make that happen.</p>
+
+<p>Even better, I was able to demonstrate how simple an
+<a href="/blog/2019/05/29/demoaxi.html">AXI4 peripheral</a>
+can be made to be using either the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axildouble.v">AXILDOUBLE</a> or
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axildouble.v">AXIDOUBLE</a>
+<a href="/zipcpu/2019/08/30/subbus.html">pre-protocol processors</a>.
+Indeed, our resulting <a href="/blog/2019/05/29/demoaxi.html">AXI4
+peripheral</a>
+logic was almost <a href="/zipcpu/2017/05/29/simple-wishbone.html">as simple to
+write</a> as the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone peripheral</a>’s
+logic was.</p>
+
+<p>Finally, if you are interested in <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">this
+code</a>,
+or the <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/formal/histogram.sby">SymbiYosys
+script</a>
+used to drive <a href="https://symbiyosys.readthedocs.io/en">SymbiYosys</a> when verifying
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/histogram.v">this core</a>,
+you can find both in my <a href="https://github.com/ZipCPU/dspfilters">DSP filters project
+repository</a>.</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Likewise reckon ye also yourselves to be dead indeed unto sin, but alive unto God through Jesus Christ our Lord.  (Rom 6:11)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
