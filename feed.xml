@@ -6,14 +6,617 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 10 Mar 2020 10:26:54 -0400</pubDate>
-    <lastBuildDate>Tue, 10 Mar 2020 10:26:54 -0400</lastBuildDate>
+    <pubDate>Thu, 12 Mar 2020 20:54:34 -0400</pubDate>
+    <lastBuildDate>Thu, 12 Mar 2020 20:54:34 -0400</lastBuildDate>
     <generator>Jekyll v3.0.1</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Adjusting our logic PLL to handle I&amp;Q</title>
+        <description>&lt;p&gt;Some time ago, I posted an article on &lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;how to create a basic logic PLL
+in Verilog&lt;/a&gt;.  &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/sdpll.v&quot;&gt;The
+design&lt;/a&gt;
+was simple, basic, and easy to implement in an FPGA.  It worked by tracking
+the &lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;most significant bit of any
+sinewave&lt;/a&gt;
+given to it, giving it a nice gain invariance which would make it useful
+in a large variety of contexts.&lt;/p&gt;
+
+&lt;p&gt;More recently, I was asked to build a &lt;a href=&quot;https://github.com/ZipCPU/sdr&quot;&gt;demonstration design for a
+software (gateware) defined radio&lt;/a&gt;.  Yes,
+I call it a &lt;a href=&quot;https://en.wikipedia.org/wiki/Software-defined_radio&quot;&gt;“software” defined
+radio&lt;/a&gt;, although in
+actuality all of the processing within it is done by the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Field-programmable_gate_array&quot;&gt;FPGA&lt;/a&gt;.  There’s no
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Central_processing_unit&quot;&gt;CPU&lt;/a&gt;
+involved, so perhaps it is better termed as a “gateware” defined radio.  I’m
+going to stick with the “software” label for now–under protest if I have to.
+Why?  Because like a true &lt;em&gt;software&lt;/em&gt; defined radio, you really need to know
+and understand the guts of this one in order to get it to work.  Further,
+as with any FPGA design, &lt;a href=&quot;https://github.com/ZipCPU/sdr&quot;&gt;this radio design&lt;/a&gt;
+is fully reprogrammable.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/sdr&quot;&gt;The design&lt;/a&gt;
+was to have both AM and FM examples within it.  When I went to build those
+examples, I quickly realized that both the &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/3eb914db4175ecc3b5a9374825110d0b80435dca/rtl/amdemod.v#L212-L216&quot;&gt;AM
+demodulator&lt;/a&gt;
+and the &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/3eb914db4175ecc3b5a9374825110d0b80435dca/rtl/fmdemod.v#L165-L169&quot;&gt;FM
+demodulator&lt;/a&gt;
+would require &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/quadpll.v&quot;&gt;a PLL that could track the incoming carrier
+frequency&lt;/a&gt;.
+An ideal candidate for this PLL was my &lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;previous logic
+PLL&lt;/a&gt;.
+The only problem was simply that the
+&lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;logic PLL&lt;/a&gt;
+only worked on a single sinewave input, rather than the quadrature
+input available on this board.&lt;/p&gt;
+
+&lt;p&gt;Today, let’s take a look at why a quadrature demodulator is a good thing, and
+then look over the difference between the two cores.  We can then compare
+the performance between the two cores so you can see why a &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/quadpll.v&quot;&gt;quadrature
+PLL&lt;/a&gt; is really
+a good idea.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-is-quadrature&quot;&gt;What is Quadrature?&lt;/h2&gt;
+
+&lt;p&gt;The word “quadrature” in today’s article is a reference to a transmit or
+receive architecture that uses two “arms” or “rails” as they might be
+called to either transmit,
+or receive an incoming signal.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;th&gt;Fig 1. A quadrature transmit scheme&lt;/th&gt;&lt;th&gt;Fig 2. A quadrature receiver scheme&lt;/th&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/quadtx.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/quadrx.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Since each arm of a signal in such a scheme is controlled/represented by either
+a real or an imaginary signal, depending on the arm, I think of “quadrature”
+signals as a reference more to the complex nature of the signal than to the
+structure used to create it.  In engineering, the two axes of this &lt;a href=&quot;https://en.wikipedia.org/wiki/Complex_plane&quot;&gt;complex
+plane&lt;/a&gt; are often called
+“in-phase” or I, referencing the “real” signal rail that is multiplied by
+the cosine term, and “quadrature” or Q, which references the rail multiplied
+by the imaginary sine term.  The &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/quadpll.v&quot;&gt;quadrature
+PLL&lt;/a&gt; we are
+discussing today is one that takes both I and Q inputs.&lt;/p&gt;
+
+&lt;p&gt;But let’s back up a bit.  There’s a reason why imaginary numbers are
+&lt;em&gt;imaginary&lt;/em&gt;.  The square root of negative one can’t really be produced in
+any physical system, so what reality does this even pretend to represent?&lt;/p&gt;
+
+&lt;p&gt;That’s a good question, so let’s start at the top and examine a radio
+frequency (RF) receiver.&lt;/p&gt;
+
+&lt;p&gt;From an engineering standpoint, a good RF front end consists of an
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Antenna_(radio)&quot;&gt;antenna&lt;/a&gt;, a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Low-noise_amplifier&quot;&gt;low-noise pre-amplifier&lt;/a&gt;,
+a &lt;a href=&quot;https://en.wikipedia.org/wiki/Band-pass_filter&quot;&gt;band-pass filter&lt;/a&gt;, an
+optional adjustable or &lt;a href=&quot;https://en.wikipedia.org/wiki/Automatic_gain_control&quot;&gt;automatic gain&lt;/a&gt;, an &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_mixer&quot;&gt;RF mixer&lt;/a&gt;
+followed by a &lt;a href=&quot;/dsp/2017/12/30/slowfil.html&quot;&gt;lowpass filter&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3. A basic RF front end&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/receiver.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Mathematically, I like to cheat and just represent a receiver as a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Heterdyne&quot;&gt;downconverter&lt;/a&gt; followed by a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_down_converter&quot;&gt;lowpass filter and then a
+downsampler&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. A simplified receiver model&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/math-frontend.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;It just makes the processing easier to understand.&lt;/p&gt;
+
+&lt;p&gt;At issue in today’s discussion is the form of the RF mixer, whether the form
+shown in Fig. 4 above or in Fig 2 above that.&lt;/p&gt;
+
+&lt;p&gt;One common way of building a mixer is to simply multiply the incoming
+signal by a
+&lt;a href=&quot;/dsp/2017/07/11/simplest-sinewave-generator.html&quot;&gt;sinewave&lt;/a&gt;
+above or below the signal of interest.  This is part
+of the &lt;a href=&quot;https://en.wikipedia.org/wiki/Superheterodyne_receiver&quot;&gt;super-heterodyne
+receiver&lt;/a&gt;
+architecture.  Assuming a signal frequency of &lt;code class=&quot;highlighter-rouge&quot;&gt;f_c&lt;/code&gt; and a local oscillator
+frequency, within the receiver, of &lt;code class=&quot;highlighter-rouge&quot;&gt;f_LO&lt;/code&gt;, the resulting signal will be placed
+at frequencies &lt;code class=&quot;highlighter-rouge&quot;&gt;f_c+f_LO&lt;/code&gt; and &lt;code class=&quot;highlighter-rouge&quot;&gt;f_c-f_LO&lt;/code&gt;.  (We’ll see this in a moment.)  A
+&lt;a href=&quot;/dsp/2017/12/30/slowfil.html&quot;&gt;lowpass filter&lt;/a&gt;
+can then be used to select one of these two frequency bands, making it
+possible to then work on the signal at a lower (and slower) frequency–perhaps
+even in the digital domain.&lt;/p&gt;
+
+&lt;p&gt;Not so with this receiver.&lt;/p&gt;
+
+&lt;p&gt;No, the &lt;a href=&quot;https://github.com/xil-se/SX1257-PMOD&quot;&gt;SX1257 Radio PMod&lt;/a&gt; uses
+a &lt;em&gt;quadrature&lt;/em&gt; mixer.  Within the
+&lt;a href=&quot;https://www.semtech.com/products/wireless-rf/lora-gateways/SX1257&quot;&gt;SX1257&lt;/a&gt;,
+the local oscillator consists of both sine and cosine components.  Together,
+they &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital_down_converter&quot;&gt;downconvert&lt;/a&gt;
+a signal much like multiplying by a &lt;a href=&quot;https://en.wikipedia.org/wiki/Euler&#39;s_formula&quot;&gt;complex
+exponential&lt;/a&gt; would.  The nice
+part of this setup is that the final signal can be placed near zero
+frequency–rather than some &lt;a href=&quot;https://en.wikipedia.org/wiki/Intermediate_frequency&quot;&gt;intermediate
+frequency&lt;/a&gt; offset from
+zero.&lt;/p&gt;
+
+&lt;p&gt;Mathematically, this can really simplify the analysis.  There is an
+engineering cost, however, to making sure that the two “rails” are
+properly balanced–but that’s not our topic today.&lt;/p&gt;
+
+&lt;p&gt;So, imagine if we started with an &lt;a href=&quot;https://en.wikipedia.org/wiki/Amplitude_modulation&quot;&gt;AM
+signal&lt;/a&gt;.  This &lt;a href=&quot;https://en.wikipedia.org/wiki/Amplitude_modulation&quot;&gt;AM
+signal&lt;/a&gt; is created from
+some real (not imaginary or complex) information signal, we’ll call it &lt;code class=&quot;highlighter-rouge&quot;&gt;m(t)&lt;/code&gt;,
+containing whatever it was we want to transmit and then recover.  Inside
+the transmitter, &lt;code class=&quot;highlighter-rouge&quot;&gt;m(t)&lt;/code&gt; will be multiplied by a cosine wave to bring it up
+to a radio frequency, just as we showed in Fig. 1 above.  After propagation
+decays and delays this signal and noise gets added to it, it might then show
+up to the receiver looking something like:&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/eqn-amrx.png&quot; alt=&quot;x_RX(t)=A_RX[C+m(t-d_RX)cos(2pi f_c t+theta_RX)+n_RX(t)&quot; width=&quot;577&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;where&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/term-defns.png&quot; alt=&quot;Variables defined&quot; width=&quot;580&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Our goal will be to recover the message, &lt;code class=&quot;highlighter-rouge&quot;&gt;m(t)&lt;/code&gt;.&lt;/p&gt;
+
+&lt;p&gt;You may have noticed the colors in the expression above.  I like to do this
+to help me understand what it is I have to work with.  In particular, I like
+to write out all of my unknown values in red.  In general, the whole expression
+is red save for the waveform we’ve measured.  We can argue about whether or not
+the amount of carrier, &lt;code class=&quot;highlighter-rouge&quot;&gt;C&lt;/code&gt;, is known or not–in the end it’s not all that
+relevant since we’re just going to filter it out anyway.&lt;/p&gt;
+
+&lt;p&gt;Several of these terms take a lot of work to track from the origin to the
+receiver.  Particularly complex terms include the amplitude, A, the propagation
+delay, delta, and the phase.  Each of these is related to how the waveform
+propagated from the source to the receiver, so they cannot necessarily be
+known when the waveform is received.  Worse, they are particularly difficult
+to track and apply meaning to even in the receiver since so many components
+of the receiver’s processing path adjust them along the way.&lt;/p&gt;
+
+&lt;p&gt;For example, our first step in processing this signal will be to adjust
+the frequency to “&lt;a href=&quot;https://en.wikipedia.org/wiki/Baseband&quot;&gt;baseband&lt;/a&gt;”–where
+the frequency of the cosine term gets (approximately) zeroed out.  Let’s
+suppose we know about what &lt;code class=&quot;highlighter-rouge&quot;&gt;fc&lt;/code&gt; is so that we can create a &lt;em&gt;local oscillator&lt;/em&gt;
+(one generated in the receiver) at something close to &lt;code class=&quot;highlighter-rouge&quot;&gt;f_c&lt;/code&gt;–let’s call it
+&lt;code class=&quot;highlighter-rouge&quot;&gt;f_LO&lt;/code&gt; for the frequency of the local oscillator.  We might then multiply
+&lt;code class=&quot;highlighter-rouge&quot;&gt;x(t)&lt;/code&gt; by this local oscillator to get a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Baseband&quot;&gt;baseband&lt;/a&gt; signal.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/eqn-mixed.png&quot; alt=&quot;&quot; width=&quot;340&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If we ignore the noise term for now, we can expand this out a bit to simplify
+it.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/eqn-mixed-simpler.png&quot; alt=&quot;&quot; width=&quot;672&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If we then use a
+&lt;a href=&quot;/dsp/2017/12/30/slowfil.html&quot;&gt;lowpass filter&lt;/a&gt; to remove the
+term at &lt;code class=&quot;highlighter-rouge&quot;&gt;f_c+f_LO&lt;/code&gt;, we can then get a useful waveform to work with.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/eqn-ambblo.png&quot; alt=&quot;&quot; width=&quot;655&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Did you notice how the amplitude, frequency, and phase all changed during
+this process?  Keeping track of all of these changes can be quite a
+challenge.  It’s often much easier just to merge the details of the local
+oscillator processing stage together with the values of the signal that
+are already unknown.  Therefore, I will often create new frequency and
+phase terms just to keep my notation simpler.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/eqn-ambb.png&quot; alt=&quot;&quot; width=&quot;499&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This newer, simpler, signal description is still the same thing that
+we were just looking at.&lt;/p&gt;
+
+&lt;h4 id=&quot;am-demodulation&quot;&gt;AM Demodulation&lt;/h4&gt;
+
+&lt;p&gt;Let’s pause for a moment and consider what this &lt;code class=&quot;highlighter-rouge&quot;&gt;m(t)&lt;/code&gt; signal might “look”
+like.&lt;/p&gt;
+
+&lt;p&gt;First, we know that &lt;code class=&quot;highlighter-rouge&quot;&gt;m(t)&lt;/code&gt; was real.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5. Initial message signal in time&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/am-source-time.png&quot; alt=&quot;&quot; width=&quot;435&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If we place rotate this figure so that time goes in and out of the page
+(screen), &lt;code class=&quot;highlighter-rouge&quot;&gt;m(t)&lt;/code&gt; can then be plotted on a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Complex_plane&quot;&gt;complex plane&lt;/a&gt;
+and it would look like points along the &lt;code class=&quot;highlighter-rouge&quot;&gt;x&lt;/code&gt; axis as shown in Fig. 6 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6. The initial message shown as a phasor&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/am-source-phasor.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If we then add the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Amplitude_modulation&quot;&gt;AM&lt;/a&gt;
+carrier offset &lt;code class=&quot;highlighter-rouge&quot;&gt;C&lt;/code&gt; to it, the message points just shift to the right.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 7. The initial message, but offset by the constant carrier&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/am-wcarrier.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Once the message gets multiplied by a complex carrier, this diagram starts
+spinning in circles at the carrier frequency.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 8. The transmitted waveform, spinning at RF frequency&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/am-atcarrier.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Of course, only the &lt;em&gt;real&lt;/em&gt; component of this diagram will ever get
+transmitted, so the picture over the airwaves will likely look like a more
+traditional AM signal.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 9. The transmitted waveform, as viewed in time&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/am-atcarrier-time.png&quot; alt=&quot;&quot; width=&quot;436&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Inside our receiver, we’re going to try to de-spin this signal.  If we do
+the task right, so that &lt;code class=&quot;highlighter-rouge&quot;&gt;f_c == f_LO&lt;/code&gt;, the incoming signal will look something
+like,&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 10. The received waveform, once the carrier has been removed&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/am-baseband.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;At this point, we don’t want just the real or imaginary portions.  Were we
+to only grab the real component, as an example, there would be a worst case
+where we might just happen to get so unlucky that we lose the entire
+signal.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 11. The received waveform, once the carrier has been removed&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/am-baseband-diabolical.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;We could’ve picked some &lt;a href=&quot;https://en.wikipedia.org/wiki/Intermediate_frequency&quot;&gt;intermediate
+frequency&lt;/a&gt;, &lt;code class=&quot;highlighter-rouge&quot;&gt;f_IF&lt;/code&gt;
+ such that &lt;code class=&quot;highlighter-rouge&quot;&gt;f_LO = f_c - f_IF&lt;/code&gt;.  Had we done that, our signal would’ve still
+been spinning as it was in Fig. 8 above, just spinning slower.  We’d still
+need to eventually remove the rotation, so we’re going to get to
+Fig. 10 either way.&lt;/p&gt;
+
+&lt;p&gt;If &lt;code class=&quot;highlighter-rouge&quot;&gt;f_LO&lt;/code&gt; is only approximately equal to &lt;code class=&quot;highlighter-rouge&quot;&gt;f_c&lt;/code&gt;, such as would be the case in
+real life, then this constellation plot would rotate slower.
+Our goal, as part of our
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Amplitude_modulation&quot;&gt;AM&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/amdemod.v&quot;&gt;demodulator&lt;/a&gt;,
+is going to be slowing and eventually stopping this rotation.  We’ll then
+want to &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/3eb914db4175ecc3b5a9374825110d0b80435dca/rtl/amdemod.v#L211-L219&quot;&gt;rotate the constellation that results back to zero
+phase&lt;/a&gt;, and to
+&lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/3eb914db4175ecc3b5a9374825110d0b80435dca/rtl/amdemod.v#L221-L225&quot;&gt;remove the carrier offset&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/3eb914db4175ecc3b5a9374825110d0b80435dca/rtl/amdemod.v#L212-L216&quot;&gt;Tracking this rotation&lt;/a&gt;
+is the purpose of &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;our quadrature
+PLL&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h4 id=&quot;fm-demodulation&quot;&gt;FM Demodulation&lt;/h4&gt;
+
+&lt;p&gt;If we were to start with &lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_modulation&quot;&gt;frequency
+modulation (FM)&lt;/a&gt;, the signal
+might not necessarily be real, but many of the same principles would still
+apply.  In this case, the signal would start out slowly rotating back and
+forth around the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Complex_plane&quot;&gt;complex plane&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;If the frequency excursions were small enough, they could be approximated
+as purely imaginary excursions from the right side of the unit circle,
+as shown in Fig. 12 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 12. A narrowband FM signal&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/fm-narrowband.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If they are larger, the approximation no longer applies, but it’s still
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency_modulation&quot;&gt;FM&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 13. A widerband FM signal&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/fm-wideband.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;How big the frequency changes within the message are is a function of how
+the system is set up.&lt;/p&gt;
+
+&lt;p&gt;As before, the transmitter spins this signal.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 14. The transmitted waveform, spinning at RF frequency&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/fm-atcarrier.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Unlike the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Amplitude_modulation&quot;&gt;AM&lt;/a&gt;
+signal shown in Fig. 8, this signal has a constant amplitude, as shown by the
+narrow line drawing the blue circle in Fig. 14.  The transmitter
+then transmits only the real portion of it,&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 15. The FM waveform, as transmitted, but shown in time&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/fm-time.png&quot; alt=&quot;&quot; width=&quot;436&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;because imaginary signals are only &lt;em&gt;imaginary&lt;/em&gt;–right?&lt;/p&gt;
+
+&lt;p&gt;Inside the receiver, our goal will be to first remove most of the spinning,
+and then to capture the spin frequency as our resulting message.&lt;/p&gt;
+
+&lt;p&gt;As with the
+&lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/amdemod.v&quot;&gt;AM demodulator&lt;/a&gt;,
+the &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/fmdemod.v&quot;&gt;FM demodulator&lt;/a&gt;,
+can be accomplished with a
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;PLL&lt;/a&gt;.
+Likewise, the quadrature information helps to keep us from diabolical
+cases.  In the end, our task is essentially to measure the speed of a point
+as it spins around a circle in the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Complex_plane&quot;&gt;complex plane&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 16. Demodulating FM is about determining the speed of rotation about the circle&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/fm-demod.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;h2 id=&quot;adjusting-the-phase-detector&quot;&gt;Adjusting the Phase Detector&lt;/h2&gt;
+
+&lt;p&gt;When we &lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;first built our PLL&lt;/a&gt;,
+we had to do a lot of work to figure out whether or not the PLL phase was
+ahead of or behind the incoming sinusoid.  This required &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/af052626172d6cfc156fc820d41dcfdc393f2f0d/rtl/sdpll.v#L74-L85&quot;&gt;finding when the two
+inputs agreed with each other&lt;/a&gt;,
+and then &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/af052626172d6cfc156fc820d41dcfdc393f2f0d/rtl/sdpll.v#L91-L100&quot;&gt;looking at which input changed
+first&lt;/a&gt;
+to know which of the two clocks was faster or slower.&lt;/p&gt;
+
+&lt;p&gt;With quadrature signals, things are different.  The first change will be
+admitting two input bits, one for I and one for Q, into our core.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;kt&quot;&gt;input&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;wire&lt;/span&gt;	&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;//&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;I&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Q&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;These two incoming bits can be used to approximate the incoming phase
+as either 45, 135, -135 or -45 degrees.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 17. Incoming IQ phase map&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/iq-map.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Similarly, the top two MSB of the phase counter internal to our PLL can
+also be mapped to these same points.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 18. Phase as given by the top two MSB bits of the phase counter&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/counter-map.png&quot; alt=&quot;&quot; width=&quot;547&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The mapping isn’t quite the same, so we’ll need to watch out for this
+difference as we go along.&lt;/p&gt;
+
+&lt;p&gt;Our next goal is to determine whether or not a phase error exists.  Are these
+two waveforms locked, or should we adjust the phase within our PLL?&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;case&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;MSB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;MSB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b0000&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No err
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b1001&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No Err
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b1110&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No err
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b0111&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No err
+&lt;/span&gt;	&lt;span class=&quot;nl&quot;&gt;default:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;endcase&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Notice how the two coordinate systems, that of the &lt;code class=&quot;highlighter-rouge&quot;&gt;I,Q&lt;/code&gt; input and the phase
+counter, are not the same.  You can use the figures above to help decode them.
+(While it felt like I was counting on my fingers, I got so confused I had
+to use similar figures to work out which quadrants of each represented an
+error and which did not.)&lt;/p&gt;
+
+&lt;p&gt;I also wanted a second bit as well–one that wound indicate whether or not the
+PLL’s frequency should be increased or decreased.  A decrease in phase
+(and frequency) would be warranted if the PLL’s counter was ever further
+clockwise than the incoming phasor, otherwise an increase of each
+would be appropriate.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 19. Lead vs Lag&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/lead-vs-lag.png&quot; alt=&quot;&quot; width=&quot;433&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;But what if the two are in opposite quadrants?  That is, what if the &lt;code class=&quot;highlighter-rouge&quot;&gt;I,Q&lt;/code&gt;
+input represents a 180 degree difference from the angle represented by the
+PLL’s counter?  In this case, I chose to
+go both ways–for two quadrants I judged the phase to be too far
+forward, and for the other too far backwards.  The resulting table, including
+the phase error from above, is shown below.  It should match Fig. 19 for the
+first quadrant, and similarly for the other three.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;c1&quot;&gt;//
+&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Input {I,Q} (i.e. X,Y) will rotate: 00, 10, 11, 01
+&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// The counter will rotate: 00, 01, 10, 11
+&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;//
+&lt;/span&gt;	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;case&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;MSB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;MSB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;//
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b0000&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b00&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No err
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b0001&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b11&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b0010&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b11&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b0011&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b01&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;//
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b1000&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b01&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b1001&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b00&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No Err
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b1010&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b11&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b1011&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b01&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;//
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b1100&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b11&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b1101&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b01&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b1110&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b00&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No err
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b1111&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b11&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;//
+&lt;/span&gt;	&lt;span class=&quot;mb&quot;&gt;4&#39;b0100&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b11&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b0101&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b01&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b0110&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b01&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;mb&quot;&gt;4&#39;b0111&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lead&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;phase_err&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2&#39;b00&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// No err
+&lt;/span&gt;	&lt;span class=&quot;k&quot;&gt;endcase&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The fun part of this table is that despite its ugly form, it can be
+&lt;a href=&quot;/blog/2017/06/12/minimizing-luts.html&quot;&gt;implemented with nothing more than two
+4-LUTs&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;But what about that 180-degree out of phase measurement?  You could think
+about it as an annoying offset to figure out lead and lag for, or you could
+look at it as an opportunity.  If the phase measurement is ever so far out
+of phase that we can’t tell which came first, then we are clearly out of lock.&lt;/p&gt;
+
+&lt;p&gt;We can use this to generate a crude lock indication.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;&lt;span class=&quot;k&quot;&gt;module&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;quadpll&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;cm&quot;&gt;/* ... */&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_locked&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// ...
+&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;output&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;reg&lt;/span&gt;			&lt;span class=&quot;n&quot;&gt;o_locked&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We can set this lock indicator to be low any time we are off by 180 degrees,
+and high otherwise.  True, it’s crude.  Any phase errors between -135 and 135
+degrees will appear to be locked.  Worse, this lock indicator will appear
+to glitch if it ever falls out of lock.  However, such glitches should be
+easy to quickly identify on a trace, and so use to know if the
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;PLL&lt;/a&gt;
+is properly locked or not.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_ce&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;case&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ctr&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;MSB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;MSB&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;//
+&lt;/span&gt;		&lt;span class=&quot;mb&quot;&gt;4&#39;b0010&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_locked&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;mb&quot;&gt;4&#39;b1011&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_locked&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;mb&quot;&gt;4&#39;b1100&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_locked&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;mb&quot;&gt;4&#39;b0101&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_locked&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;nl&quot;&gt;default:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_locked&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1&#39;b1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Everything else
+&lt;/span&gt;		&lt;span class=&quot;k&quot;&gt;endcase&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The rest of the design, to include how we tracked both phase and frequency, &lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;is
+the same as our prior design&lt;/a&gt;.
+That means our tracking loops should all have the same gains and transfer
+functions.  In other words, they should perform the same … right?&lt;/p&gt;
+
+&lt;p&gt;Let’s take a peek.&lt;/p&gt;
+
+&lt;h2 id=&quot;performance-difference&quot;&gt;Performance difference&lt;/h2&gt;
+
+&lt;p&gt;The good news with this new &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL
+implementation&lt;/a&gt;
+is that it is so similar to our last one that we can nearly use the
+same Verilator script.  Indeed, a &lt;a href=&quot;http://meldmerge.org&quot;&gt;graphical diff&lt;/a&gt;,
+shown in Fig. 20, shows how similar the two scripts actually are.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 20. Test script differences&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;a href=&quot;/img/quadpll/cppdiff.png&quot;&gt;&lt;img src=&quot;/img/quadpll/cppdiff.png&quot; alt=&quot;&quot; width=&quot;323&quot; /&gt;&lt;/a&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The biggest difference between the two scripts is how the phase is sent to the
+core.  In our &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/bench/cpp/sdpll_tb.cpp&quot;&gt;original test
+script&lt;/a&gt;,
+we defined the phase going into the PLL as nothing more than the MSB
+of the phase counter.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;                &lt;span class=&quot;n&quot;&gt;lclphase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lclstep&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;tb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lclphase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;31&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;It’s a little more involved for the quadrature PLL, since we need to convert
+from the coordinates of the top two counter bits, as shown in Fig. 18 above,
+to the IQ coordinates used by the core, as shown in Fig. 17 above.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;                &lt;span class=&quot;n&quot;&gt;lclphase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;lclstep&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;n&quot;&gt;tb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;lclphase&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;30&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;c1&quot;&gt;// 00 10 11 01
+&lt;/span&gt;                &lt;span class=&quot;k&quot;&gt;switch&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;k&quot;&gt;case&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_input&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+                &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;I say a “little more” involved, because this really isn’t that big of a
+change.&lt;/p&gt;
+
+&lt;p&gt;Surely this wouldn’t affect performance, right?&lt;/p&gt;
+
+&lt;p&gt;Well, let’s take a look at the phase error outputs and compare the two
+over time in Fig. 21.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 15px&quot;&gt;&lt;caption&gt;Fig 21. Absolute phase errors&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/chart-abserr.png&quot; alt=&quot;&quot; width=&quot;464&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In this chart, the error is a &lt;code class=&quot;highlighter-rouge&quot;&gt;-1&lt;/code&gt; if the PLL is leading the incoming signal,
+&lt;code class=&quot;highlighter-rouge&quot;&gt;1&lt;/code&gt; if the PLL is lagging behind and &lt;code class=&quot;highlighter-rouge&quot;&gt;0&lt;/code&gt; if the two match.  Unfortunately, this
+2-bit error quantization approach hasn’t left this chart very readable.  Still,
+we might stare at Fig. 21 long enough to imagine that after about 4k samples
+the &lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;
+no longer had the error the
+&lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;logic PLL&lt;/a&gt;
+was struggling with.&lt;/p&gt;
+
+&lt;p&gt;But are we only imagining this?&lt;/p&gt;
+
+&lt;p&gt;Well, I suppose we could cheat and examine the various phase counters from
+within the PLLs and compare them to the original counter used to generate
+the signal itself.  If you do that, you’ll get something that looks like
+Fig. 22.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 22. Instantaneous phase counter error&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/chart-perr.png&quot; alt=&quot;&quot; width=&quot;490&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;As with the previous figure, there’s a lot of junky noise on the left side of
+this chart.  This is due to frequency error, and marked by the phase wrapping
+around the unit circle and back again.  The large units, +/- 2e9, are simply
+the &lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;units of the phase
+counter&lt;/a&gt; that we are
+using.  Even in this figure, however, it appears as though the
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;’s
+phase error converges on a right answer much faster than the
+&lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;logic PLL&lt;/a&gt;’s
+error does.&lt;/p&gt;
+
+&lt;p&gt;Is there a way to “see” though this junk, though, and get a better picture
+of what’s going on?&lt;/p&gt;
+
+&lt;p&gt;To find out, let’s average our phase error and see which one gets closer.
+Using the same &lt;a href=&quot;/dsp/2017/10/16/boxcar.html&quot;&gt;boxcar filter&lt;/a&gt;
+applied to the phase error output from both PLL’s, we see an averaged phase
+error plotted in Fig. 23 on the right.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 15px&quot;&gt;&lt;caption&gt;Fig 23. Averaged phase errors&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/chart-averr.png&quot; alt=&quot;&quot; width=&quot;476&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In this chart, it appears as though the
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;
+quickly ran up a phase error so large it wrapped around the unit
+circle.  The
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;
+then went from estimating a lead to estimating a lag.  However, before you draw
+too much of a conclusion from that, you need to notice that it recovers very
+quickly and that from a point of about 8k steps on there’s essentially no
+averaged phase error in the
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;
+whereas the
+&lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;logic PLL&lt;/a&gt;
+we built earlier still takes another 5k samples or so to lock.&lt;/p&gt;
+
+&lt;p&gt;Are we really achieving a faster lock?&lt;/p&gt;
+
+&lt;p&gt;Let’s peek inside the two cores and check their frequency steps.  As you may
+recall, the &lt;a href=&quot;/dsp/2017/12/09/nco.html&quot;&gt;frequency “step” is really a phase step that’s used to implement
+a frequency&lt;/a&gt;.  As with our
+&lt;a href=&quot;/dsp/2017/06/15/no-pi-for-you.html&quot;&gt;other phase units&lt;/a&gt;,
+this step ranges from -2e9 to 2e9, although the chosen
+“correct” answer is found somewhere near 8.25e8.  Both PLLs are started with
+the same erroneous frequency, and then tasked with finding and tracking the
+right one.  Fig. 24 shows the frequency steps of the two PLLs as they each
+attempt to track the frequency of the incoming waveform.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 24. Frequency step vs time, showing frequency acquisition time&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/quadpll/chart-fstep.png&quot; alt=&quot;&quot; width=&quot;476&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;By this time, the result comes as no surprise.  The
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;
+indeed acquires a phase lock much faster than the basic
+&lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;logic PLL&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Perhaps this shouldn’t come as such a surprise.  While both cores are using
+the same tracking loop, the
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;
+has a better phase estimator.
+Better information going into the loop &lt;em&gt;should&lt;/em&gt; result in better performance,
+which is what we’ve seen in these figures.  As far as whether the performance
+is really 2x better, I’ll let the charts speak for themselves.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
+
+&lt;p&gt;With only a few minor modifications, we were able to transform our simple,
+basic
+&lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;logic PLL&lt;/a&gt;
+into a full-blown
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;quadrature PLL&lt;/a&gt;
+for &lt;a href=&quot;https://github.com/ZipCPU/sdr&quot;&gt;software (gateware) defined&lt;/a&gt;
+radio applications.&lt;/p&gt;
+
+&lt;p&gt;How well does the
+&lt;a href=&quot;https://github.com/ZipCPU/dpll/blob/master/rtl/quadpll.v&quot;&gt;new PLL&lt;/a&gt;
+work?  Judging from performance simulations, it works much better than the
+&lt;a href=&quot;/dsp/2017/12/14/logic-pll.html&quot;&gt;prior PLL&lt;/a&gt;.
+How about in actual practice?  Sadly, I have
+yet to put the two radios together on my desk to measure how well either
+the &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/amdemod.v&quot;&gt;AM demodulator&lt;/a&gt;
+or the &lt;a href=&quot;https://github.com/ZipCPU/sdr/blob/master/rtl/fmdemod.v&quot;&gt;FM demodulator&lt;/a&gt;
+actually performs.  Until then, I suppose these simulations will feel real good
+while never quite being the same as the real thing.&lt;/p&gt;
+
+&lt;p&gt;As it is, I’ve already got another discussion queued up regarding how I built
+the downsampling filters for the two demodulators.  Those should form another
+good discussion, since it’s an important part of digital filtering that we have
+yet to discuss on this blog.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;But in those sacrifices there is a remembrance again made of sins every year.  For it is not possible that the blood of bulls and of goats should take away sins. (Heb 10:3-4)&lt;/em&gt;</description>
+        <pubDate>Thu, 12 Mar 2020 00:00:00 -0400</pubDate>
+        <link>https://zipcpu.com/dsp/2020/03/12/quadpll.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/dsp/2020/03/12/quadpll.html</guid>
+        
+        
+        <category>dsp</category>
+        
+      </item>
     
       <item>
         <title>Buidilng an AXI-Lite slave the easy way</title>
@@ -4843,495 +5446,6 @@ understanding&lt;/a&gt;.&lt;/p&gt;
         <pubDate>Wed, 01 Jan 2020 00:00:00 -0500</pubDate>
         <link>https://zipcpu.com/blog/2020/01/01/2019-in-review.html</link>
         <guid isPermaLink="true">https://zipcpu.com/blog/2020/01/01/2019-in-review.html</guid>
-        
-        
-        <category>blog</category>
-        
-      </item>
-    
-      <item>
-        <title>The Christmas Gospel</title>
-        <description>&lt;p&gt;Surely I’m not the only one wondering whether there’s a message of Christ
-left in this Christmas time of rampant commercialism, so with your indulgence
-let’s take a moment to look back into the origins of Christmas.&lt;/p&gt;
-
-&lt;p&gt;Before beginning, let me define a few terms.  The first term is “Jesus.”
-Christmas celebrates the birth of Jesus, but why was he called “Jesus”?
-The name “Jesus” comes from the Hebrew name Joshua.  It means savior or
-deliverer, and brings back the memory of Joshua who was able to deliver
-the Jewish people into the promised land–something Moses was forbidden to do.&lt;/p&gt;
-
-&lt;p&gt;In the Christmas story, the young child is given the name Jesus.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;And she shall bring forth a son, and thou shalt call his name JESUS: for he
-shall save his people from their sins.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/1/21&quot;&gt;Matt 1:21&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;How was He to save His people from their sins?  Hold that thought.&lt;/p&gt;
-
-&lt;p&gt;The second term is Christ.  Contrary to popular conception, Christ was not
-Jesus’ last name.  In the time of Jesus, family ties were denoted by naming who
-someone’s father was.  For this reason, the Bible discusses how Jesus is both
-the “Son of God” and the “Son of Man.”  No, the term “Christ” is transliterated
-from the Greek word for the Hebrew Messiah–a type of king.  Unlike “Jesus”,
-which is a &lt;em&gt;name&lt;/em&gt;, Christ is a &lt;em&gt;title&lt;/em&gt;.  Moreover, “Christ” isn’t just the term
-for any King, it’s the term used to describe a very special King, prophesied by
-God, and placed upon the throne by the Almighty Himself.  Unlike most Kings,
-the Christ rules with the authority of the Almighty
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/28/18&quot;&gt;Matt 28:18&lt;/a&gt;).
-To oppose the Christ is to oppose the Almighty Himself.&lt;/p&gt;
-
-&lt;p&gt;That’s a special kind of King.&lt;/p&gt;
-
-&lt;p&gt;The term king carries other connotations as well, often forgotten through time.
-Unlike the United States, where the three pieces of power are separated into
-three branches of government: an executive, judicial branch, and legislative
-branch, a king holds the total authority of all three of these government
-functions in his person.  A king is a lawgiver and a judge, as well as the
-commander in chief of his people.  Further, unlike many modern national
-leaders, kings are not elected.&lt;/p&gt;
-
-&lt;p&gt;“Christ”-mas is therefore the celebration of the birth of this King.&lt;/p&gt;
-
-&lt;p&gt;The story of Christmas, however, began thousands of years earlier.&lt;/p&gt;
-
-&lt;h2 id=&quot;it-started-in-the-beginning&quot;&gt;It started in the Beginning&lt;/h2&gt;
-
-&lt;p&gt;The first indication of a coming Christmas was revealed in the Garden of Eden,
-way back at the very beginning of mankind.  Once God created man, He placed
-man into this garden that God had planted
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/2/8&quot;&gt;Gen 2:8&lt;/a&gt;), instructing him
-to tend and to keep it
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/2/15&quot;&gt;Gen 2:15&lt;/a&gt;).
-God also commanded Adam that he was not to eat of the tree of the
-knowledge of good and evil that was in the middle of the garden
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/2/9&quot;&gt;Gen 2:9&lt;/a&gt;),
-“for in the day that thou eatest thereof thou shalt surely die.”
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/2/17&quot;&gt;Gen 2:17&lt;/a&gt;)
-(This is a Hebrewism, &lt;a href=&quot;https://answersingenesis.org/death-before-sin/genesis-2-17-you-shall-surely-die/&quot;&gt;woodenly translated “in dying thou shalt surely
-die”&lt;/a&gt;.)&lt;/p&gt;
-
-&lt;p&gt;God then had compassion upon man, noting that he was all alone in the world.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/2/18&quot;&gt;Gen 2:18&lt;/a&gt;)
-He created Eve to be his helper on this earth.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/2/21&quot;&gt;Gen 2:21&lt;/a&gt;)
-The serpent then tricked Eve through cunning into eating the forbidden fruit,
-and Eve gave Adam the same fruit to eat as well.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/3/1-6&quot;&gt;Gen 3:1-6&lt;/a&gt;)
-At this point, the judgment of God was certain upon them.  Their death was
-sealed: they would spend the rest of their lives dying until they ultimately
-and most certainly died.  The judgment was also so severe, that it passed
-on to all of Adam’s offspring as well–all who shared
-in his flesh.  (&lt;a href=&quot;https://www.blueletterbible.org/kjv/rom/5/12&quot;&gt;Rom 5:12&lt;/a&gt;)&lt;/p&gt;
-
-&lt;p&gt;God then comes to chat with Adam, and gives him a chance to explain and
-possibly defend himself.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/3/8-9&quot;&gt;Gen 3:8-9&lt;/a&gt;)
-The discussion that follows is commonly
-viewed as God’s judgment of Adam, but I might argue that Adam had already been
-judged by the commandment that had been given to him.  In this conversation,
-God offers several mollifying statements to try to keep the judgment from
-being quite as bad as it might have been.  Among these statements, God curses
-the serpent for deceiving Eve in the first place.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;And the LORD God said unto the serpent, Because thou hast done this, thou art
-cursed above all cattle, and above every beast of the field; upon thy belly
-shalt thou go, and dust shalt thou eat all the days of thy life:
-And I will put enmity between thee and the woman, and between thy seed and
-her seed; it shall bruise thy head, and thou shalt bruise his heel.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/3/14-15&quot;&gt;Gen 3:14-15&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;This is the often-overlooked first Gospel message of Christmas.&lt;/p&gt;
-
-&lt;p&gt;The first key to this message are the two words, “her seed.”&lt;/p&gt;
-
-&lt;p&gt;The biblical history talks often in the chapters and books that follow of
-the seed of men.  This is a reference physically to the “sperm” of a man,
-that then produces offspring.  But the &lt;em&gt;seed&lt;/em&gt; of a woman?  It’s never
-mentioned again.  The entire concept of a woman having her own “seed” would
-violate everything we understand of human reproduction.&lt;/p&gt;
-
-&lt;p&gt;Rather, this was the first prophecy of Christ, requiring that Christ be born
-of a woman without the seed (sperm) of a man involved.  Indeed, it requires
-a virgin birth to be fulfilled.&lt;/p&gt;
-
-&lt;p&gt;The serpent himself was later revealed to be Satan, also known as the Devil.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;And he laid hold on the dragon, that old serpent, which is the Devil, and
-Satan, and bound him a thousand years
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/rev/20/2&quot;&gt;Rev 20:2&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;The second key to this message is that the woman’s seed would crush the head
-of the serpent, while only allowing Satan the opportunity to strike a glancing
-blow on “his heel”.  Satan’s doom was therefore first foretold here.&lt;/p&gt;
-
-&lt;p&gt;In case you missed it, this passage also explains the reason and cause for
-suffering in our world today.  Man sinned against God, and violated God’s
-commandment.  Ever since then, Man has struggled under the punishment of the
-Almighty God–a punishment wherein death grips a man early in his life and
-draws him perpetually to the grave.  Indeed, from the day of our birth and
-before, the process of this death has already started.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-coming-king&quot;&gt;The Coming King&lt;/h2&gt;
-
-&lt;p&gt;While there are hints of the coming Christ elsewhere (for example,
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/49/9&quot;&gt;Gen 49:9&lt;/a&gt;),
-I’ll pick the story up again in the time of David.  David notices at one point
-that he gets to dwell in a pleasant house, but God?  God dwelt in a tent at
-the time known as the “Tabernacle”.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/2sa/7/2&quot;&gt;2 Sam 7:2&lt;/a&gt;)
-This didn’t seem right to David, so he inquired about building a house
-for God–something that would be more permanent than a tent.&lt;/p&gt;
-
-&lt;p&gt;God’s full response is worth reading
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/2sa/7/4-17&quot;&gt;2 Sam 7:4-17&lt;/a&gt;), in which
-he discusses the absurdity of David creating a house for the Almighty, but
-let me focus on just a couple of verses of the message that the prophet
-Nathan relays to David.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;And when thy [David’s] days be fulfilled, and thou shalt sleep with thy
-  fathers, I will set up thy seed after thee, which shall proceed out of
-  thy bowels, and I will establish his kingdom.
-He shall build an house for my name, and I will stablish the throne of his
-  kingdom for ever.
-I will be his father, and he shall be my son. If he commit iniquity, I will
-  chasten him with the rod of men, and with the stripes of the children of
-  men:
-But my mercy shall not depart away from him, as I took it from Saul, whom I
-   put away before thee.
-And thine house and thy kingdom shall be established for ever before thee:
-   thy throne shall be established for ever.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/2sa/7/12-16&quot;&gt;2 Sam 7:12-16&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;Herein is a promise from God that David’s seed, i.e. one of his sperm or
-more appropriately understood in context as one his offspring, shall be
-established on the throne “for ever.”&lt;/p&gt;
-
-&lt;p&gt;Think about this for a moment.&lt;/p&gt;
-
-&lt;p&gt;“For ever.”&lt;/p&gt;
-
-&lt;p&gt;Something would need to be done about the curse that fell upon Adam, for since
-Adam all men die
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/1co/15/22&quot;&gt;1 Cor 15:22&lt;/a&gt;).
-This King on the other hand was to remain on the throne “for ever.”&lt;/p&gt;
-
-&lt;p&gt;God also states, rather strangely, that “I will be his father, and he shall be
-my son.”  This passage is often overlooked, for how should God be the father
-of a man?&lt;/p&gt;
-
-&lt;h2 id=&quot;the-lost-throne&quot;&gt;The Lost Throne&lt;/h2&gt;
-
-&lt;p&gt;In the years that followed, this promise appeared to be one that was lost.
-Solomon took the throne, and God was not nearly as pleased with him as he
-was with David.  Solomon’s son then took the throne and the kingdom split.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/1ki/12/19&quot;&gt;1 Kings 12:19&lt;/a&gt;)
-Ten tribes went to the Northern Kingdom, sometimes called Israel and sometimes
-Ephraim, and two tribes, Judah and Benjamin, formed the Southern Kingdom,
-often simply called Judah.&lt;/p&gt;
-
-&lt;p&gt;The Northern Kingdom suffered through the leadership of several different
-dynasties as one king after another arose to punish the wickedness of the
-king before.  This particular kingdom was unique for the consistency of their
-leadership.  No righteous kings arose from all of these dynasties.&lt;/p&gt;
-
-&lt;p&gt;Judah was also unique during this time, however, in that only David’s
-offspring ruled Judah in Jerusalem.  Indeed, it almost seemed as though the
-prophecy given to David might hold through one of the offspring’s of these
-kings.  Yet during the reign of these kings, Isaiah wrote,&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;And in that day there shall be a root of Jesse, which shall stand for an
-ensign of the people; to it shall the Gentiles seek: and his rest shall be
-glorious.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/isa/11/10&quot;&gt;Isaiah 11:10&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;Only a couple hundred years after this prophecy, Babylon conquered Judah.
-The Davidic dynasty lost the throne, as one empire or another ruled over Israel.
-Worse, God told Jeremiah that the Davidic king of the time, through whose
-line the throne ran, would have “none to sit upon the throne of David”
-because he did not listen to God.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/jer/36/30-31&quot;&gt;Jeremiah 36:30-31&lt;/a&gt;)
-First was Babylon, then the Medes and Persians, the Greeks, and then the Romans
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/2/38-40&quot;&gt;Daniel 2:38-40&lt;/a&gt;).
-Today, it is the United Nations ruling as an empire over what’s left of
-the nation of Israel
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/2/41-43&quot;&gt;2:41-43&lt;/a&gt;).&lt;/p&gt;
-
-&lt;p&gt;Looking back at Isaiah’s prophecy, you’ll note that “root” could just as well
-be translated as “stump”, and perhaps even more appropriately so.  It
-describes a tree that has been cut down, but whose stump remains in the ground.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/job/14/7&quot;&gt;Job 14:7&lt;/a&gt;)
-In historical hindsight, we can see that it refers to the fact that
-Jesse, king David’s father, no longer had any offspring on the throne.
-David’s dynasty appeared to be completely and utterly extinguished.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-seventy-weeks&quot;&gt;The Seventy Weeks&lt;/h2&gt;
-
-&lt;p&gt;As history played out God’s judgment, we learn that David’s dynasty ended
-when Jerusalem fell to Babylon.  Among the Jews that were enslaved by
-Nebuchadnezzar was a young man named Daniel.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/1/1-6&quot;&gt;Daniel 1:1-6&lt;/a&gt;)
-Daniel was brought captive to Babylon where God chose to make him a
-prophet.  Indeed, Daniel was the one prophet in Babylon who was able to
-explain to the king why he saw a disembodied hand writing on the wall,
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/5/5&quot;&gt;Daniel 5:5&lt;/a&gt;)
-and the meaning of the message that was written.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/5/23&quot;&gt;Daniel 5:23&lt;/a&gt;)
-That night, Babylon’s empire then fell to the Medes and the Persians.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/5/31&quot;&gt;Daniel 5:31&lt;/a&gt;)&lt;/p&gt;
-
-&lt;p&gt;Sometime later, this same Daniel was given the following word from the Lord
-by an angel,&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;Seventy weeks are determined upon thy people and upon thy holy city, to
-  finish the transgression, and to make an end of sins, and to make
-  reconciliation for iniquity, and to bring in everlasting righteousness,
-  and to seal up the vision and prophecy, and to anoint the most Holy. 
-Know therefore and understand, that from the going forth of the commandment
-  to restore and to build Jerusalem unto the Messiah the Prince shall be
-  seven weeks, and threescore and two weeks: the street shall be built
-  again, and the wall, even in troublous times. 
-And after threescore and two weeks shall Messiah be cut off, but not for
-  himself: and the people of the prince that shall come shall destroy the
-  city and the sanctuary; and the end thereof shall be with a flood, and
-  unto the end of the war desolations are determined. 
-And he shall confirm the covenant with many for one week: and in the midst
-  of the week he shall cause the sacrifice and the oblation to cease, and
-  for the overspreading of abominations he shall make it desolate, even
-  until the consummation, and that determined shall be poured upon the
-  desolate. 
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/9/24-27&quot;&gt;Daniel 9:24-27&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;The best interpretation of this prophecy that I have come across is that
-each “week” (Aramaic word for seven) refers to a seven year period.  “Seventy
-weeks” therefore  refers to 490 years.  While I have not tracked it myself,
-others have tracked the 69 of these “weeks” to be a measure of time from the
-date Cyrus, king of Persia, sent the Jews to rebuild the city–“the going
-forth of the commandment to restore and to build Jerusalem”–until the time
-Jesus rode into Jerusalem on a donkey–“until Messiah the Prince”.  During
-this time, the city and the wall were rebuilt.  But upon coming,
-Jesus, herein known as “Messiah the Prince”, was then “cut off” by the cross.&lt;/p&gt;
-
-&lt;p&gt;At this point, the prophecy switches to discussing a “prince that shall
-come”, indicating an indefinite time into the future.  Indeed, the last week,
-the 70th week, has not yet taken place.&lt;/p&gt;
-
-&lt;p&gt;But let’s look closer at beginning of the prophecy, and the declaration of
-what it describes.  The seventy weeks were determined to,
-make an “end of sins, to finish the transgression [of Adam], to make
-reconciliation for iniquity, and to bring in everlasting righteousness …”
-In other words, the Salvation that God hinted to Adam was on its way.
-Not only that, the time of Christ’s coming had been determined.&lt;/p&gt;
-
-&lt;p&gt;I find it fascinating that the Magii who visited Jesus came “from the East”.
-Might it be that these Magii were what remained of an order that Daniel
-started following this prophecy, and so they were already looking for and
-expecting the Christ?&lt;/p&gt;
-
-&lt;p&gt;Prophecy then fell silent for what appeared to be nearly four hundred years.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-genealogy&quot;&gt;The Genealogy&lt;/h2&gt;
-
-&lt;p&gt;We pick the story up again in the historical records of both Matthew and Luke.
-These two accounts contain the most detail about the birth of the Christ.
-In particular, each of these two gospels contains a genealogy.&lt;/p&gt;
-
-&lt;p&gt;The genealogy in Luke
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/luk/3/23-28&quot;&gt;Luke 3:23-28&lt;/a&gt;)
-traces the Davidic line from Adam, through David and then down through his
-son Nathan.  Nathan’s line didn’t follow the line of the dynasty at all, and
-other than David, doesn’t contain any kings within it.  Further, unlike the
-genealogy in Matthew, this genealogy traces Jesus’ heritage through Mary,
-the mother of Jesus.&lt;/p&gt;
-
-&lt;p&gt;The genealogy found in the book of Matthew
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/1/2-16&quot;&gt;Matt 1:2-16&lt;/a&gt;)
-traces the line of Joseph, Jesus’ adoptive father, from Abraham, through
-king David and the dynasty that followed, through the kings that were
-overthrown by Babylon, the leaders that rebuilt Jerusalem, all the way to a
-poor carpenter named Joseph.  By birth, Joseph held what was left of the right
-to David’s dynasty.  By legal adoption, that right was then given to Jesus.&lt;/p&gt;
-
-&lt;p&gt;Jesus birth itself fulfilled the prophecy from Genesis, itself reiterated
-in Isaiah,&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;Behold, a virgin shall be with child, and shall bring forth a son, and
-they shall call his name Emmanuel, which being interpreted is, God with us.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/1/23&quot;&gt;Matt 1:23&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;Mary, as the virgin in this verse, then gave birth to Jesus.  This fulfilled
-the prophecy from Genesis
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/gen/3/14&quot;&gt;Gen 3:14-15&lt;/a&gt;),
-regarding the seed of the woman, and also the prophecy Nathan related to David
-saying that Jesus’ father would be the Almighty Himself.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/2sa/7/14&quot;&gt;2 Samuel 7:14&lt;/a&gt;)&lt;/p&gt;
-
-&lt;p&gt;Indeed, we know that Jesus was not only the son of God, he was also the
-&lt;em&gt;only&lt;/em&gt; son begotten by God.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/jhn/3/16&quot;&gt;John 3:16&lt;/a&gt;)
-“Begotten” being an old English word for “fathered”.  The fact that Jesus was
-the only “begotten” of the Father just points out that God only “fathered” one
-son, and that one was Jesus.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-angels&quot;&gt;The Angels&lt;/h2&gt;
-
-&lt;p&gt;Birth announcements are nothing new, and God wanted to make certain the birth
-of His son was properly announced.  Therefore, on the night that Jesus was
-born, the story transitions to shepherds.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;And there were in the same country shepherds abiding in the field, keeping
-  watch over their flock by night.
-And, lo, the angel of the Lord came upon them, and the glory of the Lord
-  shone round about them: and they were sore afraid. 
-And the angel said unto them, Fear not: for, behold, I bring you good
-  tidings of great joy, which shall be to all people. 
-For unto you is born this day in the city of David a Saviour, which is
-  Christ the Lord. 
-And this shall be a sign unto you; Ye shall find the babe wrapped in
-  swaddling clothes, lying in a manger. 
-And suddenly there was with the angel a multitude of the heavenly host
-   praising God, and saying, 
-Glory to God in the highest, and on earth peace, good will toward men. 
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/luk/2/8-14&quot;&gt;Luke 2:8-14&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;To my knowledge, this is the first time the word “Gospel” is used to describe
-a message.  Yes, it’s used earlier in the historical records to describe the
-records themselves, but this is the first time within the record.  Did you
-catch it?  The angel said, “I bring you good tidings” … that’s the word!&lt;/p&gt;
-
-&lt;p&gt;The Greek word for gospel is a compound word from the prefix “eu”, sometimes
-transliterated as “ev”, and “angelion”, from which we get the word angel.
-It is commonly translated as “Good News” today, although I believe this
-modern translation misses the true meaning of this word.&lt;/p&gt;
-
-&lt;p&gt;Let’s look at the “eu” prefix first.  The Greeks had two prefixes they used
-for “good”.  One was “kali”, from which we get “calligraphy” or “pretty
-writing”.  It means good as in pretty, nice, or pleasant.  The other
-prefix, “eu”, held the concept of good as in good in a godly, righteous,
-kind of way.&lt;/p&gt;
-
-&lt;p&gt;This wasn’t just “Good News” because it was pleasant, it was “Good News”
-because it was right, just, and came from God.  This is “Godly News”.&lt;/p&gt;
-
-&lt;p&gt;“News” itself has also become a poor translation for “message”.  It has worked
-for many years, but “news” today now refers to an entertainment industry
-willing to sacrifice truth in its competition for viewers and dollars.  This
-is not the “news” of the Gospel.  Rather, the “news” of the Gospel was a
-specific message, given by God.  In this instance, God gave his message to
-angels who where then commanded to deliver it to the shepherds.  The shepherds
-then shared this the message and their experiences in their excitement, and
-so the message is now available for us to read today.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/luk/2/17&quot;&gt;Luke 2:17&lt;/a&gt;)&lt;/p&gt;
-
-&lt;p&gt;This is the idea behind the word Gospel: God sent us a message from heaven.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-gospel-and-jesus&quot;&gt;The Gospel and Jesus&lt;/h2&gt;
-
-&lt;p&gt;At this point, we’ve traced the history of Christmas to the time of Christmas
-itself, but its hard to stop there.  There’s just so much more to the story.
-Indeed, the Gospel message presented by the angels was far from the end of
-the message God wanted to give.  Specifically, God gave a message to Jesus
-that He was to teach.&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;God, who at sundry times and in divers manners spake in time past unto
-  the fathers by the prophets, 
-Hath in these last days spoken unto us by his Son, whom he hath appointed
-  heir of all things, by whom also he made the worlds; 
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/heb/1/1-2&quot;&gt;Hebrews 1:1-2&lt;/a&gt;)&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;Once Jesus came of age, He began to travel and teach.  The Bible records
-several locations where He taught.  It also records one such sermon in
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/5/1&quot;&gt;Matthew 5&lt;/a&gt;-7.  This has become
-known as the “Sermon on the Mount”–since it was taught on a mountain.  It’s
-fascinating to note that a very similar sermon was taught in
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/luk/6/1&quot;&gt;Luke 6&lt;/a&gt; from
-within a valley, something I often call the “Sermon in the Valley.”&lt;/p&gt;
-
-&lt;p&gt;At one time, I wondered that Jesus taught two messages that were so similar.
-A friend of mine then chose to become a missionary, and described how his
-job entailed going from church to church in order to raise support.  Since
-he typically didn’t return to the same church twice, he &lt;em&gt;taught the same
-message&lt;/em&gt; from place to place.  This then explains what Jesus was doing as well:
-going from one community to another teaching this same message.&lt;/p&gt;
-
-&lt;p&gt;Mark uses the term Gospel to describe this message,&lt;/p&gt;
-
-&lt;blockquote&gt;
-  &lt;p&gt;Now after that John was put in prison, Jesus came into Galilee, preaching
-  the gospel of the kingdom of God,
-And saying, The time is fulfilled, and the kingdom of God is at hand:
-  repent ye, and believe the gospel. 
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/mar/1/14-15&quot;&gt;Mark 1:14-15&lt;/a&gt;&lt;/p&gt;
-&lt;/blockquote&gt;
-
-&lt;p&gt;Mark doesn’t specify what this Gospel is.  It follows from the context that
-the Gospel is the message Jesus is teaching.  Mark summarizes it here, but
-Matthew gives us a more complete glimpse of it.&lt;/p&gt;
-
-&lt;p&gt;Nor is this the entirety of “&lt;em&gt;the&lt;/em&gt; Gospel”.  Rather it is the message Jesus
-brought from His father to share with the world, which calls all men to
-repent and to turn from their sins.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
-
-&lt;p&gt;The Gospel that Jesus presented was thousands of years in coming.
-As we’ve seen above, Christmas was first prophesied to Adam and Eve, where
-God promised that the offspring of a virgin would crush the head of the
-serpent.  His coming was prophesied again to David, when God promised that
-David’s seed would rule after him, and that of this king’s rule there would
-be no end.  Moreover, God promised that He would personally be the Father
-of this coming king.&lt;/p&gt;
-
-&lt;p&gt;This brings us to the last point, in order to be an &lt;em&gt;everlasting&lt;/em&gt; king, Jesus
-needed to conquer death.  This follows naturally.  To conquer death, Jesus
-needed to die and then to rise again.  History records that He did indeed
-do this (&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/28/1&quot;&gt;Matt 28:1&lt;/a&gt;,
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/mar/16/1&quot;&gt;Mark 16:1&lt;/a&gt;,
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/luk/24/1&quot;&gt;Luke 24:1&lt;/a&gt;,
-&lt;a href=&quot;https://www.blueletterbible.org/kjv/jhn/00/1&quot;&gt;John 20:1&lt;/a&gt;).&lt;/p&gt;
-
-&lt;p&gt;There’s more to the story, and more than I will be able to get into here.
-Indeed, it’s not even complete as of today.  That last week, the 70th week
-prophesied by Daniel, has not yet to taken place.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/dan/9/27&quot;&gt;Daniel 9:27&lt;/a&gt;)
-Until that time happens, there will be no end to sin, and the transgression
-will not be complete.  Sin, still today, remains the reason for the
-suffering in the world.  We also know that the King will return to make
-an end to it.&lt;/p&gt;
-
-&lt;p&gt;Only one question remains.  When the King returns, how will he find you?
-Did you listen to His message when He was here?  Have you prepared yourself
-for His return?  (&lt;a href=&quot;https://www.blueletterbible.org/kjv/mat/7/22&quot;&gt;Matt 7:22-23&lt;/a&gt;)&lt;/p&gt;
-
-&lt;p&gt;This, then, is the background of the Christmas story.  In it is the whole
-of human suffering, going back all the way to the dawn of creation.  It’s
-the story of the birth of the King who is healing individuals today, and
-who will someday return to judge the living and the dead.&lt;/p&gt;
-
-&lt;p&gt;I wish you therefore a Merry Christmas, and ask that you join me in praying
-that His return would come soon.&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;For unto you is born this day in the city of David a Saviour, which is Christ the Lord.  (Luke 2:11)&lt;/em&gt;</description>
-        <pubDate>Wed, 25 Dec 2019 00:00:00 -0500</pubDate>
-        <link>https://zipcpu.com/blog/2019/12/25/christmas-gospel.html</link>
-        <guid isPermaLink="true">https://zipcpu.com/blog/2019/12/25/christmas-gospel.html</guid>
         
         
         <category>blog</category>
