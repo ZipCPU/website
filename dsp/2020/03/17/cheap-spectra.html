@@ -1,0 +1,1596 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Cheap Spectral Estimation</title>
+  <meta name="description" content="If you have to debug a DSP algorithm, there are a couple of tools availableto you.  We’ve already discussed grabbing datasamples and calculatinghistograms.  ...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/dsp/2020/03/17/cheap-spectra.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Cheap Spectral Estimation</h1>
+    <p class="post-meta"><time datetime="2020-03-17T00:00:00-04:00" itemprop="datePublished">Mar 17, 2020</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>If you have to debug a DSP algorithm, there are a couple of tools available
+to you.  We’ve already discussed <a href="/blog/2017/06/08/simple-scope.html">grabbing data
+samples</a> and calculating
+<a href="/dsp/2019/12/21/histogram.html">histograms</a>.  We’ve also
+discussed taking <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s
+of your data.  But what if you want to estimate the spectral content of a
+signal within your FPGA on a platform that doesn’t have the resources to
+accomplish a full <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>?</p>
+
+<table align="center" style="float: right"><caption>Fig 1. Estimating spectra from within an FPGA</caption><tr><td><img src="/img/cheapspectra/need.svg" alt="" width="420" /></td></tr></table>
+
+<p>Certainly an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+is the ideal operation to estimate spectral content: <a href="https://en.wikipedia.org/wiki/Window_function">window
+a segment of an incoming signal</a>,
+perform an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+on that segment and then <a href="https://github.com/ZipCPU/fftdemo/blob/master/rtl/fft/logfn.v">magnitude square each of the output
+samples</a> for
+visual effect.  Is the result too “noisy”?  If so, you can average several
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s together so that
+you can “see” the spectral shape of what’s going on in your environment.
+It’s just that all this comes at a cost.  In <a href="/dsp/2018/10/02/fft.html">my own pipelined FFT
+implementation</a>, each stage
+requires between one and six multiplies together with enough block RAM to
+hold an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>.
+At <code class="highlighter-rouge">log_2(N)</code> stages per
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>, this <a href="/blog/2017/06/12/minimizing-luts.html">resource
+requirement</a>
+can start to add up.</p>
+
+<p>On the other hand, what if I told you that you could get (roughly) the same
+spectrum estimate for only the cost of a single DSP element, about two
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>’s worth of block
+RAM and some LUTs to control the whole logic?  Well, that and a nearby
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>?</p>
+
+<p>How about if I do one better, and say that the algorithm is easier to debug
+than an <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>?
+(<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> internals
+are notoriously painful to debug.)</p>
+
+<p>There’s no real trick up my sleeve here, nothing more than plain old good
+engineering practice: if <a href="/blog/2017/06/12/minimizing-luts.html">resources are
+tight</a> in one location,
+such as <a href="https://github.com/ZipCPU/sdr">in an iCE40 FPGA SDR
+application</a>, you just move
+the resources you need to another location where they aren’t nearly as tight.</p>
+
+<p>Let’s take a peek today at how we can move the spectral estimation problem
+from the FPGA to a nearby
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> without sacrificing
+(much) of the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>’s
+capability.</p>
+
+<h2 id="the-key-wiener-khinchin-theorem">The key: Wiener-Khinchin Theorem</h2>
+
+<p>The key trick to this whole exchange is the <a href="https://en.wikipedia.org/wiki/Wiener%E2%80%93Khinchin_theorem">Wiener-Khinchin
+theorem</a>.  The
+<a href="https://en.wikipedia.org/wiki/Wiener%E2%80%93Khinchin_theorem">Wiener-Khinchin
+theorem</a>
+states that the
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a> of the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+of a signal is equivalent to the
+<a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier transform</a> of the
+<a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">Power Spectral Density</a>
+of the same signal.  Using this principle, we can estimate the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+of a signal and then later take an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> of the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> to get our
+<a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">Power Spectral Density</a>
+estimate.</p>
+
+<p>Let me back up, though, and start out closer to the beginning.  Imagine you are
+in a lab and you have a signal you want to analyze.  Perhaps you want to
+verify the shape of a <a href="https://en.wikipedia.org/wiki/Low-noise_amplifier">low-noise
+amplifier</a>,
+or find out whether or not there’s any interference from your digital
+electronics into some analog band, whether the signal you are transmitting
+from across the room made it into the receiver, or for that matter why
+your algorithm isn’t working no matter what it is.  What would you do?  You
+would place your signal into a <a href="https://en.wikipedia.org/wiki/Spectrum_analyzer">spectrum
+analyzer</a>
+and examine it’s content by frequency on the screen.</p>
+
+<table align="center" style="float: left"><caption>Fig 2. A Spectrum Analyzer</caption><tr><td><img src="/img/cheapspectra/specan.png" alt="" width="225" /></td></tr></table>
+
+<p>The modern day digital <a href="https://en.wikipedia.org/wiki/Spectrum_analyzer">spectrum
+analyzer</a> will take a
+snapshot of that signal, possibly
+<a href="https://en.wikipedia.org/wiki/Window_function">window</a> the snapshot somehow,
+and then plot the <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a>
+of the result on the front panel.  Mathematically, this operation looks
+somewhat like,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Xfwin.png" alt="" width="404" /></td></tr></table>
+
+<p>where <code class="highlighter-rouge">x(t)</code> is the received waveform you wish to examine, <code class="highlighter-rouge">h(t)</code> is any
+potential
+<a href="https://en.wikipedia.org/wiki/Window_function">window</a>
+function, <code class="highlighter-rouge">T</code> is the length of the observed
+<a href="https://en.wikipedia.org/wiki/Window_function">window</a>, <code class="highlighter-rouge">t_o</code> is the middle of
+the snapshot window and <code class="highlighter-rouge">1/T</code> is the spectral resolution you have requested on
+the front panel.  The <a href="https://en.wikipedia.org/wiki/Spectrum_analyzer">device</a>
+then plots this <code class="highlighter-rouge">|X(t_o, f)|^2</code> value against an <code class="highlighter-rouge">f/T</code> horizontal axis.</p>
+
+<p>At this point, I would typically look at the screen and convince myself the
+spectral estimate is too “noisy” to do anything with, and so I’ll up the
+number of averages.  Let’s try <code class="highlighter-rouge">N</code> averages.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-psd-estimate-raw.png" alt="" width="357" /></td></tr></table>
+
+<p>Here, the plot settles  out quite nicely and you have a reasonably good
+estimate of what the spectrum of your incoming signal looks like.</p>
+
+<p>What we’ve just done is to estimate the <a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">Power Spectral
+Density</a>
+of our incoming waveform.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">Power Spectral
+Density</a>
+is defined as the <a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+of the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+of your signal, magnitude squared, as the size of the
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a> grows without bound.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-psd-defn.png" alt="" width="357" /></td></tr></table>
+
+<p>For those who aren’t familiar with probability and statistics, an <a href="https://en.wikipedia.org/wiki/Expected_value">expected
+value</a>
+is just an average.  For those who are, please forgive my heresy, I just
+misspoke.  An <a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+has a very specific mathematical definition that depends upon the probability
+density function of the underlying random value.  Specifically, the expected
+value of something, noted below as <code class="highlighter-rouge">E{x}</code> for the expected value of <code class="highlighter-rouge">x</code>,
+is defined as the integral of that something times the power spectral density
+of the random variable, shown below as <code class="highlighter-rouge">f_x(u)</code>, across its range, shown
+below by the infinite limits of the integral.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-expected-value.png" alt="" width="247" /></td></tr></table>
+
+<p>Taking “averages” only estimates the true mathematical and underlying
+<a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>–a difference
+which will come back to haunt us when we try to test today’s solution.</p>
+
+<p>If you are willing to bear with me for a little math, let’s see if we can
+simplify this expression for the
+<a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">PSD</a>
+into something more useful.  The first step to doing so would be to expand
+out the conjugate squaring operation that takes the absolute value squared
+of the <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+within.  Unfortunately, this will leave us with a nasty double integral.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-psd-1.png" alt="" width="672" /></td></tr></table>
+
+<p>At this point, we can move the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+inside the integrals and replace the
+<code class="highlighter-rouge">x^{*}(t_1)x(t_2)</code> expression with the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+function of our signal.  This will require a change of variables in a moment.</p>
+
+<p>For now, let’s define the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> function of
+a signal as the <a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+of our signal multiplied by itself at some offset.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-autocorr-defn.png" alt="" width="363" /></td></tr></table>
+
+<p>You may note that I’ve chosen to place <code class="highlighter-rouge">t</code> between the two points that are
+multiplied together.  This follows from
+<a href="https://www.ece.ucdavis.edu/~gardner/history.html">Gardner</a>’s work on
+<a href="https://en.wikipedia.org/wiki/Cyclostationary_process">cyclostationary signal
+processing</a>,
+although we’ll adjust things back to the more familiar form next.</p>
+
+<p>In particular, if our signal is <a href="https://en.wikipedia.org/wiki/Stationary_process">wide sense stationary
+(WSS)</a>, this function will
+be independent of time.  That means we can remove the time dependence of the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> and just
+represent it as a function of time difference, or <code class="highlighter-rouge">tau</code> which is also called
+the “lag”.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-autocorr-wss.png" alt="" width="272" /></td></tr></table>
+
+<p>(As a side note, I’ll just point out that no observed signal has truly been
+<a href="https://en.wikipedia.org/wiki/Stationary_process">WSS</a>, but the approximation
+tends to simplify the math.  As I mentioned above, I personally find a lot of
+meaning in <a href="https://en.wikipedia.org/wiki/Cyclostationary_process">cyclostationary
+signals</a>, where
+<code class="highlighter-rouge">R[t,tau]</code> isn’t independent of <code class="highlighter-rouge">t</code> but is rather periodic in <code class="highlighter-rouge">t</code>, but even
+that approximation has its limits.)</p>
+
+<p>This <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> has
+some useful properties to it which we’ll come back to in a bit in order to
+debug our own algorithm.  For example, <code class="highlighter-rouge">R[0]</code> will be greater than all other
+<img src="/img/cheapspectra/eqn-Rtau.png" alt="`R[tau]`" />
+values.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-midpt.png" alt="" width="185" /></td></tr></table>
+
+<p>Similarly, the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> function
+can easily be proven to be conjugate symmetric in time.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-symmetry.png" alt="" width="170" /></td></tr></table>
+
+<p>This will allow us in a moment to only estimate half of the function, and yet
+still get the other half for free.</p>
+
+<p>So let’s bring the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expectation</a> inside the
+integral of our
+<a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">PSD</a>
+expression, and then replace the
+<a href="https://en.wikipedia.org/wiki/Expected_value">expectation</a>
+of <code class="highlighter-rouge">x(t_1)x(t_2)</code> with this new
+<img src="/img/cheapspectra/eqn-Rtau.png" alt="`R[tau]`" /> expression.</p>
+
+<!-- ts = (u+t)/2, tau = t-u -->
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-psd-2.png" alt="" width="416" /></td></tr></table>
+
+<p>The good news is that this function can now easily be integrated across
+the new value s.  The bad news is that the limits have become harder to
+calculate.  For the sake of discussion, I’ll skip this bit of math and
+just point out that</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-psd-limit.png" alt="" width="326" /></td></tr></table>
+
+<p>as long as <img src="/img/cheapspectra/eqn-abstau.png" alt="`|tau|`" />
+is less than <code class="highlighter-rouge">T</code>.</p>
+
+<p>Now, since this
+<a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">PSD</a>
+expression no longer depends upon T, we can take our limit and discover</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-wiener-khinchin.png" alt="" width="194" /></td></tr></table>
+
+<p>This is the conclusion of the <a href="https://en.wikipedia.org/wiki/Wiener%E2%80%93Khinchin_theorem">Wiener-Khinchin
+theorem</a>
+theorem.</p>
+
+<p>What does this mean for the digital designer?  Simple.
+It means that if we estimate
+<img src="/img/cheapspectra/eqn-Rtau.png" alt="`R[tau]`" />,
+we can later take a <a href="https://en.wikipedia.org/wiki/Fourier_transform">Fourier
+transform</a> of our estimate
+in order to see what our
+<a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">PSD</a>
+looks like.</p>
+
+<p>But how to estimate
+<img src="/img/cheapspectra/eqn-Rtau.png" alt="`R[tau]`" />?</p>
+
+<h2 id="estimating-the-autocorrelation-function">Estimating the AutoCorrelation Function</h2>
+
+<p>How shall we go about estimating
+<img src="/img/cheapspectra/eqn-Rtau.png" alt="`R[tau]`" />?
+Let’s go back to the definition of
+<img src="/img/cheapspectra/eqn-Rtau.png" alt="`R[tau]`" />?
+and first derive some properties of the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+function, then it should be easier to see how we might use this,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-autocorr-defn.png" alt="" width="363" /></td></tr></table>
+
+<p>First, since we picked a function that wasn’t dependent upon time, we could
+just as easily write,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-autocorr-wss.png" alt="" width="272" /></td></tr></table>
+
+<p>The first important property, and one that I’ve mentioned above, is that
+<img src="/img/cheapspectra/eqn-Rtau-symmetry.png" alt="`R[tau]=R[-tau]`" />.
+I’ll leave this
+proof for the student.  The cool part about this property from a digital
+designers standpoint is that we only need to estimate one half of
+<img src="/img/cheapspectra/eqn-Rtau.png" alt="`R[tau]`" />.
+The other half we get for free.</p>
+
+<p>Second, remember how we stated that an
+<a href="https://en.wikipedia.org/wiki/Expected_value">expected value</a>
+could be approximated by an average?  Suppose we kept track of some number of
+prior samples of our signal, defined by however many values of
+<img src="/img/cheapspectra/eqn-tau.png" alt="`tau`" />
+we were interested in, and just averaged this product across <code class="highlighter-rouge">N</code> sample
+pairs?  We might then have</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-autocorr-estimate.png" alt="" width="300" /></td></tr></table>
+
+<p>If we skip the divide until later, we could rewrite this as,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-autocorr-sum.png" alt="" width="292" /></td></tr></table>
+
+<p>which looks very much like a value an FPGA might be able to calculate.</p>
+
+<p>Here’s how this algorithm will work:</p>
+
+<ol>
+  <li>
+    <p>As samples come in, we’ll store them into an internal buffer–much like
+we did for the
+<a href="/dsp/2017/12/30/slowfil.html">slow filter</a> implementation.</p>
+  </li>
+  <li>
+    <p>Also, for each sample that comes in, we’ll read back an older sample,
+multiply the two together, and then add the result to a correlation
+accumulator held in memory indexed by the lag index,
+<img src="/img/cheapspectra/eqn-tau.png" alt="`tau`" />.</p>
+
+    <p>Note that the first time through, when the number of averages so far is zero,
+we’d need to write the product to memory rather than adding it to the
+prior value.</p>
+
+    <p>There is another, similar, implementation which we could build that
+would use a <a href="https://en.wikipedia.org/wiki/Low-noise_amplifier">recursive
+averager</a>
+here in order to have a result which is always available.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-recursive.png" alt="" width="405" /></td></tr></table>
+
+<p>Let me invite you to consider building this alternative implementation
+   on your own and then comparing the results.  Today, though, we’ll just
+   build a straight <a href="/dsp/2017/10/16/boxcar.html">block
+   averager</a>.</p>
+
+<ol start="3">
+  <li>
+    <p>We’ll repeat this for some number of incoming averages, <code class="highlighter-rouge">N</code>, that we want
+to calculate.</p>
+  </li>
+  <li>
+    <p>Once we’ve reached the last average, we’ll stop,
+<a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a> the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>,
+and wait to be told to start again.</p>
+  </li>
+</ol>
+
+<ol start="5">
+  <li>
+    <p>The <a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>,
+can then read out the results and restart the spectral estimator
+to get a new estimate.</p>
+
+    <p>Optionally, we might choose to use a double-buffered design, similar to the
+one we used for the
+<a href="/dsp/2019/12/21/histogram.html">histogram</a> in order to be
+able to always read out valid results, even when the algorithm is doing
+its calculations.</p>
+  </li>
+</ol>
+
+<p>That’s the basics of the algorithm.  Now, let’s see what it takes to schedule
+this <a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>.</p>
+
+<h2 id="scheduling-the-pipeline">Scheduling the Pipeline</h2>
+
+<p>As with a lot of algorithms of this type, such as any of our
+<a href="/dsp/2017/12/30/slowfil.html">slower filters</a>,
+we’re going to drive this from a state machine.  The state machine will handle
+when to start, how many averages need to be made, and so forth.  The state
+machine signals will then be used to drive a
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+of operations for <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>.
+Let’s allow that our state machine creates a signal, <code class="highlighter-rouge">running</code>,
+which will be true as long as we continue our averages.</p>
+
+<p>Now let’s work through the signals we might need.  We can start with our
+product.  This product will need both our new data, together with the
+data received by our design some number of clocks ago.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">product</span> <span class="o">&lt;=</span> <span class="n">delayed_data</span> <span class="o">*</span> <span class="n">new_data</span><span class="o">;</span></code></pre></figure>
+
+<p>From just this operation alone, we can start working through an initial
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+schedule.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. Initial pipeline schedule</caption><tr><td><img src="/img/cheapspectra/initial-schedule.svg" alt="" width="640" /></td></tr></table>
+
+<p>For example, once this operation is complete, we’ll then have a product
+that we need to add to the prior sum.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">new_average</span> <span class="o">&lt;=</span> <span class="n">last_average</span> <span class="o">+</span> <span class="n">product</span><span class="o">;</span></code></pre></figure>
+
+<p>The product from our multiply will be available to create this new
+average on the clock after the multiply, and the new average will be available
+to be written to memory one clock after that.  These values are shown in
+our initial schedule above, shown in Fig. 3.</p>
+
+<p>A quick look at these signals will quickly reveal that they aren’t nearly
+sufficient for an algorithm like this one.  For example, where does the
+<code class="highlighter-rouge">delayed_data</code> signal come from?  It must be read from memory.  That will
+require a delayed signal address to be valid one clock earlier.  Likewise, the
+new data will need to be captured one clock earlier–but only at the beginning
+of our run.</p>
+
+<p>Let’s flesh this schedule out a bit more in Fig. 4 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. Full pipeline schedule</caption><tr><td><img src="/img/cheapspectra/pipeline-schedule.svg" alt="" width="780" /></td></tr></table>
+
+<p>Moving one clock forward, in order to have a previous average in the “Product
+Result” clock, we need an address in the prior clock period.  I also chose
+that prior clock period, “Product Operands”, to be the period where the
+state variables would be valid, and so I created a <code class="highlighter-rouge">running</code> state flag
+to indicate being in the state where I was walking through all of the
+different lags, calculating a product on each lag.</p>
+
+<p>Now, I can finally read the prior average,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">last_average</span> <span class="o">&lt;=</span> <span class="n">avmem</span><span class="p">[</span><span class="n">av_read_addr</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>I also need to delay this address by two clocks within the
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+in order to write the updated average data back, so I created a temporary
+address value to do this followed by the actual write address for the updated
+average data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="o">{</span> <span class="n">av_write_addr</span><span class="o">,</span> <span class="n">av_tmp_addr</span> <span class="o">}</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="o">{</span> <span class="n">av_write_addr</span><span class="o">,</span> <span class="n">av_tmp_addr</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">av_tmp_addr</span><span class="o">,</span> <span class="n">av_read_addr</span><span class="o">};</span></code></pre></figure>
+
+<p>That’s almost the whole
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>,
+save one problem: on our first set of
+averages, we want to make certain that we overwrite the average data.
+This requires a flag, I’ll call it <code class="highlighter-rouge">first_round</code>, indicating that the
+average data should be just the product of the data with the delayed data–not
+that plus the prior average.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">first_round</span><span class="p">)</span>
+		<span class="n">new_average</span> <span class="o">&lt;=</span> <span class="n">product</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">new_average</span> <span class="o">&lt;=</span> <span class="n">last_average</span> <span class="o">+</span> <span class="n">product</span><span class="o">;</span></code></pre></figure>
+
+<p>This <code class="highlighter-rouge">first_round</code> flag, however, has to come from our state machine which
+… is valid one round prior.  So, one round, prior I created a <code class="highlighter-rouge">clear_memory</code>
+flag which would be true any time the number of prior averages, <code class="highlighter-rouge">avcounts</code>,
+was zero.</p>
+
+<p>At least, that’s the basic algorithm design.</p>
+
+<h2 id="bootstrapping-the-simulation">Bootstrapping the Simulation</h2>
+
+<p>Formally verifying a DSP algorithm can be a real challenge simply for the
+fundamental reason that most formal verification tools can’t handle multiplies.
+Still, all I wanted from my design initially was to see a trace that would walk
+through all the operations of
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the core</a>
+and set the <a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a>
+output to indicate it had done everything.  Consider how much work that takes
+to do in simulation,</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="c1">//
+// Definitions for reset_core, clear_mem, and request_start are
+// defined above.
+//
+</span><span class="kt">int</span>	<span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">Verilated</span><span class="o">::</span><span class="n">commandArgs</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">);</span>
+	<span class="n">TESTB</span><span class="o">&lt;</span><span class="n">Vcheapspectral</span><span class="o">&gt;</span>	<span class="n">tb</span><span class="p">;</span>
+
+	<span class="c1">//
+</span>	<span class="c1">// ...
+</span>	<span class="c1">//
+</span>
+	<span class="c1">// Open a .VCD trace file, cheapspectral.vcd
+</span>	<span class="n">tb</span><span class="p">.</span><span class="n">opentrace</span><span class="p">(</span><span class="n">BASEFILE</span> <span class="s">".vcd"</span><span class="p">);</span>
+
+	<span class="n">reset_core</span><span class="p">(</span><span class="o">&amp;</span><span class="n">tb</span><span class="p">);</span>
+
+	<span class="kt">int</span>	<span class="n">iw</span><span class="p">,</span> <span class="n">lglags</span><span class="p">,</span> <span class="n">lgnavg</span><span class="p">,</span> <span class="n">dmask</span><span class="p">,</span> <span class="n">lags</span><span class="p">,</span> <span class="n">navg</span><span class="p">;</span>
+
+	<span class="n">iw</span>     <span class="o">=</span> <span class="n">tb</span><span class="p">.</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_width</span><span class="p">;</span>
+	<span class="n">lglags</span> <span class="o">=</span> <span class="n">tb</span><span class="p">.</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_lglags</span><span class="p">;</span> <span class="n">lags</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">lglags</span><span class="p">);</span>
+	<span class="n">lgnavg</span> <span class="o">=</span> <span class="n">tb</span><span class="p">.</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_lgnavg</span><span class="p">;</span> <span class="n">navg</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">lgnavg</span><span class="p">);</span>
+	<span class="n">dmask</span>  <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">iw</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+
+	<span class="c1">////////////////////////////////////////////////////////////////////////
+</span>	<span class="c1">//
+</span>	<span class="c1">// Test #1: Uniform (not Gaussian) noise
+</span>	<span class="c1">//
+</span>	<span class="c1">// Expected result: A peak at ADDR[&amp;], much lower values everywhere else
+</span>	<span class="c1">//
+</span>
+	<span class="n">clear_mem</span><span class="p">(</span><span class="o">&amp;</span><span class="n">tb</span><span class="p">,</span> <span class="n">lglags</span><span class="p">);</span>
+	<span class="n">request_start</span><span class="p">(</span><span class="o">&amp;</span><span class="n">tb</span><span class="p">);</span>
+
+	<span class="c1">// Set us up with completely random data, see what happens
+</span>	<span class="n">printf</span><span class="p">(</span><span class="s">"Random data test</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+	<span class="n">tb</span><span class="p">.</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_data_ce</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="p">(</span><span class="n">lags</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">navg</span><span class="p">);</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">tb</span><span class="p">.</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_data</span>    <span class="o">=</span> <span class="n">rand</span><span class="p">()</span> <span class="o">&amp;</span> <span class="n">dmask</span><span class="p">;</span>
+		<span class="n">tb</span><span class="p">.</span><span class="n">tick</span><span class="p">();</span>
+
+		<span class="k">if</span> <span class="p">((</span><span class="n">k</span> <span class="o">&amp;</span> <span class="mh">0x3ffff</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+			<span class="n">printf</span><span class="p">(</span><span class="s">"  k = %7d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">k</span><span class="p">);</span>
+	<span class="p">}</span>
+	<span class="n">tb</span><span class="p">.</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">i_data_ce</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">while</span><span class="p">(</span><span class="o">!</span><span class="n">tb</span><span class="p">.</span><span class="n">m_core</span><span class="o">-&gt;</span><span class="n">o_int</span><span class="p">)</span>
+		<span class="n">tb</span><span class="p">.</span><span class="n">tick</span><span class="p">();</span></code></pre></figure>
+
+<p>Yes, I did eventually verify <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>
+using simulation so I have the
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/cheapspectral_tb.cpp">Verilator C++ code</a>
+necessary to do it.  But let’s now compare that to the amount of code necessary
+to just create a trace showing this design in operation using
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">o_int</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Of course, when a <code class="highlighter-rouge">cover()</code> statement doesn’t produce the result you want,
+you might find yourself in a bind not knowing what went wrong.  So I added
+a couple extra cover statements to help me know how long I would need to
+wait for the outgoing
+<a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a>,
+<code class="highlighter-rouge">o_int</code>, to be true.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span>
+		<span class="k">cover</span><span class="p">($</span><span class="nb">fell</span><span class="p">(</span><span class="n">running</span><span class="p">))</span><span class="o">;</span>
+
+	<span class="c1">// Let's verify that a whole round does as we might expect
+</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="o">&amp;</span><span class="n">avcounts</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>There was one other key component to creating a trace of the logic within <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>
+using <a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>,
+and that was reducing the number of lags checked and the number of averages
+until the entire operation would fit into a reasonably sized trace.
+While every tool has their own way of adjusting parameters at build time,
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>
+allows embedded Python scripts to accomplish the task.
+Hence, the following lines in my
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/formal/cheapspectral.sby">script</a>
+trimmed this <code class="highlighter-rouge">cover()</code> check down to something usable,</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">[script]
+read -formal cheapspectral.v
+read -formal fwb_slave.v
+--pycode-begin--
+cmd = "hierarchy -top cheapspectral"
+if ("cvr" in tags):
+	cmd += " -chparam LGLAGS 2"
+if ("cvr" in tags):
+	cmd += " -chparam LGNAVG 3"
+output(cmd)
+--pycode-end--
+prep -top cheapspectral</code></pre></figure>
+
+<p>The entire <a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a> <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/formal/cheapspectral.sby">script is
+posted</a>,
+together <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">with the
+algorithm</a>
+on-line, so feel free to examine it and compare with the <a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/cheapspectral_tb.cpp">Verilator simulation
+code</a>.</p>
+
+<p>As I mentioned above, I also ran simulations on <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>
+(eventually), but we can come back to that in a moment.  For now, let’s back
+up and discuss the state machine signals for a moment based upon the trace
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a> generated and
+shown below in Fig. 5.</p>
+
+<table align="center" style="float: none"><caption>Fig 5. State machine signal trace</caption><tr><td><img src="/img/cheapspectra/fsm.svg" alt="" width="780" /></td></tr></table>
+
+<p>The whole operation starts out with a <code class="highlighter-rouge">start_request</code>, set by either the bus
+or a reset.  This start request clears the count of the number of averages,
+<code class="highlighter-rouge">avcount</code>, sets a flag to indicate that we’ll be clearing our average memory,
+<code class="highlighter-rouge">clear_memory</code>, and sets another flag to indicate that we wish to be responsive
+to the next data item that comes in, <code class="highlighter-rouge">check_this</code>.</p>
+
+<p>Once a new data value comes in, as indicated by
+<code class="highlighter-rouge">i_data_ce &amp;&amp; !running &amp;&amp; check_this</code>, <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>
+starts calculating products and adding them to the running
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+accumulators.  Once it has gone
+through all of the various lags contained in those accumulators,
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the core</a>
+then waits for another data item to come in.</p>
+
+<p>What if other data items come in while
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the core</a>
+is busy?  They are ignored.
+We can do this because we’ve already assumed that our signal was
+<a href="https://en.wikipedia.org/wiki/Stationary_process">wide-sense stationary</a>,
+and so which value we use to run our estimates on
+shouldn’t matter, right?  Well, there is an unfortunate consequence to this.
+Specifically, if you provide
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the core</a>
+with a <a href="https://en.wikipedia.org/wiki/Cyclostationary_process"><em>cyclo</em>stationary
+signal</a>,
+one whose statistics repeat in time every <code class="highlighter-rouge">1+2^LGLAGS</code> system clocks, you might
+not get a representative result.  If you think that’s your case, you can
+include a random number into the start check, so as to randomly spread out
+which values you check and thus guarantee a more uniform rather than periodic
+sample set–but that would be a (slightly) more advanced design than the
+one we are working on today.</p>
+
+<p>Suppose we zoom in on this trace a bit more, and see what’s going on while
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the core</a>
+is <code class="highlighter-rouge">running</code>?  There’s a lot that happens there, and it’s worth
+understanding.</p>
+
+<table align="center" style="float: none"><caption>Fig 6. Pipeline processing signals</caption><tr><td><img src="/img/cheapspectra/subfsm.svg" alt="" width="780" /></td></tr></table>
+
+<p>First, any time new data comes in, it is written to memory and the
+<code class="highlighter-rouge">data_write_address</code> is incremented.  If that new data comes in when the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+updater is already <code class="highlighter-rouge">running</code>, it simply gets written
+to memory but otherwise ignored.  This is why the <code class="highlighter-rouge">new_data</code> trace above
+can appear to skip values, such as jumping from <code class="highlighter-rouge">D4</code> to <code class="highlighter-rouge">D9</code>, but also
+increment from one value to the next, such as from <code class="highlighter-rouge">D9</code> to <code class="highlighter-rouge">DA</code> to <code class="highlighter-rouge">DB</code>
+when the data arrives slow enough.</p>
+
+<p>If the averager isn’t running, however, this new data sample is taken to run
+correlations on with past data.  It’s important, for
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+purposes, that
+the <code class="highlighter-rouge">delayed_address</code> be one greater than the <code class="highlighter-rouge">data_write_address</code> on this
+clock.  That helps to guarantee that no matter what data comes in while we
+are processing, the most recent data will always be read back in time to
+calculate a zero lag.  You can see this in Fig. 6 above by the fact that the
+<code class="highlighter-rouge">delayed_data</code> that’s read from memory always equals the new data on the last
+period while the design is <code class="highlighter-rouge">running</code>–regardless of how fast new data comes in.</p>
+
+<p>On the clock period after the <code class="highlighter-rouge">running</code> state machine signal, the address
+of the prior average for this lag is valid.  That gets read into <code class="highlighter-rouge">last_average</code>
+on the next clock, and then added to the <code class="highlighter-rouge">product</code> and written out on the
+clock after as the <code class="highlighter-rouge">new_average</code>.</p>
+
+<p>That’s essentially all of the major design details.  The cool part is that
+I was able to <em>see</em> all of these details from the <code class="highlighter-rouge">cover()</code> trace produced
+above–at least enough to organize it into the charts you see in both
+Figs. 5 and 6 above.</p>
+
+<p>Let’s walk through how all this logic fits together into the next section.</p>
+
+<h2 id="the-cheap-spectral-estimator-design">The Cheap Spectral Estimator Design</h2>
+
+<p>If you aren’t interested in the gory details of this algorithm, feel free to
+skip forward a section to see how well the algorithm works.  On the other hand,
+if you want to try building something similar, you might enjoy seeing how the
+inner details work.  Surprisingly, they aren’t all that different from how our
+prior <a href="/dsp/2017/12/30/slowfil.html">slow filter</a> worked:
+there’s one multiply that’s shared across operations and some block RAMs to
+contain any data we need to keep track of.</p>
+
+<p>Our core’s portlist footprint isn’t really much more than that of any <a href="/zipcpu/2017/11/07/wb-formal.html">generic
+Wishbone slave</a>.  The
+biggest difference is that we have the <code class="highlighter-rouge">i_data_ce</code> signal
+to indicate new data is valid, and the <code class="highlighter-rouge">i_data</code> signal containing any new
+samples from our signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span>	<span class="n">cheapspectral</span><span class="p">(</span><span class="n">i_clk</span><span class="o">,</span> <span class="n">i_reset</span><span class="o">,</span>
+		<span class="n">i_data_ce</span><span class="o">,</span> <span class="n">i_data</span><span class="o">,</span>
+		<span class="n">i_wb_cyc</span><span class="o">,</span> <span class="n">i_wb_stb</span><span class="o">,</span> <span class="n">i_wb_we</span><span class="o">,</span> <span class="n">i_wb_addr</span><span class="o">,</span> <span class="n">i_wb_data</span><span class="o">,</span> <span class="n">i_wb_sel</span><span class="o">,</span>
+			<span class="n">o_wb_stall</span><span class="o">,</span> <span class="n">o_wb_ack</span><span class="o">,</span> <span class="n">o_wb_data</span><span class="o">,</span>
+		<span class="n">o_int</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>We also output an
+<a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a>,
+<code class="highlighter-rouge">o_int</code>, any time
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the core</a>
+completes its averaging and has an
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+estimate available to be examined.</p>
+
+<p>Next, we’ll need to decide how we want to configure <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>.</p>
+
+<p>First, we’ll need to know how many lags we wish to check.  That is, how
+big, or rather how long, should our correlation function estimate be?  This is
+important.  The more samples in your estimate, the more freuency “resolution”
+your <a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">PSD</a>
+will have, but also the longer it will take the result will take to converge.</p>
+
+<p>The parameter of <code class="highlighter-rouge">LGLAGS=6</code> sets the number of lags calculated to <code class="highlighter-rouge">2^6 = 64</code>.
+It’s not amazing, but it will work for most testing and verification purposes.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">parameter</span>	<span class="n">LGLAGS</span> <span class="o">=</span> <span class="mi">6</span><span class="o">;</span></code></pre></figure>
+
+<p>We’ll also allow our incoming data to have an implementation dependent
+bit-width.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">parameter</span>	<span class="n">IW</span> <span class="o">=</span> <span class="mi">10</span><span class="o">;</span>	<span class="o">//</span> <span class="n">Input</span> <span class="n">data</span> <span class="n">Width</span></code></pre></figure>
+
+<p>Finally, we need to know how many averages to do.  The more averages you do,
+the less jumpy the resulting estimate will be and the closer it will hold to
+the actual <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>.
+However, the more averages you do, the longer it will take to get an estimate
+of your signal.  You, as the designer, will need to make that tradeoff.</p>
+
+<p>Here, we just specify the number of averages as a log based two number.
+Fifteen this corresponds to averaging <code class="highlighter-rouge">2^15 = 32,768</code> points together to
+get our spectral estimate.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">parameter</span>	<span class="n">LGNAVG</span> <span class="o">=</span> <span class="mi">15</span><span class="o">;</span></code></pre></figure>
+
+<p>Again, this only works if the incoming signal truly was
+<a href="https://en.wikipedia.org/wiki/Stationary_process">wide-sense stationary</a>.
+While very few signals truly are, the approximation is still useful in
+real life.  Just beware that if the environment changes mid-average, then
+you won’t necessarily see the change in the results.</p>
+
+<p>Two more parameters, the number of address bits for our bus interface and the
+width of the bus, are just useful for making the design easier to read below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">localparam</span>	<span class="n">AW</span> <span class="o">=</span> <span class="n">LGLAGS</span><span class="o">;</span>
+	<span class="k">localparam</span>	<span class="n">DW</span> <span class="o">=</span> <span class="mi">32</span><span class="o">;</span>	<span class="o">//</span> <span class="n">Bus</span> <span class="n">data</span> <span class="n">width</span></code></pre></figure>
+
+<p>For your sake, I’ll spare the port and signal definitions that follow, but
+you are more than welcome to examine the details of <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>
+itself if you would like.</p>
+
+<p>The first block of logic within
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the core</a>
+involves writing incoming data to memory.  Every new data value will get
+written to memory regardless of whether or not it drives a summation round
+below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">data_write_address</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_data_ce</span><span class="p">)</span>
+		<span class="n">data_write_address</span> <span class="o">&lt;=</span> <span class="n">data_write_address</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_data_ce</span><span class="p">)</span>
+		<span class="n">data_mem</span><span class="p">[</span><span class="n">data_write_address</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>Note that there’s no reference to the reset signal here.  This was a careful
+design choice made on purpose.  First, you can’t reset block RAM.  Sorry,
+it just doesn’t work.  Second, any data flow will (eventually) work its way
+through whatever junk was in the data registers initially.  Finally, this
+logic keeps our last read data values always valid.</p>
+
+<p>Where it gets annoying is when we try to build a simulation with a known
+input and a (hopefully) known output, but that’s another story.</p>
+
+<p>The next piece is the start request that starts off our whole estimate.  <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">This
+core</a>
+will immediately estimate the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> of an incoming
+waveform immediately on startup, on reset, or upon any write to <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">initial</span>	<span class="n">start_request</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="n">start_request</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_wb_stb</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_we</span><span class="p">)</span>
+			<span class="n">start_request</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span></code></pre></figure>
+
+<p>Once <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>
+has started running in response to this start request, the
+request line will clear itself.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">running</span> <span class="o">&amp;&amp;</span> <span class="n">i_data_ce</span> <span class="o">&amp;&amp;</span> <span class="n">check_this</span><span class="p">)</span>
+			<span class="n">start_request</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>The <code class="highlighter-rouge">check_this</code> signal below is used to indicate we want to calculate an
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+estimate.  It gets set on any start request, but also
+automatically clears itself after the last average.  In this fashion,
+we can hold onto an average until it is read before using it again.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">check_this</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">check_this</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">running</span><span class="p">)</span>
+		<span class="n">check_this</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">check_this</span> <span class="o">||</span> <span class="n">start_request</span> <span class="o">||</span> <span class="o">!</span><span class="p">(</span><span class="o">&amp;</span><span class="n">avcounts</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">check_this</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="p">(</span><span class="o">&amp;</span><span class="n">avcounts</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Once we’re all done, we’ll want to set an
+<a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a>
+wire for the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> to
+examine.  That’s the purpose of <code class="highlighter-rouge">o_int</code> below.  It will be set during the
+last average set once the last value is written to the average memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">o_int</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="n">start_request</span><span class="p">)</span>
+		<span class="n">o_int</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">o_int</span> <span class="o">&lt;=</span> <span class="n">update_memory</span> <span class="o">&amp;&amp;</span> <span class="n">last_write</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">&amp;</span><span class="n">av_write_addr</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The next item in our state machine is the counter of the number of
+averages we’ve calculated.  We’ll clear this on any start request,
+and otherwise increment it at the end of any processing group–as shown
+in Fig. 5 above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">avcounts</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">avcounts</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">running</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">start_request</span><span class="p">)</span>
+			<span class="n">avcounts</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_data_ce</span> <span class="o">&amp;&amp;</span> <span class="n">check_this</span><span class="p">)</span>
+			<span class="n">avcounts</span> <span class="o">&lt;=</span> <span class="n">avcounts</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>As shown in our
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+schedules and figures above, its important to calculate
+the address for the prior signal data, <code class="highlighter-rouge">delayed_addr</code>, so that it’s valid
+when <code class="highlighter-rouge">!running</code>.  Further, it needs to be valid on all but the last clock of
+<code class="highlighter-rouge">running</code>.  Finally, the value is critical.  When the data that we are going
+to examine gets written, that is when <code class="highlighter-rouge">i_data_ce &amp;&amp; !running</code>, this address
+<em>must</em> already be equal to the next data memory address following the write
+address.  That helps to 1) give us immunity to the data speed, while also
+2) guaranteeing that the last value we examine is the value just received and so
+contributes to the <code class="highlighter-rouge">R[0]</code> average.</p>
+
+<p>The extra variable here, <code class="highlighter-rouge">last_read_address</code>, is used as an indication
+that we need to base the next value on the current address of the next
+data that will come in, <code class="highlighter-rouge">data_write_address</code>, rather than just continuing
+to walk through older data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">running</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">last_read_address</span><span class="p">)</span>
+		<span class="n">delayed_addr</span> <span class="o">&lt;=</span> <span class="n">delayed_addr</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">delayed_addr</span> <span class="o">&lt;=</span> <span class="n">data_write_address</span> <span class="o">+</span> <span class="mi">1</span>
+			<span class="o">+</span> <span class="p">((</span><span class="n">i_data_ce</span> <span class="o">&amp;&amp;</span> <span class="n">check_this</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">last_read_address</span> <span class="o">=</span> <span class="p">(</span><span class="n">running</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">&amp;</span><span class="n">av_read_addr</span><span class="p">[</span><span class="n">LGLAGS</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]))</span><span class="o">;</span></code></pre></figure>
+
+<p>The address for the reading from the average accumulator memory is called
+<code class="highlighter-rouge">av_read_addr</code>.  We always walk through this address on every run from start,
+<code class="highlighter-rouge">av_read_addr==0</code>, to stop, <code class="highlighter-rouge">&amp;av_read_addr</code>.  When not running, we go back
+to the first address to prepare for the next round.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">running</span><span class="p">)</span>
+			<span class="n">av_read_addr</span> <span class="o">&lt;=</span> <span class="n">av_read_addr</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">av_read_addr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>If you look through the trace in Fig. 6 above, there’s really an extra clock
+in there over and above what needs to be there.  This is one of those pieces
+of logic that would need to be updated to get rid of that extra clock.</p>
+
+<p>Personally, I’m okay with the extra clock if for no other reason than the
+number of clock cycles required for any averaging cycle, <code class="highlighter-rouge">1+2^LGLAGS</code>, tends
+to be relatively prime to most digital artifacts and so (perhaps) keeping
+it this size will help reduce any
+non-<a href="https://en.wikipedia.org/wiki/Stationary_process">WSS</a>
+artifacts.</p>
+
+<p>That really only leaves two state machine signals left to define, the
+<code class="highlighter-rouge">running</code> and <code class="highlighter-rouge">clear_memory</code> flags.  As you may recall from our
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+schedule, <code class="highlighter-rouge">running</code> will be true while we are working through the various
+products of our
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+estimate.  It gets set whenever new data
+comes in that we are expecting, i.e. whenever <code class="highlighter-rouge">i_data_ce &amp;&amp; check_this</code> value.
+It gets cleared once we read from the last address of our
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+average memory.</p>
+
+<p>The <code class="highlighter-rouge">clear_memory</code> flag has a very similar set of logic.  This is the flag
+that’s used to determine if we want to rewrite our accumulators versus
+just adding more values to them.  For the first averaging pass, we’ll want
+this value to be set–so we set it on any reset or following any
+<code class="highlighter-rouge">start_request</code>.  We then clear it at the same time we clear the <code class="highlighter-rouge">running</code>
+flag.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">running</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">clear_memory</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">running</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="n">clear_memory</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">running</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">last_read_address</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">running</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="c1">// If we were clearing memory, it's now cleared
+</span>			<span class="c1">// and doesn't need any more clearing
+</span>			<span class="n">clear_memory</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="c1">// if (i_data_ce)
+</span>	<span class="k">begin</span>
+		<span class="n">running</span> <span class="o">&lt;=</span> <span class="n">i_data_ce</span> <span class="o">&amp;&amp;</span> <span class="n">check_this</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">start_request</span><span class="p">)</span>
+			<span class="n">clear_memory</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Finally, in order to know when to write to our memory, we’ll want to delay
+the <code class="highlighter-rouge">running</code> indicator through our
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>.
+That’s the purpose of the <code class="highlighter-rouge">run_pipe</code> signal below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">run_pipe</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">run_pipe</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="n">run_pipe</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">run_pipe</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">,</span> <span class="n">running</span> <span class="o">};</span></code></pre></figure>
+
+<p>It’s now time to walk through the various stages of the
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+processing.</p>
+
+<p>If you examine <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+code</a>,
+you’ll see I’ve placed a comment block at the beginning
+of the logic for each
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+stage, to help me keep track of what’s being
+done when.  Indeed, this was how I originally scheduled the
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+in the first place–I only drew Fig. 3 after the entire design was up
+and running.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">////////////////////////////////////////////////////////////////////////
+</span>	<span class="c1">//
+</span>	<span class="c1">//
+</span>	<span class="c1">// Clock 0 -- !running
+</span>	<span class="c1">//	This is the same clock as the data logic taking place above
+</span>	<span class="c1">// Valid this cycle:
+</span>	<span class="c1">//	delayed_addr, i_data_ce, i_data
+</span>	<span class="o">//</span></code></pre></figure>
+
+<p>After getting the various signals associated with each clock wrong a couple
+of times, I started adding to the comment block the list of signals defined
+by each block.  When that wasn’t enough, I then added to the block the signal(s)
+that defined when the
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+stage was active.  In this case, clock 0
+takes place one clock before the <code class="highlighter-rouge">running</code> clock, as shown in Fig. 4 above
+in the cycle I called “Incoming data”.</p>
+
+<p>It’s on this clock that we need to copy the incoming data to our <code class="highlighter-rouge">new_data</code>
+register, to be used in our subsequent
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+calculations.  This
+helps to make certain that it doesn’t change on us while running.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">running</span><span class="p">)</span>
+		<span class="n">new_data</span> <span class="o">&lt;=</span> <span class="n">i_data</span><span class="o">;</span></code></pre></figure>
+
+<p>Similarly, we’ll want to read the delayed data from memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">delayed_data</span> <span class="o">&lt;=</span> <span class="n">data_mem</span><span class="p">[</span><span class="n">delayed_addr</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>It’s on the next clock that we’ll multiply these two values together.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">////////////////////////////////////////////////////////////////////////
+</span>	<span class="c1">//
+</span>	<span class="c1">//
+</span>	<span class="c1">// Clock 1 -- running
+</span>	<span class="c1">// Valid this cycle:
+</span>	<span class="c1">//	new_data, delayed_data, clear_memory, av_read_addr
+</span>	<span class="o">//</span></code></pre></figure>
+
+<p>The biggest and most important part of this next clock cycle is multiplying
+our two data values together.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">FORMAL</span>
+	<span class="p">(</span><span class="o">*</span> <span class="n">anyseq</span> <span class="o">*</span><span class="p">)</span> <span class="kt">wire</span> <span class="kt">signed</span> <span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">IW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">formal_product</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">product</span> <span class="o">&lt;=</span> <span class="n">formal_product</span><span class="o">;</span>
+<span class="cp">`else</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">product</span> <span class="o">&lt;=</span> <span class="n">delayed_data</span> <span class="o">*</span> <span class="n">new_data</span><span class="o">;</span>
+<span class="cp">`endif</span></code></pre></figure>
+
+<p>Notice how I have two versions of this multiply above.  The first version,
+used when we are using formal verification, allows the multiplication result
+to be (roughly) anything.  (I constrain it more in the formal section that
+follows.)  The second version is how it would work normally.</p>
+
+<p>The <code class="highlighter-rouge">clear_memory</code> flag is true on this clock, but we won’t add this product
+together with the lag product for another clock.  On that clock we need to know
+if it’s the first round or not, so let’s move this value one clock further
+into our
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">first_round</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">first_round</span> <span class="o">&lt;=</span> <span class="n">clear_memory</span><span class="o">;</span></code></pre></figure>
+
+<p>The last thing we need from this clock cycle is the previous value from the
+accumulator memory.  That’s as easy as just reading it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">last_average</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">last_average</span> <span class="o">&lt;=</span> <span class="n">avmem</span><span class="p">[</span><span class="n">av_read_addr</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>Unlike the <a href="/dsp/2019/12/21/histogram.html">histogram</a>
+design, we don’t need to worry about operand forwarding during this calculation.
+When we read this value, we can rest assured that it won’t also be present
+in any of the two subsequent stages.  That will nicely simplify the logic
+that follows.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">////////////////////////////////////////////////////////////////////////
+</span>	<span class="c1">//
+</span>	<span class="c1">//
+</span>	<span class="c1">// Clock 2 -- $past(running), run_pipe[0], product is now valid
+</span>	<span class="c1">// Valid this cycle:
+</span>	<span class="c1">//	product, first_round, last_average, av_tmp_addr, last_tmp
+</span>	<span class="o">//</span></code></pre></figure>
+
+<p>Moving on to the next clock, we now want to add our product and last average
+together.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">calculate_average</span> <span class="o">=</span> <span class="n">run_pipe</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">first_round</span><span class="p">)</span>
+		<span class="n">new_average</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="n">LGNAVG</span><span class="p">)</span><span class="o">{</span><span class="n">product</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">IW</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">}},</span> <span class="n">product</span> <span class="o">};</span>
+	<span class="k">else</span>
+		<span class="n">new_average</span> <span class="o">&lt;=</span> <span class="n">last_average</span>
+			<span class="o">+</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="n">LGNAVG</span><span class="p">)</span><span class="o">{</span><span class="n">product</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">IW</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">}},</span> <span class="n">product</span> <span class="o">};</span></code></pre></figure>
+
+<p>I’ve chosen to be explicit with the sign bit extensions here to avoid
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+warnings, but this should be equivalent to <code class="highlighter-rouge">last_average + product</code>.</p>
+
+<p>I also need to move the accumulator read address from the last
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+stage into the next one.  This can be done with a simple shift register,
+although I’ll admit I did get the length of this register wrong once or
+twice.  This is now the correct width with <code class="highlighter-rouge">av_tmp_addr</code> having the same
+number of bits as <code class="highlighter-rouge">av_write_addr</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="o">{</span> <span class="n">av_write_addr</span><span class="o">,</span> <span class="n">av_tmp_addr</span> <span class="o">}</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="o">{</span> <span class="n">av_write_addr</span><span class="o">,</span> <span class="n">av_tmp_addr</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">av_tmp_addr</span><span class="o">,</span> <span class="n">av_read_addr</span><span class="o">};</span></code></pre></figure>
+
+<p>The last task in this
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">pipeline</a>
+stage is to determine if this is the last write block.  If it is, we can set the
+<a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a>
+above.  It would be a bit of a problem, however, for the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> to restart <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>
+only to get an <a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a>
+from a prior calculation.  To suppress this extra
+<a href="/zipcpu/2019/04/02/icontrol.html">interrupt</a>, we reset this
+flag on either a system reset, <code class="highlighter-rouge">i_reset</code>, or a user restart of <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="o">{</span> <span class="n">last_write</span><span class="o">,</span> <span class="n">last_tmp</span> <span class="o">}</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="p">(</span><span class="n">i_wb_we</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_stb</span><span class="p">))</span>
+		<span class="o">{</span> <span class="n">last_write</span><span class="o">,</span> <span class="n">last_tmp</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span>
+		<span class="o">{</span> <span class="n">last_write</span><span class="o">,</span> <span class="n">last_tmp</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">last_tmp</span><span class="o">,</span> <span class="p">(</span><span class="o">&amp;</span><span class="n">avcounts</span><span class="p">)</span> <span class="o">};</span></code></pre></figure>
+
+<p>That brings us to the third clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">////////////////////////////////////////////////////////////////////////
+</span>	<span class="c1">//
+</span>	<span class="c1">//
+</span>	<span class="c1">// Clock 3 -- run_pipe[1], new_average is now valid
+</span>	<span class="c1">// Valid this cycle:
+</span>	<span class="c1">//	new_average, update_memory, av_write_addr, last_write
+</span>	<span class="o">//</span></code></pre></figure>
+
+<p>During this clock, all we need to do is write the data back to memory.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">update_memory</span> <span class="o">=</span> <span class="n">run_pipe</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">update_memory</span><span class="p">)</span>
+		<span class="n">avmem</span><span class="p">[</span><span class="n">av_write_addr</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">new_average</span><span class="o">;</span></code></pre></figure>
+
+<p>When should we write?  Two clocks after <code class="highlighter-rouge">running</code>–which is what <code class="highlighter-rouge">run_pipe</code>
+keeps track of for us.</p>
+
+<p>The last piece of <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>
+is handling bus interactions.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">////////////////////////////////////////////////////////////////////////
+</span>	<span class="c1">//
+</span>	<span class="c1">// Handling the bus interaction
+</span>	<span class="c1">//
+</span>	<span class="c1">////////////////////////////////////////////////////////////////////////
+</span>	<span class="c1">//
+</span>	<span class="o">//</span></code></pre></figure>
+
+<p>If you are using
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>,
+this is really easy.  Indeed, it’s <a href="/zipcpu/2017/05/29/simple-wishbone.html">as easy as the simple Wishbone slave we
+discussed</a>
+some time ago.</p>
+
+<p>We hold the stall line low,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">o_wb_stall</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>and acknowledge any bus request one clock later.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">o_wb_ack</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">o_wb_ack</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">i_reset</span> <span class="o">&amp;&amp;</span> <span class="n">i_wb_stb</span><span class="o">;</span></code></pre></figure>
+
+<p>I know the <a href="/zipcpu/2017/05/29/simple-wishbone.html">original simple Wishbone
+slave</a>
+didn’t have the check on <code class="highlighter-rouge">i_reset</code>,
+but I’ve learned a bit since using
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>.
+Two particular things
+<a href="/blog/2017/10/19/formal-intro.html">formal methods</a>
+have taught me are first to use the initial value, and second
+to reset the acknowledgment.</p>
+
+<p>The last step would be to read data from the averages register.  Ideally,
+this should look like,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">o_wb_data</span> <span class="o">&lt;=</span> <span class="n">avmem</span><span class="p">[</span><span class="n">i_wb_addr</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>Except … that’s not good enough.  In particular, the average memory, <code class="highlighter-rouge">avmem</code>,
+has a width given by <code class="highlighter-rouge">2*IW+LGNAVG</code> which might or might not match the bus
+width of `o_wb_data.</p>
+
+<p>So I’m going to read into a register of exactly the right length first,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+			<span class="n">data_out</span> <span class="o">&lt;=</span> <span class="n">avmem</span><span class="p">[</span><span class="n">i_wb_addr</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+
+<p>and I’ll expand into the right width in the next step.</p>
+
+<p>If the two widths match, I can just keep <code class="highlighter-rouge">o_wb_data</code> the same as this
+<code class="highlighter-rouge">data_out</code> value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">AB</span> <span class="o">==</span> <span class="n">DW</span><span class="p">)</span>
+	<span class="k">begin</span> <span class="o">:</span> <span class="n">PERFECT_BITWIDTH</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">o_wb_data</span> <span class="o">=</span> <span class="n">data_out</span><span class="o">;</span></code></pre></figure>
+
+<p>At the next step, though, I need to admit I broke a working design by not
+doing this right.  Obviously, if there aren’t enough bits, you’d want to
+sign extend to the right number of bits.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">AB</span> <span class="o">&lt;</span> <span class="n">DW</span><span class="p">)</span>
+	<span class="k">begin</span> <span class="o">:</span> <span class="n">NOT_ENOUGH_BITS</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">o_wb_data</span> <span class="o">=</span> <span class="o">{</span> <span class="o">{</span><span class="p">(</span><span class="n">DW</span><span class="o">-</span><span class="n">AB</span><span class="p">)</span><span class="o">{</span><span class="n">data_out</span><span class="p">[</span><span class="n">AB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">}},</span> <span class="n">data_out</span> <span class="o">};</span></code></pre></figure>
+
+<p>Here’s the problem I ran into: I was running simulation tests with
+<code class="highlighter-rouge">2^1024</code> lags and <code class="highlighter-rouge">10</code> bit data, and <code class="highlighter-rouge">1024</code> averages.  When simulations took
+too long and the data didn’t quite look right (it was close), I adjusted
+the design to examine <code class="highlighter-rouge">2^64</code> lags and <code class="highlighter-rouge">32768</code> averages.  All of a sudden
+my correlation results were all broken.</p>
+
+<p>As an example, if you give <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>
+a sine wave input, you should be able to read a cosine
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+output, as shown in Fig. 7.</p>
+
+<table align="center" style="float: none"><caption>Fig 7. "Correct" sinewave autocorrelation result</caption><tr><td><img src="/img/cheapspectra/fixed-sinewave-correlation.png" alt="" width="474" /></td></tr></table>
+
+<p>However, when I looked at the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> of a sinewave,
+I received the <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+output shown in Fig. 8 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 8. Initially broken sinewave autocorrelation</caption><tr><td><img src="/img/cheapspectra/broken-sinewave-correlation.png" alt="" width="474" /></td></tr></table>
+
+<p>The first indication that something is broken is the fact that <code class="highlighter-rouge">R[0]</code>
+isn’t a maximum.  The second indication, the fact that the measured waveform
+looks nothing like what it should.</p>
+
+<p>It took me quite a bit of time to find this bug.  It got so far that I was
+chasing it in a simulation waveform, and the
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelations</a> all looked
+right.  Then I noticed the number of bits in <code class="highlighter-rouge">data_out</code>–35.  The top three
+bits were getting dropped in the assignment above (which wasn’t originally
+contingent on the number of bits).</p>
+
+<p>A sadder man but wiser now, I’ve learned to check for all possible differences
+between the number of bits in <code class="highlighter-rouge">data_out</code> and the bus width.  The check above,
+and the third case (below) fixes this issue.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span> <span class="o">:</span> <span class="n">TOO_MANY_BITS</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">o_wb_data</span> <span class="o">=</span> <span class="n">data_out</span><span class="p">[</span><span class="n">AB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AB</span><span class="o">-</span><span class="n">DW</span><span class="p">]</span><span class="o">;</span>
+
+		<span class="kt">wire</span>	<span class="n">unused</span><span class="o">;</span>
+		<span class="k">assign</span>	<span class="n">unused</span> <span class="o">=</span> <span class="o">&amp;{</span> <span class="n">data_out</span><span class="p">[</span><span class="n">AB</span><span class="o">-</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">};</span>
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>That’s the logic necessary to build <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">this
+core</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">endmodule</span></code></pre></figure>
+
+<p>But does it work?</p>
+
+<h2 id="simulation-results">Simulation Results</h2>
+
+<p>If you look over <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>,
+you’ll find a formal proof that the <code class="highlighter-rouge">R[0]</code> value is positive, and that
+the accumulator hasn’t overflowed.  While that’s nice, it doesn’t really
+compare <a href="https://github.com/ZipCPU/dspfilters/blob/master/rtl/cheapspectral.v">the
+core</a>’s
+performance against a known input to know that it produces a known
+output.  To handle that, I tried seven known inputs using a
+<a href="https://github.com/ZipCPU/dspfilters/blob/master/bench/cpp/cheapspectral_tb.cpp">Verilator simulation script</a>.</p>
+
+<ol>
+  <li>
+    <p>Random Noise</p>
+
+    <p>The classic <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelations</a>
+test is random noise.  If noise values have a known
+<a href="https://en.wikipedia.org/wiki/Variance">variance</a>,</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-variance.png" alt="" width="186" /></td></tr></table>
+
+<p>and if noise values are equally likely positive as they are negative, then
+   it’s not all that hard to prove that the correct correlation would be given
+   by,</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-random.png" alt="" width="318" /></td></tr></table>
+
+<p>Of course, this is only the true
+   <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>, depending
+   upon the mathematical
+   <a href="https://en.wikipedia.org/wiki/Expected_value">expectation</a> operator, which
+   itself is dependent upon a fictitious probability density function which may
+   or may not match reality.  Unfortunately, the algorithm above only
+   <em>estimates</em> the
+   <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> and 
+   the estimate may or may not equal the <a href="https://en.wikipedia.org/wiki/Expected_value">expected
+   value</a>.  Sure, over time it
+   will get closer, but how shall I easily tell if the current value is close
+   enough to declare that my simulated algorithm “passes” its simulation check?</p>
+
+<table align="center" style="float: none"><caption>Fig 9. Autocorrelation of random data</caption><tr><td><img src="/img/cheapspectra/random-autocorrelation.png" alt="" width="498" /></td></tr></table>
+
+<p>Having the right shape above is at least a good start, so let’s keep going.</p>
+
+<ol start="2">
+  <li>
+    <p>All zeros</p>
+
+    <p>After my frustrations with the random data, I thought to try some carefully
+chosen known inputs for testing.  The easiest of these to work with was
+the all zeros incoming sequence.  Clearly if the inputs are all zero, then
+the <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelations</a>
+estimate should be zero as well.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-zero.png" alt="" width="170" /></td></tr></table>
+
+<p>Unfortunately, the all zeros sequence doesn’t really create anything pretty
+   to plot and display.  Hence, while the test (now) works, it doesn’t leave
+   much to show for it.</p>
+
+<ol start="3">
+  <li>
+    <p>All ones</p>
+
+    <p>The problem with the all zeros sequence is just the large number of broken
+algorithms that would still pass such a test.  Therefore I thought I’d
+create a third test where the inputs were all ones.  As with the all zeros
+test, the result should be absolutely known when done.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-ones.png" alt="" width="178" /></td></tr></table>
+
+<p>Sadly, as with the all zeros test, the result isn’t very interesting and so
+   not really worth plotting.</p>
+
+<ol start="4">
+  <li>
+    <p>Alternating ones and negative ones</p>
+
+    <p>What if we alternate plus and minus ones on the input?  Again, the estimate
+of the <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelations</a>
+should match the actual
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelations</a>, with</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-alternating.png" alt="" width="200" /></td></tr></table>
+
+<p>Now we can finally plot something of marginal interest.  In this case,
+   we can also compare the expected
+   <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+   against the measured one.</p>
+
+<table align="center" style="float: none"><caption>Fig 10. Autocorrelation of an alternating sequence</caption><tr><td><img src="/img/cheapspectra/alternating-correlation.png" alt="" width="475" /></td></tr></table>
+
+<p>The two are clearly shown on top of each other, so we can mark this test
+   down as a success.</p>
+
+<ol start="5">
+  <li>
+    <p>Alternating ones and negative ones, only slower</p>
+
+    <p>I then tried to create a similar signal that would alternate ones
+and negative ones, just slower: seven <code class="highlighter-rouge">1</code>s followed by seven <code class="highlighter-rouge">-1</code>s in
+a repeating sequence.  The only problem was, I didn’t really work out the
+math to know what the “right” answer was or should be.  As a result,
+although I can plot the result, it’s harder to tell whether it works or not.</p>
+  </li>
+  <li>
+    <p>A Sinewave</p>
+
+    <p>That leads to another
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+test that might be of interest: what would happen if we gave this algorithm
+a sinewave as an input?</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-sine-input.png" alt="" width="246" /></td></tr></table>
+
+<p>This is another one of those “classic” inputs, where the result should
+   match a known pattern.  Indeed, with just a little math, it’s not hard
+   to prove what the
+   <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> result
+   should be.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-cosine.png" alt="" width="217" /></td></tr></table>
+
+<p>Unfortunately, as with the first test case, the core will only produce an
+   <em>estimate</em> of the true
+   <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> function,
+   rather than an exact
+   <a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a> result.
+   Worse, with a little work, you’ll realize that multiplying two sine
+   function values together will result in a cosine plus another trigonometric
+   term.  The second term <em>should</em> average out, but I haven’t yet tracked out
+   what it’s limits are and whether or not the average is causing this second
+   term to average out as fast as it should.</p>
+
+<p>Still, if you compare the sinewave spectra with the expected spectra in
+   Fig. 11 below, the two land nicely on top of each other.</p>
+
+<table align="center" style="float: none"><caption>Fig 11. PSD estimate of a sinewave</caption><tr><td><img src="/img/cheapspectra/sinewave-spectra.png" alt="" width="476" /></td></tr></table>
+
+<p>That suggests that we’re at least on the right track.</p>
+
+<p>I will admit that when I looked at this shape for the first time I was a
+   little confused.  The “correct” spectra for a sinewave should be a single
+   peak, right?</p>
+
+<p>Sadly, no.  The “correct” spectra of a sinewave should be two peaks–one
+   at the positive sinewave frequency and one at the negative frequency.
+   (I was using complex
+   <a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s.)  Not only
+   that, but the sinewave’s spectra should consist of two sinc functions
+   superimposed upon each other, and so this result does look right–even if
+   it wasn’t what I was expecting at first.</p>
+
+<ol start="7">
+  <li>
+    <p>A Random Binary Waveform</p>
+
+    <p>Let’s finally move on to a last test case, and pick something more likely
+to be a useful demonstration.  So, let’s pick a random binary waveform.
+This waveform will contain a series of bit-periods where the input to
+the core will be either plus or minus full scale, <code class="highlighter-rouge">+/-  (2^{IW-1}-1)</code>.</p>
+
+    <p>As with the sine wave, the true
+<a href="https://en.wikipedia.org/wiki/Autocorrelation">autocorrelation</a>
+of such a waveform has a closed form representation,</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><tr><td><img src="/img/cheapspectra/eqn-Rtau-rbw.png" alt="" width="391" /></td></tr></table>
+
+<p>where <code class="highlighter-rouge">sigma^2</code> is the absolute value of the signal.</p>
+
+<p>Much to my chagrin, I only got close to this estimate, as shown in Fig. 12.</p>
+
+<table align="center" style="float: none"><caption>Fig 12. Autocorrelation of random binary waveform</caption><tr><td><img src="/img/cheapspectra/rbw-correlation.png" alt="" width="469" /></td></tr></table>
+
+<p>Was it close enough?  Perhaps, but what I’d really like to do is to display
+   the <a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">PSD</a>
+   of such a signal, as shown in Fig. 13 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 13. PSD estimate of random binary waveform</caption><tr><td><img src="/img/cheapspectra/rbw-spectra.png" alt="" width="476" /></td></tr></table>
+
+<p>In this case, we got close again.  Unfortunately, it wasn’t close enough to
+match the expected shape over 10dB down.</p>
+
+<p>Still, all told, we’ve done a decent job of estimating the
+<a href="https://en.wikipedia.org/wiki/Spectral_density#Power_spectral_density">PSD</a>
+of a signal within our FPGA, but without actually running any
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>s
+on the FPGA to do it.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>If your goal is to grab a picture of what the spectral content is of a signal
+within your design, but without using a lot of logic, then I’d say we’ve
+achieved it with this little design.  No, it’s not perfect, and yes there’s some
+amount of variability in the estimated waveforms–this is all to be expected.
+The cool part is that this technique only uses one multiply and a couple of
+block RAM memories.</p>
+
+<p>Will this fit on an iCE40 UP5k, together with other things?  Indeed, there’s
+a good chance I’ll be able to add this in to some of my 
+<a href="https://github.com/ZipCPU/sdr">SDR</a> designs to “see” what’s coming in
+from the antenna.  Indeed, given the speed and simplicity of this algorithm,
+I might even be able to handle the incoming data at the 36MHz data rate!
+There’s no way I could’ve done that with an
+<a href="https://en.wikipedia.org/wiki/Fast_Fourier_transform">FFT</a>
+approach–not on this hardware at least.</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Only they would that we should remember the poor; the same which I also was forward to do. (Gal 2:10)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
