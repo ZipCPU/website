@@ -1,0 +1,2109 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Debugging AXI Streams</title>
+  <meta name="description" content="Fig 1. A typical data streaming problem">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/dsp/2020/04/20/axil2axis.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Debugging AXI Streams</h1>
+    <p class="post-meta"><time datetime="2020-04-20T00:00:00-04:00" itemprop="datePublished">Apr 20, 2020</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <table align="center" style="float: right"><caption>Fig 1. A typical data streaming problem</caption><tr><td><img src="/img/im-tutorial/tut-im-procpipe.svg" alt="" width="360" /></td></tr></table>
+
+<p>The <a href="/doc/axi-stream.pdf">AXI Stream</a>
+protocol is a great way to move data around.  Sure, like most
+<a href="/doc/axi-spec.pdf">AXI</a> related protocols, it’s <a href="https://www.reddit.com/r/FPGA/comments/egkrce/is_axi_too_complicated/">a bit
+bloated</a>.
+However, if you remove everything but the <code class="highlighter-rouge">TVALID</code>, <code class="highlighter-rouge">TREADY</code>, <code class="highlighter-rouge">TDATA</code> and
+possibly <code class="highlighter-rouge">TLAST</code> or <code class="highlighter-rouge">TUSER</code> signals, then it really becomes quite usable.
+Indeed, it’s a great protocol for just moving raw data around.</p>
+
+<p>What such a simple <a href="/doc/axi-stream.pdf">AXI Stream</a>
+offers over other protocols is the ability to
+ability to move data around a design with a <a href="/blog/2017/08/14/strategies-for-pipelining.html">simple
+handshake</a>.
+Data can then move at the maximum speed the design is capable of, from one end
+of the design to another.  Be aware, though, this is also one of it’s
+<a href="https://en.wikipedia.org/wiki/Achilles%27_heel">Achilles’ heels</a>:
+You (as the engineer) need to be aware of what your data needs are, and you
+need to make certain that your stream processor can handle the throughput
+you need–but that’s another story.</p>
+
+<p>Perhaps the biggest problem with
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+processing is debugging it.  Unlike peripherals, where once it passes a
+<a href="/formal/2018/12/28/axilite.html">formal test</a>
+you can just interact with them from a
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+until they “work”, the
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+doesn’t typically interact with streams directly.  Streams are
+designed to “just do their thing”, and to do it at high speed in an
+unattended fashion.</p>
+
+<p>The result is that I’ve seen a large number of individuals writing into
+(whatever) forum, <a href="/digilent/2017/05/29/fft-debugging.html">complaining that an FFT isn’t
+working</a>,
+when they really have
+no insight into what’s going on within their design.  Yes, we’ve <a href="/digilent/2017/05/29/fft-debugging.html">discussed
+this before</a>.
+The typical set up starts with some sort of external
+<a href="https://en.wikipedia.org/wiki/Signal_generator">signal generator</a>, which is
+then connected to an on-board <a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">Analog to Digital Converter
+(A/D)</a>, which is
+then connected (through some processing chain) to an
+<a href="/dsp/2018/10/02/fft.html">FFT</a>,
+that is then connected to something else and possibly recorded.  By starting
+the chain off with the
+<a href="https://en.wikipedia.org/wiki/Signal_generator">signal generator</a>, these users
+often judge that they’ve removed all of the unknowns in their problem.  They
+then get stuck in <a href="/blog/2017/05/19/fpga-hell.html">FPGA Hell</a>
+when this design doesn’t work.  Often they’ll (wrongly) declare one of these
+components as not working, when really they have no insight into which
+component is either working or not.</p>
+
+<p>Forgive me for saying this, but <em>this is not how to debug an
+<a href="/doc/axi-stream.pdf">AXI Stream</a></em>!</p>
+
+<table align="center" style="float: none"><caption>Fig 2. An FFT-based processing chain</caption><tr><td><img src="/img/multi-block-fft.svg" alt="" width="780" /></td></tr></table>
+
+<p>Alternatively, I’ve seen individuals replace the input of the
+<a href="/dsp/2018/10/02/fft.html">FFT</a>
+with some form of
+<a href="/dsp/2017/12/09/nco.html">NCO</a>
+that they’ve never used before.  They’ll then use Xilinx’s
+<a href="/blog/2017/06/08/simple-scope.html">Internal Logic Analyzer</a>
+to “check” the output (ignoring any
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+signaling) and again wonder why their design isn’t working.  While this setup
+has fewer unknowns, there are usually enough associated with different
+clock rates to render this design difficult to debug as well.</p>
+
+<p>Again, this is not how to debug an
+<a href="/doc/axi-stream.pdf">AXI Stream</a>.</p>
+
+<p>Proper engineering process requires that you, as the designer and engineer,
+<a href="/digilent/2017/05/29/fft-debugging.html">need to be able to separate components of your design and then to examine
+and debug each of them
+separately</a>.
+Only after you know that each component is properly working should the various
+components be integrated together.</p>
+
+<p>That’s problem one.</p>
+
+<p>Problem two is that waveform trace’s aren’t really a good choice for debugging
+an <a href="/doc/axi-stream.pdf">AXI Stream</a>.
+Sure, you can make it work, but the protocol is likely going to get in the
+way.  You’ll be able to see both relevant, and irrelevant data samples.
+You’ll see both system clock periods of interest, and periods where the
+channel is stalled and the clock is not of interest.  This will be confusing.</p>
+
+<p>Indeed, we had this <a href="/dsp/2017/07/24/dsp-debugging.html">exact same problem some time ago when we examined our
+linear interpolation algorithm in a test
+bench</a>.  Consider,
+for example, Fig. 3 below which is drawn from Fig. 1 of
+<a href="/dsp/2017/07/24/dsp-debugging.html">that article</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. Confusing protocol signaling with stream data</caption><tr><td><img src="/img/lininterp-gtkwave.png" alt="" width="741" /></td></tr></table>
+
+<p>In this figure, the “correct” answer from the design is a linear ramp.
+Unfortunately, the outgoing signal isn’t valid on every cycle.  As a result,
+the ramp appears to be broken.  If you can remove the idle cycles, the ramp
+is no longer broken–making it easier to debug this design.  Without removing
+these cycles, it becomes a challenge to simply understand the trace since the
+<a href="/blog/2017/08/14/strategies-for-pipelining.html">protocol</a>
+kept getting in the way.</p>
+
+<p>Today, let me offer another approach to stream debugging: controlling the
+stream from software located on a nearby processor–whether an on-board
+processor, or a <a href="/blog/2017/05/22/a-vision-for-controlling-fpgas.html">nearby host connected over a serial
+port</a>.
+From a non-<a href="https://en.wikipedia.org/wiki/Real-time_computing">real-time</a>
+debugging standpoint it won’t make any difference–both will work.</p>
+
+<h2 id="axi-stream-debugging----the-concept">AXI Stream Debugging – the Concept</h2>
+
+<p>The basic idea behind our approach is simple: we’ll create an
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">debugger</a> in the
+form of an <a href="/formal/2018/12/28/axilite.html">AXI-lite bus
+slave</a> that can feed data to
+our stream, and again receive data back again.  An example of what <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this
+slave</a>
+might look like is shown in Fig. 4.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. How this debugging stream core fits into a design</caption><tr><td><img src="/img/axil2axis/blockd.svg" alt="" width="560" /></td></tr></table>
+
+<p><a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">Such a debugger</a>
+is not going to be a great choice for high speed processing, nor is it
+going to be a great choice for
+<a href="https://en.wikipedia.org/wiki/Real-time_computing">real-time</a>
+processing.  Instead, this will be a
+great choice for <a href="/dsp/2017/07/24/dsp-debugging.html"><em>debugging</em> a DSP processing
+chain</a> where both ends
+of the chain can be found within the fabric of the
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.
+Once the processing chain has been properly
+debugged, and once you know it is working, then you can connect it to proper
+<a href="https://en.wikipedia.org/wiki/Real-time_computing">real-time</a>
+components.  In the meantime, let’s focus our debugging on one step
+of the problem at a time.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 5. Lessons learned from building a communications link with an FPGA</caption><tr><td><img src="/img/axil2axis/radio-build.svg" alt="" width="360" /></td></tr></table>
+
+<p>Which step?  Well, that’s up to you.  Chances are you’ll want to place only one
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+component between the source and the sink at first, then two,
+then on up to your whole chain.</p>
+
+<p>So here’s how this will work:</p>
+
+<ol>
+  <li>
+    <p>Upon any reset, the entire chain will get cleared.</p>
+  </li>
+  <li>
+    <p>Your
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+program, either on a soft-core
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+located on the fabric or on a nearby host
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a> over a
+<a href="/blog/2017/05/22/a-vision-for-controlling-fpgas.html">debugging bus</a>
+of some sort, will write to
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>.
+Every word written to
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>
+will enter into a <a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+and eventually be flushed to the stream as illustrated in Fig. 4 above.</p>
+
+    <p>You (as the designer) will need to make certain that you don’t overload the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+in the case of either a slow stream or one that will get stuck with
+<a href="https://en.wikipedia.org/wiki/Back_pressure">back pressure</a>.  For this
+reason, we’ll make the <a href="/blog/2017/07/29/fifo.html">FIFO</a>
+size a <a href="https://github.com/ZipCPU/wb2axip/blob/acad02c188f1573cebf1decafaddddc8e2a162f5/rtl/axil2axis.v#L118-L125">user parameter</a>
+that can be used to configure
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>.</p>
+  </li>
+  <li>
+    <p>In order to be able to both generate data words with and without <code class="highlighter-rouge">TLAST</code>
+set, we’ll reserve one
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+such that writes to that
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+will set <code class="highlighter-rouge">TLAST</code>, and a second
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+where writes do not set <code class="highlighter-rouge">TLAST</code>.</p>
+
+    <p>For those not familiar with <code class="highlighter-rouge">TLAST</code>, it’s an important part of stream
+burst or packet processing.  <code class="highlighter-rouge">TLAST</code> needs to be set on the last data
+word of any packet, and clear otherwise.</p>
+
+    <p>As an example, consider Fig. 6 below, showing what transferring two packets
+using an <a href="/doc/axi-stream.pdf">AXI Stream</a>
+might look like.  In particular, <code class="highlighter-rouge">TLAST</code> is set at the end of every packet.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><caption>Fig 6. Two AXI Stream packets</caption><tr><td><img src="/img/axil2axis/tlast-demo.svg" alt="" width="780" /></td></tr></table>
+
+<p>Unfortunately, this protocol is quite a bit different from the one I used
+   when building <a href="/dsp/2018/10/02/fft.html">my own FFT</a>.
+   Indeed, processing the <code class="highlighter-rouge">TLAST</code> signal properly was one of the hardest
+   parts of building an <a href="/doc/axi-stream.pdf">AXI Stream</a>
+   interface to <a href="/dsp/2018/10/02/fft.html">that FFT</a>.</p>
+
+<ol start="3">
+  <li>
+    <p>Handling data returns will start with polling the return
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+to see how much data has been returned by the stream.</p>
+
+    <p>You can also poll the source
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+to see how much data has been consumed, but we’ll get to that in a moment.</p>
+  </li>
+  <li>
+    <p>For any data that’s been returned to your program, you can then read the
+data back from
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>
+and store it into memory, write it to the <a href="/formal/2019/02/21/txuart.html">serial
+port</a> via
+<a href="http://www.cplusplus.com/reference/cstdio/printf/">printf</a>,
+write it to a file, whatever.  Either way, it’s available for you to now
+inspect and debug.</p>
+  </li>
+  <li>
+    <p>If your test data set is exceptionally long, you can keep pushing data
+through the stream as long as space remains available in the return
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>s
+to receive it.</p>
+  </li>
+</ol>
+
+<p>Wouldn’t this be faster using an <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/aximm2s.v">AXI
+MM2S core</a> followed
+by an <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axis2mm.v">S2MM core</a>?
+Absolutely!  Our purpose in this exercise, however, isn’t speed–it’s debugging.
+By doing it this way, we remove the likelihood that something might go wrong
+in our <a href="/blog/2020/04/08/axitb.html">setup of either of those
+cores</a>.  We also remove the
+likelihood that <a href="/formal/2019/09/06/axi-story.html">they will hang if ever something goes
+wrong</a>–we’ll build <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our
+design</a>
+so that we can catch those bugs instead.</p>
+
+<p>Sound like a plan?</p>
+
+<h2 id="axi-stream-properties">AXI Stream Properties</h2>
+
+<p>Some time ago, I was asked to write a set of
+<a href="/zipcpu/2017/11/07/wb-formal.html">formal properties</a>
+to be used when verifying an <a href="/doc/axi-stream.pdf">AXI
+Stream</a> core.  <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxis_slave.v">You can find these
+properties on
+github</a>
+if you are interested.  Sadly, there are way more properties there than there
+are truly relevant ones.  Also, just as with the
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a> and <a href="/formal/2019/05/13/axifull.html">AXI(full)
+designs</a> that we tested here,
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/xlnxstream_2018_3.v">Xilinx’s AXI stream demo</a>
+failed that test as well–but that’s another story for another day.  So,
+instead, let’s focus on the minimum number of <a href="/doc/axi-stream.pdf">AXI
+Stream</a> properties here, such as you
+might use in a basic stream processing system such as I’ve outlined in
+Fig. 4 above.</p>
+
+<table align="center" style="float: right"><caption>Fig 6. Simplified AXI-Stream signals</caption><tr><td><img src="/img/axil2axis/master-slave.svg" alt="" width="320" /></td></tr></table>
+
+<p>We’ll limit ourselves to four signals: <code class="highlighter-rouge">TVALID</code>, <code class="highlighter-rouge">TREADY</code>, <code class="highlighter-rouge">TDATA</code>, and <code class="highlighter-rouge">TLAST</code>,
+as shown in Fig. 6 on the right.  Only the <code class="highlighter-rouge">TDATA</code> signal has any width to it,
+and that width is user configurable.  In our case, it’s width will be limited
+by the width of the <a href="/doc/axi-spec.pdf">AXI</a>-lite
+bus–32’bits.  That should be enough for most data processing applications.</p>
+
+<p>The <code class="highlighter-rouge">TVALID</code> and <code class="highlighter-rouge">TREADY</code> registers have the meaning we are already familiar
+with from our <a href="/blog/2019/05/22/skidbuffer.html">AXI handshaking
+work</a>.  <code class="highlighter-rouge">TVALID</code> indicates
+that the master has placed valid data on <code class="highlighter-rouge">TDATA</code>, and <code class="highlighter-rouge">TREADY</code> indicates that
+the slave is ready to receive it.  Data transfers whenever <code class="highlighter-rouge">TVALID &amp;&amp; TREADY</code>
+are both true on the same clock cycle.  As with the other <a href="/blog/2019/05/22/skidbuffer.html">AXI handshaking
+protocols</a>,
+<code class="highlighter-rouge">TREADY</code> needs to be registered.</p>
+
+<p>The <code class="highlighter-rouge">TLAST</code> field is used by packet processing systems.  Whenever <code class="highlighter-rouge">TLAST</code> is
+true, the end of the packet has been received, and the next value will be the
+first value in the next packet.  This makes a lot of sense for networking
+protocols, where packets are well defined.  It also works nicely for
+<a href="/dsp/2018/10/02/fft.html">FFT</a>
+based processing, where a “packet” can be considered one frame of data.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 7. Design goal: 100% Throughput</caption><tr><td><img src="/img/axil2axis/throughput-goal.svg" alt="" width="320" /></td></tr></table>
+
+<p>Be careful when working with <code class="highlighter-rouge">TLAST</code>, however: some Xilinx primitives will not
+forward a packet of data unless <code class="highlighter-rouge">TLAST</code> is set.  More than one engineer has
+gotten stumped, wondering why his data is stuck in (some vendor core), when the
+problem is simply that <code class="highlighter-rouge">TLAST</code> wasn’t set.  For this reason, if your protocol
+doesn’t need <code class="highlighter-rouge">TLAST</code> for a particular reason or purpose, then I recommend
+leaving it set.</p>
+
+<p>There’s one additional signal that gets some common usage that I haven’t listed
+above, and that’s the <code class="highlighter-rouge">TUSER</code> data signal.  This can be filled with whatever
+you want to fill it with.  As an example, it’s common to place <code class="highlighter-rouge">HSYNC</code> and/or
+<code class="highlighter-rouge">VSYNC</code> data in this field, and actual pixel data in the <code class="highlighter-rouge">TDATA</code> field when
+<a href="/blog/2018/11/29/llvga.html">working with video</a>.  I haven’t
+(yet) tried this myself, but it certainly seems reasonable to do.  That said,
+we won’t be supporting <code class="highlighter-rouge">TUSER</code> today.  If your application needs a <code class="highlighter-rouge">TUSER</code>
+field, then you’ll need to either modify <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our debugging
+core</a>
+to generate it, or separate it from the <code class="highlighter-rouge">TDATA</code> field we will be generating.</p>
+
+<p>Now with all this background, we can finally write a couple of
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+properties.  With just this simple definition above, they aren’t really all
+that complex.</p>
+
+<p>First, valid must get cleared on any reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="n">S_AXI_ARESETN</span> <span class="o">|=&gt;</span> <span class="o">!</span><span class="n">M_AXI_TVALID</span><span class="p">)</span><span class="o">;</span>
+
+<span class="k">assume</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="n">S_AXI_ARESETN</span> <span class="o">|=&gt;</span> <span class="o">!</span><span class="n">S_AXI_TVALID</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Here, I’m going to use the convention that signals beginning with <code class="highlighter-rouge">M_AXIS_</code> are
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+signals from the perspective of an
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+master (source), whereas any signals beginning with <code class="highlighter-rouge">S_AXIS_</code> are
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+signals from the
+perspective of the slave, the “sink” or consumer of the stream data.</p>
+
+<p>If you want to rewrite this assertion using System Verilog’s immediate
+assertions, things are roughly the same with the exception that you will need
+an <code class="highlighter-rouge">f_past_valid</code> check to make certain are handling <code class="highlighter-rouge">$past()</code> properly.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">initial</span> <span class="n">f_past_valid</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="n">f_past_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+
+<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+<span class="k">begin</span>
+	<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">assume</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+<span class="k">end</span></code></pre></figure>
+
+<p>The second important property is that <code class="highlighter-rouge">!TREADY</code> must stall the stream.
+While the <a href="/doc/axi-stream.pdf">stream</a> is stalled nothing
+is allowed to change.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="n">M_AXI_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_ARESETN</span>
+	<span class="o">|=&gt;</span> <span class="n">M_AXI_TVALID</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXI_TDATA</span><span class="p">)</span>
+		<span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXI_TLAST</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>You can see an example of how stalls might work in Fig. 6 above.</p>
+
+<p>On its face, this one assertion captures everything remaining about this
+protocol.  However, we can do better.  The problem with this assertion
+is that you won’t be able to tell which of the three conditions failed
+without digging into the
+<a href="/blog/2017/07/31/vcd.html">VCD trace</a>
+that the tool generates.  We can fix this by splitting this assertion
+into three separate assertions.  Then, if any fails, we’ll know which
+of the three caused the problem.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="n">M_AXI_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_ARESETN</span>
+	<span class="o">|=&gt;</span> <span class="n">M_AXI_TVALID</span><span class="p">)</span><span class="o">;</span>
+
+<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="n">M_AXI_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_ARESETN</span>
+	<span class="o">|=&gt;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXI_TDATA</span><span class="p">))</span><span class="o">;</span>
+
+<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="n">M_AXI_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_ARESETN</span>
+	<span class="o">|=&gt;</span> <span class="p">$</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXI_TLAST</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>The slave assumptions are (almost) identical.</p>
+
+<p>Each of these properties can easily be written using immediate assertions as
+well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_TREADY</span><span class="p">))</span>
+<span class="k">begin</span>
+	<span class="k">assert</span><span class="p">(</span><span class="n">M_AXI_TVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">assert</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXI_TDATA</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">assert</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXI_TLAST</span><span class="p">))</span><span class="o">;</span>
+
+	<span class="c1">// And if you are using TUSER
+</span>	<span class="c1">// assert($stable(M_AXI_TUSER));
+</span>	<span class="c1">// same for TID, TKEEP, and TSTRB
+</span><span class="k">end</span></code></pre></figure>
+
+<p>That’s about all you’ll need for verifying an
+<a href="/doc/axi-stream.pdf">AXI Stream</a>.</p>
+
+<table align="center" style="float: right"><caption>Fig 8. Testing a high resolution FFT</caption><tr><td><img src="/img/axil2axis/hires-testing.svg" alt="" width="360" /></td></tr></table>
+
+<p>But let’s pause and think about these properties for a moment.  While they are
+simple, there are some nasty consequences of using them.  For example, …</p>
+
+<ol>
+  <li>
+    <p>What happens when the data is coming from a fixed data rate source, such as
+an <a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">A/D</a>
+or a <a href="/blog/2018/11/29/llvga.html">video source</a>.
+If <code class="highlighter-rouge">TREADY</code> is
+held low, it will be difficult to hold either <code class="highlighter-rouge">TDATA</code> or <code class="highlighter-rouge">TLAST</code> constant.
+I mean, I suppose we could, but we’d be dropping data left and right.</p>
+  </li>
+  <li>
+    <p>Likewise, what happens when the data is going to a fixed rate data sink?
+In that case, it would be important to us that <code class="highlighter-rouge">TVALID</code> be true at some
+minimum rate or we would again fail our
+<a href="https://en.wikipedia.org/wiki/Real-time_computing">real-time</a>
+requirement.</p>
+  </li>
+</ol>
+
+<p>My point is simply this: the
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+protocol doesn’t contain, within
+<a href="/doc/axi-stream.pdf">the protocol definition</a>,
+your design’s data rate requirements.  That requirement is critical, and
+probably dominates these rules above.  You’ll need to handle that in an
+application dependent way.</p>
+
+<p>Yes, an <a href="/doc/axi-stream.pdf">AXI Stream</a>
+property set could get much fancier.  Indeed, when generating <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxis_slave.v">my own AXI
+Stream properties</a>
+I did just that.  I added in data counters and byte counters–since the full
+<a href="/doc/axi-stream.pdf">AXI Stream</a> protocol can transfer
+<code class="highlighter-rouge">TDATA</code> values where only some of the data is relevant.  I also added in data
+rate checks, <code class="highlighter-rouge">TID</code> checks, and so on.  If you want to use <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxis_slave.v">all
+that</a>,
+feel free.  All I’m saying today is that
+<a href="/doc/axi-stream.pdf">the protocol</a>
+is a very powerful one, but it can be used quite easily if you use nothing more
+beyond the <a href="/blog/2017/08/14/strategies-for-pipelining.html">handshaking
+signals</a>
+outlined in Fig. 6 above.</p>
+
+<h2 id="the-basic-algorithm">The Basic Algorithm</h2>
+
+<p>There’s two basic halves to this algorithm, the write half and the read half.
+Let’s walk through each and see how it works.  In both cases, we’ll start from
+our <a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">example</a>
+and in particular from the <code class="highlighter-rouge">axil_write_ready</code>
+and <code class="highlighter-rouge">axil_read_ready</code> signals that follow after the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>s,
+indicating that the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+wishes to either write or read data to or from our core.</p>
+
+<p>Let’s start with the write half.  Our
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a> write transaction requests
+will come from two
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>s, so that
+a write request will be ready when both write
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+and write data
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>s have valid
+data and the <code class="highlighter-rouge">B*</code> channel isn’t stalled.  In this case, we’ll write data to <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our
+core</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">axil_write_ready</span> <span class="o">=</span> <span class="n">awskd_valid</span> <span class="o">&amp;&amp;</span> <span class="n">wskd_valid</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_BVALID</span> <span class="o">||</span> <span class="n">S_AXI_BREADY</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Then, based upon this <code class="highlighter-rouge">axil_write_ready</code> value, we’ll write to our
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+if we ever write to the stream source write
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a> of <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our
+core</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">wfifo_write</span> <span class="o">=</span> <span class="n">axil_write_ready</span> <span class="o">&amp;&amp;</span> <span class="n">awskd_addr</span> <span class="o">==</span> <span class="n">ADDR_SOURCE</span><span class="o">;</span>
+
+	<span class="n">sfifo</span> <span class="p">#(</span><span class="o">.</span><span class="n">BW</span><span class="p">(</span><span class="n">C_AXIS_DATA_WIDTH</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">LGFLEN</span><span class="p">(</span><span class="n">LGFIFO</span><span class="p">))</span>
+	<span class="n">source</span><span class="p">(</span><span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_wr</span><span class="p">(</span><span class="n">wfifo_write</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="n">wskd_data</span><span class="p">[</span><span class="n">C_AXIS_DATA_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span><span class="o">,</span></code></pre></figure>
+
+<p>In this case, <code class="highlighter-rouge">ADDR_SOURCE</code> is the
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+we would write to in order to write a value to our outgoing stream.</p>
+
+<p>We can then take the outputs of this
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+with very little modification, and turn them into
+<a href="/doc/axi-stream.pdf">AXI Stream</a> signals.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="o">.</span><span class="n">i_rd</span><span class="p">(</span><span class="n">M_AXIS_TREADY</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">o_empty</span><span class="p">(</span><span class="n">wfifo_empty</span><span class="p">))</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">M_AXIS_TVALID</span> <span class="o">=</span> <span class="o">!</span><span class="n">wfifo_empty</span><span class="o">;</span></code></pre></figure>
+
+<p>Okay, that was easy enough.  How about the read half?  In this case, our data
+would come in from an external stream source, and enter our core through a
+second <a href="/blog/2017/07/29/fifo.html">FIFO</a>.  We’ll call this
+the “read <a href="/blog/2017/07/29/fifo.html">FIFO</a>” or “sink”
+simply because this is where the stream ends.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">S_AXIS_TREADY</span> <span class="o">=</span> <span class="o">!</span><span class="n">rfifo_full</span><span class="o">;</span>
+
+	<span class="n">sfifo</span> <span class="p">#(</span><span class="o">.</span><span class="n">BW</span><span class="p">(</span><span class="n">C_AXIS_DATA_WIDTH</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">LGFLEN</span><span class="p">(</span><span class="n">LGFIFO</span><span class="p">))</span>
+	<span class="n">sink</span><span class="p">(</span><span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_wr</span><span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="n">S_AXIS_TDATA</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_full</span><span class="p">(</span><span class="n">rfifo_full</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">o_fill</span><span class="p">(</span><span class="n">rfifo_fill</span><span class="p">)</span><span class="o">,</span></code></pre></figure>
+
+<p>That’s basic enough.  Before we get to the second half, let’s discuss when we
+want to read from our
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.
+For that, we’ll start with the <code class="highlighter-rouge">axil_read_ready</code>
+signal from our
+<a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">design</a>,
+and generate a read signal for the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.
+We’ll read, therefore, any time there’s a valid
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+and the result isn’t stalled.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">axil_read_ready</span> <span class="o">=</span> <span class="n">arskd_valid</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_RVALID</span> <span class="o">||</span> <span class="n">S_AXI_RREADY</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>This read will come from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+if we are ever reading from the stream sink register, and so we’ll read from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+at that time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">read_rfifo</span> <span class="o">=</span><span class="p">(</span><span class="n">axil_read_ready</span> <span class="o">&amp;&amp;</span> <span class="n">arskd_addr</span><span class="o">==</span> <span class="n">ADDR_SINK</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The remaining details of the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>’s
+instantiation are now straightforward.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="o">.</span><span class="n">i_rd</span><span class="p">(</span><span class="n">read_rfifo</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="n">rfifo_data</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">o_empty</span><span class="p">(</span><span class="n">rfifo_empty</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>You know, that’s not many changes to our
+<a href="/blog/2020/03/08/easyaxil.html">simple AXI-lite</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">design</a>
+at all.  Indeed, right at about this point in time, I started beating my chest
+thinking I’d built a <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">truly awesome core for debugging stream
+designs</a>.</p>
+
+<p>Then I started <a href="https://github.com/ZipCPU/wb2axip/blob/acad02c188f1573cebf1decafaddddc8e2a162f5/rtl/axil2axis.v#L13-L63">writing the documentation</a> for
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>.
+The more I wrote, the more problems I could see it causing.</p>
+
+<p>What happens, for example, if you have an
+<a href="/dsp/2018/10/02/fft.html">FFT</a>
+processing chain that requires four
+<a href="/dsp/2018/10/02/fft.html">FFT</a>s
+worth of data somewhere in the chain, but then only processes one
+sample of data every four clock cycles?  Once the write
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+is filled, what will happen to the new data values you write to
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>?</p>
+
+<p>They’ll fall off of the end of eternity and get lost.</p>
+
+<table align="center" style="float: none"><caption>Fig 9. Data dropped on a full FIFO</caption><tr><td><img src="/img/axil2axis/wfull-fifo.svg" alt="" width="560" /></td></tr></table>
+
+<p>Oh, that’s bad.</p>
+
+<p>So, let’s adjust our
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+write signals so that we wait until there’s room in the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+before succeeding.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">axil_write_ready</span> <span class="o">=</span> <span class="n">awskd_valid</span> <span class="o">&amp;&amp;</span> <span class="n">wskd_valid</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_BVALID</span> <span class="o">||</span> <span class="n">S_AXI_BREADY</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="p">((</span><span class="n">awskd_addr</span> <span class="o">!=</span> <span class="n">ADDR_SOURCE</span><span class="p">)</span> <span class="o">||</span> <span class="o">!</span><span class="n">wfifo_full</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="k">assign</span>	<span class="n">wfifo_write</span> <span class="o">=</span> <span class="n">axil_write_ready</span> <span class="o">&amp;&amp;</span> <span class="n">awskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">==</span><span class="n">ADDR_SOURCE</span>
+			<span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">wfifo_full</span><span class="o">;</span></code></pre></figure>
+
+<p>There!  Now, if the stream is a little slow in accepting our data, the write
+will wait until there’s room in the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+to accept it.</p>
+
+<p>So, I went back to writing up the documentation for this core again.</p>
+
+<p>Then I got to thinking, what happens if the incoming
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+is full, and there’s
+no more room in the stream to accept any more values?  The write request might
+then wait for an eternity.</p>
+
+<p>No, that’s not good either.</p>
+
+<p>So, let’s create a timeout.  That way, when we generate this design, we can
+specify how long one should wait for a position in the source
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+to become available before failing.</p>
+
+<p>The timeout itself is just another counter.  We’ll also use a signal,
+<code class="highlighter-rouge">write_timeout</code>, to indicate that the counter has reached it’s limit and
+we should abandon any writes.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">//
+</span>	<span class="c1">// parameter OPT_TIMEOUT is the number of cycles to wait on either
+</span>	<span class="c1">// read or write before giving up.
+</span>	<span class="c1">//
+</span>	<span class="k">initial</span>	<span class="n">write_timer</span> <span class="o">=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">write_timeout</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">write_timeout</span><span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">awskd_valid</span> <span class="o">||</span> <span class="o">!</span><span class="n">wskd_valid</span>
+			<span class="o">||</span> <span class="p">(</span><span class="n">awskd_addr</span> <span class="o">!=</span> <span class="n">ADDR_SOURCE</span><span class="p">)</span>
+			<span class="o">||</span> <span class="p">(</span><span class="n">S_AXI_BVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_BREADY</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">write_timeout</span><span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">write_timer</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+			<span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">write_timer</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">write_timeout</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Just to capture our intent with this <code class="highlighter-rouge">write_timeout</code> signal, we’ll quickly
+scribe two assertions next to this write timeout logic.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">write_timeout</span> <span class="o">==</span> <span class="p">(</span><span class="n">write_timer</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>We can now adjust our internal write signal, indicating when we’ll accept
+a write request from the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">axil_write_ready</span> <span class="o">=</span> <span class="n">awskd_valid</span> <span class="o">&amp;&amp;</span> <span class="n">wskd_valid</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_BVALID</span> <span class="o">||</span> <span class="n">S_AXI_BREADY</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="p">((</span><span class="n">awskd_addr</span> <span class="o">!=</span> <span class="n">ADDR_SOURCE</span><span class="p">)</span>
+				<span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">wfifo_full</span> <span class="o">||</span> <span class="n">write_timeout</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>This new logic just says that we’ll accept any writes to our core that
+aren’t going to the <a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+or writes to the <a href="/blog/2017/07/29/fifo.html">FIFO</a>
+if it isn’t full, or we’ll accept them if the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+is full and we’ve timed out waiting.</p>
+
+<p>But this also means we now have to figure out how to return a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+on a failed write.  Let’s create an <code class="highlighter-rouge">axil_berr</code> for this new signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">axil_write_ready</span><span class="p">)</span>
+		<span class="n">axil_berr</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">wfifo_full</span> <span class="o">&amp;&amp;</span> <span class="n">awskd_addr</span> <span class="o">==</span> <span class="n">ADDR_SOURCE</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>We can then use this signal to set <code class="highlighter-rouge">S_AXI_BRESP</code> to either an <code class="highlighter-rouge">OKAY</code>
+response, or a <code class="highlighter-rouge">SLVERR</code> (slave error) response to the write request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">S_AXI_BRESP</span> <span class="o">=</span> <span class="o">{</span> <span class="n">axil_berr</span><span class="o">,</span> <span class="mb">1'b0</span> <span class="o">};</span></code></pre></figure>
+
+<p>Okay, so that’s pretty neat, only … what happens if <code class="highlighter-rouge">wskd_strb</code> was zero?</p>
+
+<p>In particular, an <a href="/blog/2020/03/14/axi-reset.html">AXI master is allowed to abort a
+transaction</a> it has issued
+by clearing the <code class="highlighter-rouge">WSTRB</code> signal (<code class="highlighter-rouge">wskd_strb</code> after the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a> in this
+design) to all zeros.  In that case, we aren’t going to want to write into our
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+at all.  So, let’s adjust our write to
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+signal once more to capture this possibility.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">wfifo_write</span> <span class="o">=</span> <span class="n">axil_write_ready</span> <span class="o">&amp;&amp;</span> <span class="n">awskd_addr</span><span class="o">==</span><span class="n">ADDR_SOURCE</span>
+			<span class="o">&amp;&amp;</span> <span class="n">wskd_strb</span> <span class="o">!=</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">wfifo_full</span><span class="o">;</span></code></pre></figure>
+
+<p>At this point, we’re almost there.  We’re just missing one last piece:
+What about that <code class="highlighter-rouge">TLAST</code> signal?  We need to make it so that this core can
+set, or leave unset, the outgoing <code class="highlighter-rouge">TLAST</code> signal.</p>
+
+<p>To handle this, we’ll borrow from the <code class="highlighter-rouge">ADDR_SINK</code> register.  This is the
+register we want to read from in order to read values from the stream sink
+side of our design.  We can then adjust our logic so that
+writes to this <code class="highlighter-rouge">ADDR_SINK</code> register will leave the <code class="highlighter-rouge">TLAST</code>
+signal clear whereas all other writes will set <code class="highlighter-rouge">TLAST</code>.  If we set
+our <a href="/zipcpu/2019/09/03/address-assignment.html">addresses</a>
+so that the two share an upper address bit, then our test for whether or not
+we are writing will now be a test of <code class="highlighter-rouge">awskd_addr[1] == ADDR_SOURCE[1]</code> or not.</p>
+
+<p>This is as far as I took the write logic.</p>
+
+<p>You might notice that, other than checking for <code class="highlighter-rouge">wskd_strb != 0</code>, we’ve ignored
+the <code class="highlighter-rouge">WSTRB</code> signal.  This will be a problem if our AXI-lite slave is ever
+<a href="/blog/2020/03/23/wbm2axisp.html">driven from an AXI master</a>
+that’s only driving one octet or one half-word at a time.  In that case, we’d
+need to only write if <code class="highlighter-rouge">wstrb[3]</code> is set, and then record any partial words
+written up until that point.</p>
+
+<p>I’ll leave that to you as a homework problem.</p>
+
+<p>Needless to say, I made the same (rough) improvements on the read side.</p>
+
+<ol>
+  <li>Reads should only succeed if there’s data in the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.</li>
+</ol>
+
+<table align="center" style="float: none"><caption>Fig 10. Erroneous data returned from an empty FIFO</caption><tr><td><img src="/img/axil2axis/rfifo-empty.svg" alt="" width="560" /></td></tr></table>
+
+<p>We’ll need to check for this as well.  Therefore, if there’s no data in the
+read <a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+the read request should wait for data and then timeout if it doesn’t come
+within a reasonable time frame.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">axil_read_ready</span> <span class="o">=</span> <span class="n">arskd_valid</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_RVALID</span> <span class="o">||</span> <span class="n">S_AXI_RREADY</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="p">((</span><span class="n">arskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">ADDR_SINK</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+				<span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">rfifo_empty</span> <span class="o">||</span> <span class="n">read_timeout</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<ol start="2">
+  <li>We’ll allow the user to read both from the <code class="highlighter-rouge">ADDR_SINK</code> register, and from
+the related <code class="highlighter-rouge">ADDR_SOURCE</code> register.  In the case of reading from
+<code class="highlighter-rouge">ADDR_SOURCE</code> (which really isn’t the right read register), we’ll just return
+the next item of data without removing it from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.
+That’s the reason for the <code class="highlighter-rouge">[1]</code> in the (word)
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+logic above.  It also explains the difference between the above example
+and the full <code class="highlighter-rouge">read_rfifo</code> logic below.</li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">read_rfifo</span> <span class="o">=</span><span class="p">(</span><span class="n">axil_read_ready</span> <span class="o">&amp;&amp;</span> <span class="n">arskd_addr</span><span class="o">==</span> <span class="n">ADDR_SINK</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">rfifo_empty</span><span class="o">;</span></code></pre></figure>
+
+<ol start="3">
+  <li>The <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+logic, associated with an attempt to read that times out,
+is close enough to the write
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+logic that it doesn’t need to be discussed further in this overview.</li>
+</ol>
+
+<p>That’s about all we’ll need to generate an
+<a href="/doc/axi-stream.pdf">AXI Stream</a>,
+or to consume one, in an
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+processing core.</p>
+
+<p>Could we have done this with a <a href="/blog/2019/05/29/demoaxi.html">full AXI processing
+core</a>?  Absolutely!  But
+our goal today isn’t performance.  If you want performance, use the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/aximm2s.v">MM2S</a> and
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axis2mm.v">S2MM</a>
+<a href="/blog/2020/04/08/axitb.html">data movers</a>
+respectively–don’t forget to coordinate your transfers in that case with the
+<a href="https://en.wikipedia.org/wiki/Memory_management_unit">MMU</a>,
+and to make certain that the cache stays coherent in the process.</p>
+
+<h2 id="working-with-the-core">Working with the core</h2>
+
+<p>Unfortunately, that’s not enough to work with
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>.</p>
+
+<p>Imagine, if you will, that you have some buffer of data you wish to send
+to <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>.
+Let’s call this buffer, <code class="highlighter-rouge">buf</code>, and give it <code class="highlighter-rouge">BUFLEN</code> values.  Let’s also assume
+that our core can be found at the address in <code class="highlighter-rouge">streamdbg</code>, and that our
+the <a href="/blog/2017/07/29/fifo.html">FIFO</a> has a length given by
+<code class="highlighter-rouge">FIFOLEN = 1&lt;&lt;LGFIFO</code>.  How would you go about writing <code class="highlighter-rouge">BUFLEN</code> values to
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>?</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">for</span><span class="p">(</span><span class="n">wpos</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">wpos</span> <span class="o">&lt;</span> <span class="n">BUFLEN</span><span class="p">;</span> <span class="n">wpos</span><span class="o">++</span><span class="p">)</span>
+	<span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_SOURCE</span><span class="p">]</span> <span class="o">=</span> <span class="n">buf</span><span class="p">[</span><span class="n">wpos</span><span class="p">];</span></code></pre></figure>
+
+<p>What will then happen if the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+fills up before you send the last data through?  Your design will fail with a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+(We could have had it wait forever …)  This is a “good” thing, but avoiding
+this problem altogether would be better.</p>
+
+<p>What we’d really need is a way of knowing that there’s room enough in the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+for what we want to send to it, and then only write to it if there’s
+enough room.  So, let’s allow for a
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+status register, and let’s place our
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+fill into the upper half of this register.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">wpos</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">do</span> <span class="p">{</span>
+	<span class="kt">int</span> <span class="n">available</span> <span class="o">=</span> <span class="p">(</span><span class="n">FIFOLEN</span> <span class="o">-</span> <span class="p">(</span><span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_FIFO</span><span class="p">]</span><span class="o">&gt;&gt;</span><span class="mi">16</span><span class="p">));</span>
+	<span class="kt">int</span> <span class="n">ln</span> <span class="o">=</span> <span class="p">(</span><span class="n">BUFLEN</span><span class="o">-</span><span class="n">wpos</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">ln</span> <span class="o">&gt;</span> <span class="n">available</span><span class="p">)</span>
+		<span class="n">ln</span> <span class="o">=</span> <span class="n">available</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_SOURCE</span><span class="p">]</span> <span class="o">=</span> <span class="n">buf</span><span class="p">[</span><span class="n">wpos</span><span class="o">++</span><span class="p">];</span>
+<span class="p">}</span> <span class="k">while</span><span class="p">(</span><span class="n">wpos</span> <span class="o">&lt;</span> <span class="n">BUFLEN</span><span class="p">);</span></code></pre></figure>
+
+<p>That means we’ll need to add to our
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">design</a>
+the ability to read the write
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>’s fill.  Ok, got it.</p>
+
+<p>What about reading from
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>?
+A straightforward read might look like,</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="k">for</span><span class="p">(</span><span class="n">rpos</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">rpos</span> <span class="o">&lt;</span> <span class="n">BUFLEN</span><span class="p">;</span> <span class="n">rpos</span><span class="o">++</span><span class="p">)</span>
+	<span class="n">result</span><span class="p">[</span><span class="n">rpos</span><span class="p">]</span> <span class="o">=</span> <span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_SINK</span><span class="p">];</span></code></pre></figure>
+
+<p>Sadly, this will fail as well if the stream isn’t ready yet.  We can repeat
+our last solution to handle this case if we’d like.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">rpos</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">do</span> <span class="p">{</span>
+	<span class="kt">int</span> <span class="n">available</span> <span class="o">=</span> <span class="p">(</span><span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_FIFO</span><span class="p">]</span> <span class="o">&amp;</span> <span class="mh">0x07fff</span><span class="p">)</span>
+	<span class="kt">int</span> <span class="n">ln</span> <span class="o">=</span> <span class="p">(</span><span class="n">BUFLEN</span><span class="o">-</span><span class="n">rpos</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">ln</span> <span class="o">&gt;</span> <span class="n">available</span><span class="p">)</span>
+		<span class="n">ln</span> <span class="o">=</span> <span class="n">available</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">result</span><span class="p">[</span><span class="n">rpos</span><span class="o">++</span><span class="p">]</span> <span class="o">=</span> <span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_SINK</span><span class="p">];</span>
+<span class="p">}</span> <span class="k">while</span><span class="p">(</span><span class="n">rpos</span> <span class="o">&lt;</span> <span class="n">BUFLEN</span><span class="p">);</span></code></pre></figure>
+
+<p>What happens, though, if we are working with a stream loop from source to
+sink like we drew in Fig. 4, so that if we fail to read from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+the resulting
+<a href="https://en.wikipedia.org/wiki/Back_pressure">back pressure</a>
+will eventually stop up the channel so far that we can’t write to it any
+more without generating a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>?
+That would mean that for large enough
+data streams, you’d need to read and write at the same time.</p>
+
+<p>This gets more complicated.</p>
+
+<figure class="highlight"><pre><code class="language-c--" data-lang="c++"><span class="n">wpos</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">rpos</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">do</span> <span class="p">{</span>
+	<span class="c1">//
+</span>	<span class="c1">// First, write whatever we can into the stream.
+</span>	<span class="c1">//
+</span>	<span class="n">available</span> <span class="o">=</span> <span class="p">(</span><span class="n">FIFOLEN</span> <span class="o">-</span> <span class="p">(</span><span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_FIFO</span><span class="p">]</span><span class="o">&gt;&gt;</span><span class="mi">16</span><span class="p">));</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">BUFLEN</span> <span class="o">==</span> <span class="n">wpos</span><span class="p">)</span> <span class="p">{</span>
+		<span class="c1">// Write zero values once we've filled the
+</span>		<span class="c1">// pipeline
+</span>		<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">available</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_SOURCE</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+		<span class="n">ln</span> <span class="o">=</span> <span class="p">(</span><span class="n">BUFLEN</span><span class="o">-</span><span class="n">wpos</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">ln</span> <span class="o">&gt;</span> <span class="n">available</span><span class="p">)</span>
+			<span class="n">ln</span> <span class="o">=</span> <span class="n">available</span><span class="p">;</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_SOURCE</span><span class="p">]</span> <span class="o">=</span> <span class="n">buf</span><span class="p">[</span><span class="n">wpos</span><span class="o">++</span><span class="p">];</span>
+	<span class="p">}</span>
+
+	<span class="c1">//
+</span>	<span class="c1">// Now any reads
+</span>	<span class="c1">//
+</span>	<span class="n">available</span> <span class="o">=</span> <span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_FIFO</span><span class="p">]</span> <span class="o">&amp;</span> <span class="mh">0x07fff</span><span class="p">;</span>
+	<span class="n">ln</span> <span class="o">=</span> <span class="p">(</span><span class="n">BUFLEN</span> <span class="o">-</span> <span class="n">rpos</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">ln</span> <span class="o">&gt;</span> <span class="n">available</span><span class="p">)</span>
+		<span class="n">ln</span> <span class="o">=</span> <span class="n">available</span><span class="p">;</span>
+	<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">ln</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">result</span><span class="p">[</span><span class="n">rpos</span><span class="o">++</span><span class="p">]</span> <span class="o">=</span> <span class="n">streamdbg</span><span class="p">[</span><span class="n">ADDR_SINK</span><span class="p">];</span>
+<span class="p">}</span> <span class="k">while</span><span class="p">(</span><span class="n">rpos</span> <span class="o">&lt;</span> <span class="n">BUFLEN</span><span class="p">);</span></code></pre></figure>
+
+<p>See how important it becomes to know how many items can be read from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>?
+We’ll need to add that register to our design.</p>
+
+<p>You may notice that we haven’t touched the <code class="highlighter-rouge">TLAST</code> element yet.  Neither have
+we sent any “end-of-packet” data, nor have we verified that end of packet data
+is correct.  In other words, we need to make it possible to read <code class="highlighter-rouge">TLAST</code> from
+software.  Since the meaning of <code class="highlighter-rouge">TLAST</code> varies from one application to the
+next, I’ll put that capability in
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this design</a>,
+but leave the software part as an exercise to the student.</p>
+
+<h2 id="axi-lite-to-axi-stream">AXI-lite to AXI-stream</h2>
+
+<p>Shall we take a look at what it takes to actually build
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>?
+Let’s start at the top.</p>
+
+<p>The design begins with a <a href="https://github.com/ZipCPU/wb2axip/blob/acad02c188f1573cebf1decafaddddc8e2a162f5/rtl/axil2axis.v#L1-L90">large comment
+block</a>.
+At one time, I kept track of
+all design usage information in nearby “specification” sheets (PDFs).  Perhaps
+I should return to that practice.  Today, however, many of my component cores
+have large blocks of information in their headers.  I also like to require
+that any such blocks describe the various registers used by the core, what
+their meaning is, and what happens when you read from or write to them.</p>
+
+<p><a href="https://github.com/ZipCPU/wb2axip/blob/acad02c188f1573cebf1decafaddddc8e2a162f5/rtl/axil2axis.v#L13-L63">This design is no
+different</a>.</p>
+
+<p>I’m still somewhat torn about how to handle parameters.  Should parameters
+be defined in the comment block above, or next to their actual definitions?
+I’ve done both.  In <a href="https://github.com/ZipCPU/wb2axip/blob/acad02c188f1573cebf1decafaddddc8e2a162f5/rtl/axil2axis.v#L95-L148">this case, I define core parameters next to their
+definitions</a>.
+Why?  Because the information is then right where I will be when I go looking
+for it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span>	<span class="n">axil2axis</span> <span class="p">#(</span>
+		<span class="c1">//
+</span>		<span class="c1">// Size of the AXI-lite bus.  These are fixed, since 1) AXI-lite
+</span>		<span class="c1">// is fixed at a width of 32-bits by Xilinx def'n, and 2) since
+</span>		<span class="c1">// we only ever have 4 configuration words.
+</span>		<span class="k">parameter</span>	<span class="n">C_AXI_ADDR_WIDTH</span> <span class="o">=</span> <span class="mi">4</span><span class="o">,</span>
+		<span class="k">localparam</span>	<span class="n">C_AXI_DATA_WIDTH</span> <span class="o">=</span> <span class="mi">32</span><span class="o">,</span></code></pre></figure>
+
+<p>I’m somewhat torn over the data width and
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+parameters listed above.  Specifically, should they be declared as
+<code class="highlighter-rouge">localparam</code>s or full blown <code class="highlighter-rouge">parameter</code>s?  Realistically, both of these should
+be <code class="highlighter-rouge">localparam</code>s, since they cannot be externally adjusted without breaking
+the core within.</p>
+
+<p>The width of the stream data signal is easier to change on the other hand.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">//
+</span>		<span class="c1">// C_AXIS_DATA_WIDTH is the width of the TDATA elements on
+</span>		<span class="c1">// the AXI streams.  This value can be anything between 1 and
+</span>		<span class="c1">// the full width of the AXI-lite bus, 32.
+</span>		<span class="k">parameter</span>	<span class="n">C_AXIS_DATA_WIDTH</span> <span class="o">=</span> <span class="mi">16</span><span class="o">,</span></code></pre></figure>
+
+<p>I also decided to get a bit fancy, and make the stream source and sink
+interfaces optional.  <code class="highlighter-rouge">OPT_SOURCE</code> and <code class="highlighter-rouge">OPT_SINK</code> below just disconnect
+any (relevant/costly) logic within from the various ports.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">//
+</span>		<span class="c1">// OPT_SOURCE enables the AXI stream master logic.  If not
+</span>		<span class="c1">// enabled, M_AXI_TVALID will be held at zero, and the stream
+</span>		<span class="c1">// master logic may be ignored.
+</span>		<span class="k">parameter</span> <span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">OPT_SOURCE</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">,</span>
+		<span class="c1">//
+</span>		<span class="c1">// OPT_SINK enables the AXI stream slave logic.  If not enabled,
+</span>		<span class="c1">// reads will always return zero, and S_AXIS_TREADY will be
+</span>		<span class="c1">// held high.
+</span>		<span class="k">parameter</span> <span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">OPT_SINK</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">,</span></code></pre></figure>
+
+<p>It can be annoying to read from a stream of 22-bits into a 32-bit value, only
+to later need to adjust this 32-bit value to sign extend those last 10-bits.
+This would be easier to do within the core, so we’ll set <code class="highlighter-rouge">OPT_SIGN_EXTEND</code>
+for this purpose.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">//
+</span>		<span class="c1">// If OPT_SIGN_EXTEND is set, values received will be sign
+</span>		<span class="c1">// extended to fill the full data width on read.  Otherwise
+</span>		<span class="c1">// the most significant of any unused bits will remain clear.
+</span>		<span class="k">parameter</span> <span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">OPT_SIGN_EXTEND</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">,</span></code></pre></figure>
+
+<p>The <a href="/blog/2017/07/29/fifo.html">FIFO</a>
+size is more interesting.  The bigger the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+is, the easier it will
+be to send large blocks of data to this core.  (Think network packets here,
+of <a href="/dsp/2018/10/02/fft.html">FFT</a>
+blocks.)
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>s,
+however, use resources.  Therefore, I’ve chosen to keep this
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>’s
+resources at a minimum by default and set it to 5–the
+size that will fit into one Xilinx SLICEM per bit.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">//
+</span>		<span class="c1">// Data written to this core will be placed into a FIFO before
+</span>		<span class="c1">// entering the AXI stream master.  LGFIFO is the log, based
+</span>		<span class="c1">// two, of the number of words in this FIFO.  Similarly, data
+</span>		<span class="c1">// consumed by AXI stream slave contained in this core will go
+</span>		<span class="c1">// first into a read FIFO.  Reads from the core will then return
+</span>		<span class="c1">// data from this FIFO, or a bus error if none is available.
+</span>		<span class="k">parameter</span> 	<span class="n">LGFIFO</span> <span class="o">=</span> <span class="mi">5</span><span class="o">,</span></code></pre></figure>
+
+<p>Feel free to adjust this
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+size as your application requires.</p>
+
+<p>If you find yourself working with
+<a href="/dsp/2018/10/02/fft.html">my FFT</a>,
+you’ll know that you can configure the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+to handle one new value every clock cycle, one every other clock
+cycle, or one every third clock cycle.  Setting the <code class="highlighter-rouge">OPT_TIMEOUT</code> field to
+4 (one extra, for good measure) in this case would be appropriate.  You’ll
+need to decide the right amount for your application, depending upon your
+needs.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">//
+</span>		<span class="c1">// OPT_TIMEOUT, if non-zero, will allow writes to the stream
+</span>		<span class="c1">// master, or reads from the stream slave, to stall the core
+</span>		<span class="c1">// for OPT_TIMEOUT cycles for the stream to be ready.  If the
+</span>		<span class="c1">// stream isn't ready at this time (i.e. if the write FIFO is
+</span>		<span class="c1">// still full, or the read FIFO still empty), the result will
+</span>		<span class="c1">// be returned as a bus error.  Likewise, if OPT_TIMEOUT==0,
+</span>		<span class="c1">// the core will always return a bus error if ever the write
+</span>		<span class="c1">// FIFO is full or the read FIFO empty.
+</span>		<span class="k">parameter</span>	<span class="n">OPT_TIMEOUT</span> <span class="o">=</span> <span class="mi">5</span><span class="o">,</span></code></pre></figure>
+
+<p>If you don’t ever expect to write to a full
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+or try to read from a empty
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+you can safely set this <code class="highlighter-rouge">OPT_TIMEOUT</code> value to zero.</p>
+
+<p>I’m also experimenting with an <code class="highlighter-rouge">OPT_LOWPOWER</code> option on all my cores.  We’ve
+discussed this a bit before.  Since one source of power used by a design is
+the power required to change logic wires, I have this <code class="highlighter-rouge">OPT_LOWPOWER</code> option
+for use in holding any unused values to zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">//
+</span>		<span class="c1">// OPT_LOWPOWER sets outputs to zero if not valid.  This applies
+</span>		<span class="c1">// to the AXI-lite bus, however, and not the AXI stream FIFOs,
+</span>		<span class="c1">// since those don't have LOWPOWER support (currently).
+</span>		<span class="k">parameter</span> <span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">OPT_LOWPOWER</span> <span class="o">=</span> <span class="mi">0</span><span class="o">,</span></code></pre></figure>
+
+<p>This “lowpower” option may also make it easier to “see” things in a
+<a href="/blog/2017/07/31/vcd.html">VCD trace</a> display.</p>
+
+<p>At some point in time, I’d like to come back and revisit these settings to see
+if adjusting them actually does lower power usage.  Until that time, I’m just
+slowly accumulating these values.</p>
+
+<p>Skipping past the port definitions, I’m going to define four (word-based)
+<a href="/zipcpu/2019/09/03/address-assignment.html">addresses</a>
+for this core:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">localparam</span>	<span class="p">[</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">ADDR_SINK</span> <span class="o">=</span> <span class="mb">2'b00</span><span class="o">,</span>	<span class="c1">// Read from stream
+</span>				<span class="n">ADDR_SOURCE</span> <span class="o">=</span> <span class="mb">2'b01</span><span class="o">,</span> <span class="c1">// Write, also sets TLAST
+</span>				<span class="n">ADDR_STATS</span>  <span class="o">=</span> <span class="mb">2'b10</span><span class="o">,</span>
+				<span class="n">ADDR_FIFO</span>   <span class="o">=</span> <span class="mb">2'b11</span><span class="o">;</span></code></pre></figure>
+
+<p>I also find Xilinx’s <code class="highlighter-rouge">C_FULL_VARIABLE_NAME</code> convention cumbersome to use.
+Sure, it’s great for documenting code, but I’ll just rename the stream width
+to <code class="highlighter-rouge">SW</code> for internal usage here.  You can search the code for the definition
+of <code class="highlighter-rouge">SW</code> and then get the best of both worlds.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">localparam</span>	<span class="n">SW</span> <span class="o">=</span> <span class="n">C_AXIS_DATA_WIDTH</span><span class="o">;</span></code></pre></figure>
+
+<p>We can then skip the rest of the module definition, and jump right to the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+write processing.  For the most part, I just copied the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+processing logic from the
+<a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite article</a>.
+Notice below, for example, that I’m only keeping the full word
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>.
+One other change I made was to remove the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>
+option.  If you are writing to a stream, you’ll want to be
+able to write as fast as your
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+infrastructure will allow you to–since that will be the bottleneck in your
+testing design, and one of the big differences between test and real
+performance.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">skidbuffer</span> <span class="p">#(</span><span class="o">.</span><span class="n">OPT_OUTREG</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">OPT_LOWPOWER</span><span class="p">(</span><span class="n">OPT_LOWPOWER</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">DW</span><span class="p">(</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">))</span>
+	<span class="n">axilawskid</span><span class="p">(</span><span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_valid</span><span class="p">(</span><span class="n">S_AXI_AWVALID</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">o_ready</span><span class="p">(</span><span class="n">S_AXI_AWREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="n">S_AXI_AWADDR</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">])</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_valid</span><span class="p">(</span><span class="n">awskd_valid</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_ready</span><span class="p">(</span><span class="n">axil_write_ready</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="n">awskd_addr</span><span class="p">))</span><span class="o">;</span>
+
+	<span class="n">skidbuffer</span> <span class="p">#(</span><span class="o">.</span><span class="n">OPT_OUTREG</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">OPT_LOWPOWER</span><span class="p">(</span><span class="n">OPT_LOWPOWER</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">DW</span><span class="p">(</span><span class="n">C_AXI_DATA_WIDTH</span><span class="o">+</span><span class="n">C_AXI_DATA_WIDTH</span><span class="o">/</span><span class="mi">8</span><span class="p">))</span>
+	<span class="n">axilwskid</span><span class="p">(</span><span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_valid</span><span class="p">(</span><span class="n">S_AXI_WVALID</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">o_ready</span><span class="p">(</span><span class="n">S_AXI_WREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="o">{</span> <span class="n">S_AXI_WDATA</span><span class="o">,</span> <span class="n">S_AXI_WSTRB</span> <span class="o">}</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_valid</span><span class="p">(</span><span class="n">wskd_valid</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_ready</span><span class="p">(</span><span class="n">axil_write_ready</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="o">{</span> <span class="n">wskd_data</span><span class="o">,</span> <span class="n">wskd_strb</span> <span class="o">}</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Now that we’ve gotten through the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffers</a>,
+the rest of the design will
+handle write processing based upon the <code class="highlighter-rouge">axil_write_ready</code> signal below.
+This signal guarantees that we don’t try processing a signal until both write
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+and write data are ready.  It also makes certain that we don’t drop
+data packets, by double checking that the output isn’t stalled with a return
+response that’s not getting accepted.  Finally, we’ll stall a write to the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a> if ever the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a> is full–just up until
+a write timeout.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">axil_write_ready</span> <span class="o">=</span> <span class="n">awskd_valid</span> <span class="o">&amp;&amp;</span> <span class="n">wskd_valid</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_BVALID</span> <span class="o">||</span> <span class="n">S_AXI_BREADY</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="p">((</span><span class="n">awskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">ADDR_SOURCE</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+				<span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">wfifo_full</span> <span class="o">||</span> <span class="n">write_timeout</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>This signal is <em>key</em> to a lot of the processing that follows.  It’s worth
+noting that it only requires 8-inputs, so it should only cost one MUX8
+to calculate.  Well, not quite.  Those
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>
+valid signals are also combinatorial.  Therefore, when
+<a href="/blog/2017/06/12/minimizing-luts.html">counting logic</a>,
+be aware that you are probably two layers deep into combinatorial logic
+on your way to the next flip-flop whenever you use this signal.  If this is
+a problem, you can register the
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a> outputs.</p>
+
+<p>Now let’s look at how to handle the write timeouts.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">((</span><span class="n">OPT_TIMEOUT</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">OPT_SOURCE</span><span class="p">)</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>We’ll start our timeout counter, <code class="highlighter-rouge">write_timer</code>, at <code class="highlighter-rouge">OPT_TIMEOUT-1</code>
+if ever the bus is idle.  We’ll also return <code class="highlighter-rouge">write_timeout</code> to zero
+at this time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+			<span class="n">write_timeout</span><span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Then, any time the bus isn’t yet ready to issue a write, or any time we
+have written to the bus successfully, then we’ll reset the timer to it’s
+full length.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">awskd_valid</span> <span class="o">||</span> <span class="o">!</span><span class="n">wfifo_full</span> <span class="o">||</span> <span class="o">!</span><span class="n">wskd_valid</span>
+				<span class="o">||</span> <span class="p">(</span><span class="n">awskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">ADDR_SOURCE</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+				<span class="o">||</span> <span class="p">(</span><span class="n">S_AXI_BVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_BREADY</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+			<span class="n">write_timeout</span><span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, if we are stalled waiting for the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+to accept new data, then count down.  Once we get to zero, set the
+<code class="highlighter-rouge">write_timeout</code> value so we can accept the write anyway and just return a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">write_timer</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+				<span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">write_timer</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="n">write_timeout</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>Just to make certain we built this relationship properly, we’ll stuff our
+two assertions in here before leaving the generate block.  The <code class="highlighter-rouge">ifdef</code>
+will keep the assertions from being examined by the synthesizer.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">FORMAL</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">write_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">write_timeout</span> <span class="o">==</span> <span class="p">(</span><span class="n">write_timer</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span><span class="o">;</span>
+<span class="cp">`endif</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span></code></pre></figure>
+
+<p>Finally, if either we aren’t supporting timeouts, or if we aren’t supporting
+a stream source/master interface, then let’s make certain that the
+<code class="highlighter-rouge">write_timeout</code> is always true–that way we’ll never wait if the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+is busy.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">write_timeout</span><span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>The <code class="highlighter-rouge">BVALID</code> logic is almost identical to our
+<a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">example</a>.
+The only difference between the two here is hidden in the <code class="highlighter-rouge">axil_write_ready</code>
+signal above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axil_bvalid</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">axil_bvalid</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">axil_write_ready</span><span class="p">)</span>
+		<span class="n">axil_bvalid</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_BREADY</span><span class="p">)</span>
+		<span class="n">axil_bvalid</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+
+	<span class="k">assign</span>	<span class="n">S_AXI_BVALID</span> <span class="o">=</span> <span class="n">axil_bvalid</span><span class="o">;</span></code></pre></figure>
+
+<p>The last piece of the write signaling is the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+<a href="/doc/axi-spec.pdf">AXI</a> supports
+four bus responses: <code class="highlighter-rouge">2'b00</code> <code class="highlighter-rouge">OKAY</code>, <code class="highlighter-rouge">2'b01</code> <code class="highlighter-rouge">EXOKAY</code>, <code class="highlighter-rouge">2'b10</code> <code class="highlighter-rouge">SLVERR</code>, and
+<code class="highlighter-rouge">2'b11</code> <code class="highlighter-rouge">DECERR</code>.  AXI-lite slaves aren’t allowed to return <code class="highlighter-rouge">EXOKAY</code> signals,
+and <a href="/zipcpu/2019/09/03/address-assignment.html">decode
+errors</a>
+really only make sense if returned by the
+<a href="/blog/2019/07/17/crossbar.html">interconnect</a>.
+Therefore, we’ll return either <code class="highlighter-rouge">OKAY</code>, if everything works well, or <code class="highlighter-rouge">SLVERR</code>
+if we timeout while waiting for space in
+the <a href="/blog/2017/07/29/fifo.html">FIFO</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axil_berr</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">axil_berr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">axil_write_ready</span><span class="p">)</span>
+		<span class="n">axil_berr</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">wfifo_full</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">awskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">==</span><span class="n">ADDR_SOURCE</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_BREADY</span><span class="p">)</span>
+		<span class="n">axil_berr</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+
+	<span class="k">assign</span>	<span class="n">S_AXI_BRESP</span> <span class="o">=</span> <span class="o">{</span> <span class="n">axil_berr</span><span class="o">,</span> <span class="mb">1'b0</span> <span class="o">};</span></code></pre></figure>
+
+<p>The logic above is really much simpler than it looks.  If we are responding to
+a write, then we generate an error if the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+was full and the write was to be to our stream source location.  The
+rest of the logic just clears our
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+signal so that it will only ever be set if <code class="highlighter-rouge">BVALID</code> is also set.
+If you keep <code class="highlighter-rouge">OPT_LOWPOWER</code> clear, this logic will quietly vanish.</p>
+
+<p>That brings us to our stream source write
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.
+We’ll want to write to this
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+on any write to the stream source registers for our
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">core</a>.
+There are only two exceptions, both discussed above.  The first is that we
+won’t attempt to write if the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+is full–even if the write was accepted (i.e. it timed out).  Second, we’ll
+only write to the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+if the <code class="highlighter-rouge">WSTRB</code> signal associated with this data is not zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">wfifo_write</span> <span class="o">=</span> <span class="n">axil_write_ready</span> <span class="o">&amp;&amp;</span> <span class="n">awskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">==</span><span class="n">ADDR_SOURCE</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+			<span class="o">&amp;&amp;</span> <span class="n">wskd_strb</span> <span class="o">!=</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">wfifo_full</span><span class="o">;</span></code></pre></figure>
+
+<p>The stream source
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+should look similar, if not identical, to what we
+discussed above.  The biggest difference is that we’ve now added the <code class="highlighter-rouge">TLAST</code>
+information, and placed the entire
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+logic into a generate block.  The generate block will help us remove all of
+this extra logic if we won’t be connecting to an
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+consumer in the first place.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SOURCE</span><span class="p">)</span>
+	<span class="k">begin</span>
+
+		<span class="n">sfifo</span> <span class="p">#(</span><span class="o">.</span><span class="n">BW</span><span class="p">(</span><span class="n">SW</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">LGFLEN</span><span class="p">(</span><span class="n">LGFIFO</span><span class="p">))</span>
+		<span class="n">source</span><span class="p">(</span><span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">i_wr</span><span class="p">(</span><span class="n">wfifo_write</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="o">{</span><span class="n">awskd_addr</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">,</span>
+					<span class="n">wskd_data</span><span class="p">[</span><span class="n">SW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">}</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">o_full</span><span class="p">(</span><span class="n">wfifo_full</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">o_fill</span><span class="p">(</span><span class="n">wfifo_fill</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">i_rd</span><span class="p">(</span><span class="n">M_AXIS_TREADY</span><span class="p">)</span><span class="o">,</span>
+				<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="o">{</span> <span class="n">M_AXIS_TLAST</span><span class="o">,</span> <span class="n">M_AXIS_TDATA</span> <span class="o">}</span><span class="p">)</span><span class="o">,</span>
+				<span class="o">.</span><span class="n">o_empty</span><span class="p">(</span><span class="n">wfifo_empty</span><span class="p">))</span><span class="o">;</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">M_AXIS_TVALID</span> <span class="o">=</span> <span class="o">!</span><span class="n">wfifo_empty</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span></code></pre></figure>
+
+<p>In case the user kept the <code class="highlighter-rouge">OPT_SOURCE</code> parameter clear, we’ll just quietly
+and carefully not generate any outgoing stream data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">M_AXIS_TVALID</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">M_AXIS_TDATA</span>  <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">M_AXIS_TLAST</span>  <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">assign</span>	<span class="n">wfifo_full</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">assign</span>	<span class="n">wfifo_fill</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>That’s the write
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+which generates an
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+source.  Indeed, that really completes the whole write half of
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>.</p>
+
+<p>The next step is the read
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+where we read data from the incoming stream.  As with the write
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+we’re using a generate block to allow us to easily remove the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+if it won’t actually be used.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SINK</span><span class="p">)</span>
+	<span class="k">begin</span>
+
+		<span class="n">sfifo</span> <span class="p">#(</span><span class="o">.</span><span class="n">BW</span><span class="p">(</span><span class="n">SW</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">LGFLEN</span><span class="p">(</span><span class="n">LGFIFO</span><span class="p">))</span>
+		<span class="n">sink</span><span class="p">(</span><span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">,</span></code></pre></figure>
+
+<p>Writing to the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+is really easy.  Indeed, we really don’t need to adjust the
+<a href="/doc/axi-spec.pdf">AXI</a>
+handshaking signals (much).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="o">.</span><span class="n">i_wr</span><span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TREADY</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="o">{</span><span class="n">S_AXIS_TLAST</span><span class="o">,</span> <span class="n">S_AXIS_TDATA</span><span class="o">}</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">o_full</span><span class="p">(</span><span class="n">rfifo_full</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">o_fill</span><span class="p">(</span><span class="n">rfifo_fill</span><span class="p">)</span><span class="o">,</span></code></pre></figure>
+
+<p>Our biggest problem will be that the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+returns an FULL signal when what we want is a READY signal.  We’ll
+fix that in just a moment.</p>
+
+<p>For now, notice that reading from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+depends upon a <code class="highlighter-rouge">read_rfifo</code> signal.  That and <code class="highlighter-rouge">rfifo_empty</code> are the
+key signals here.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="o">.</span><span class="n">i_rd</span><span class="p">(</span><span class="n">read_rfifo</span><span class="p">)</span><span class="o">,</span>
+				<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="o">{</span> <span class="n">rfifo_last</span><span class="o">,</span> <span class="n">rfifo_data</span> <span class="o">}</span><span class="p">)</span><span class="o">,</span>
+				<span class="o">.</span><span class="n">o_empty</span><span class="p">(</span><span class="n">rfifo_empty</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>I said above that we needed a READY signal rather than a FULL signal.
+Converting between the two on an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>.
+is really a no-cost operation, since it will get absorbed into whatever
+<a href="/blog/2017/06/12/minimizing-luts.html">LUT</a>
+it goes to next.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">S_AXIS_TREADY</span> <span class="o">=</span> <span class="o">!</span><span class="n">rfifo_full</span><span class="o">;</span></code></pre></figure>
+
+<p>Now for the key signal.  We’ll read from this
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+on three conditions.
+The first, most obvious one, is that a bus read must have been requested and
+accepted.  The second condition is that we must be reading from the <code class="highlighter-rouge">ADDR_SINK</code>
+data <a href="/zipcpu/2019/09/03/address-assignment.html">address</a>,
+and third, that there must be data there.  If not, any read would fail.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">assign</span>	<span class="n">read_rfifo</span> <span class="o">=</span><span class="p">(</span><span class="n">axil_read_ready</span> <span class="o">&amp;&amp;</span> <span class="n">arskd_addr</span><span class="o">==</span> <span class="n">ADDR_SINK</span><span class="p">)</span>
+				<span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">rfifo_empty</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span></code></pre></figure>
+
+<p>Finally, if we aren’t implementing a stream sink/slave, we’ll just idle all of
+these lines.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">S_AXIS_TREADY</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+
+		<span class="k">assign</span> <span class="n">rfifo_empty</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">assign</span> <span class="n">rfifo_data</span>  <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">assign</span> <span class="n">rfifo_last</span>  <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">assign</span> <span class="n">rfifo_fill</span>  <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>The key here is that we want to leave <code class="highlighter-rouge">TREADY</code> high–in case someone
+accidentally connects
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>
+to a real
+<a href="/doc/axi-stream.pdf">AXI Stream</a>.
+This way, we won’t stall that stream.</p>
+
+<p>Read timeout processing is almost identical to the write timeouts discussed
+above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SINK</span> <span class="o">&amp;&amp;</span> <span class="n">OPT_TIMEOUT</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// ...
+</span>		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">read_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+			<span class="n">read_timeout</span><span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">arskd_valid</span> <span class="o">||</span> <span class="p">(</span><span class="n">S_AXI_RVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_RREADY</span><span class="p">)</span>
+				<span class="o">||!</span><span class="n">rfifo_empty</span>
+				<span class="o">||</span><span class="p">(</span><span class="n">arskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">ADDR_SINK</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+		<span class="k">begin</span>
+			<span class="n">read_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+			<span class="n">read_timeout</span><span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">read_timer</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>
+				<span class="n">read_timer</span> <span class="o">&lt;=</span> <span class="n">read_timer</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="n">read_timeout</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">read_timer</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+
+<span class="cp">`ifdef</span>	<span class="n">FORMAL</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">read_timer</span> <span class="o">&lt;=</span> <span class="n">OPT_TIMEOUT</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">read_timeout</span> <span class="o">==</span> <span class="p">(</span><span class="n">read_timer</span> <span class="o">==</span> <span class="mi">0</span><span class="p">))</span><span class="o">;</span>
+<span class="cp">`endif</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+			<span class="n">read_timeout</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>Now that we have our read
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+squared away, let’s look at what it will take to handle the
+<a href="/formal/2018/12/28/axilite.html">AXI-lite signaling</a>.
+The first step, as we’ve discussed in the
+<a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite article</a>,
+is to run the read request into a
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">skidbuffer</span> <span class="p">#(</span><span class="o">.</span><span class="n">OPT_OUTREG</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">OPT_LOWPOWER</span><span class="p">(</span><span class="n">OPT_LOWPOWER</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">DW</span><span class="p">(</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">))</span>
+	<span class="n">axilarskid</span><span class="p">(</span><span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_valid</span><span class="p">(</span><span class="n">S_AXI_ARVALID</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">o_ready</span><span class="p">(</span><span class="n">S_AXI_ARREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="n">S_AXI_ARADDR</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">])</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_valid</span><span class="p">(</span><span class="n">arskd_valid</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_ready</span><span class="p">(</span><span class="n">axil_read_ready</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="n">arskd_addr</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>When shall we accept a value from this
+<a href="/blog/2019/05/22/skidbuffer.html">skid buffer</a>?
+Unlike the
+<a href="/doc/axi-spec.pdf">AXI</a>
+write side, we don’t need to wait for both valid write
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+and write data, we can read if ever there’s a valid read
+<a href="/zipcpu/2019/09/03/address-assignment.html">address</a>
+request.  That’s the first part.
+The second part is that we can’t read until the last result has been cleared.
+If there’s <a href="https://en.wikipedia.org/wiki/Back_pressure">back pressure</a>
+on the return, we’ll need to wait.  Finally, if the user wishes to read from
+the stream sink <a href="/blog/2017/07/29/fifo.html">FIFO</a> and the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+is empty, then we’ll wait.  If no data shows up, we’ll time out and return a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">axil_read_ready</span> <span class="o">=</span> <span class="n">arskd_valid</span>
+			<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_RVALID</span> <span class="o">||</span> <span class="n">S_AXI_RREADY</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="p">((</span><span class="n">arskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">ADDR_SINK</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+				<span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">rfifo_empty</span> <span class="o">||</span> <span class="n">read_timeout</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>The <code class="highlighter-rouge">RVALID</code> signal should look identical to the
+<a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">example</a>, and
+indeed to the <code class="highlighter-rouge">BVALID</code> signal above.  The big difference is that there’s
+more logic stuffed into the <code class="highlighter-rouge">axil_read_ready</code> signal than there was in our
+<a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">example</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axil_read_valid</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">axil_read_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">axil_read_ready</span><span class="p">)</span>
+		<span class="n">axil_read_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_RREADY</span><span class="p">)</span>
+		<span class="n">axil_read_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+
+	<span class="k">assign</span>	<span class="n">S_AXI_RVALID</span> <span class="o">=</span> <span class="n">axil_read_valid</span><span class="o">;</span></code></pre></figure>
+
+<p>As with <code class="highlighter-rouge">BRESP</code>, we’ll generate a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+on any attempt to read from an empty
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>,
+after a timeout.  Otherwise all read responses should return an <code class="highlighter-rouge">OKAY</code>
+no error response (2’b00).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">axil_rerr</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">axil_read_ready</span><span class="p">)</span>
+		<span class="n">axil_rerr</span> <span class="o">&lt;=</span> <span class="n">rfifo_empty</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">arskd_addr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="n">ADDR_SINK</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_RREADY</span><span class="p">)</span>
+		<span class="n">axil_rerr</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+
+	<span class="k">assign</span>	<span class="n">S_AXI_RRESP</span> <span class="o">=</span> <span class="o">{</span> <span class="n">axil_rerr</span><span class="o">,</span> <span class="mb">1'b0</span> <span class="o">};</span></code></pre></figure>
+
+<p>At this point, we’ve defined three registers.  There’s the two stream
+source register–one clearing <code class="highlighter-rouge">TLAST</code> and one setting it.  Those registers
+are shared by the two stream sink registers, one peeking at the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+and the other reading from it.  There’s also the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+fill status register we discussed above.  There’s one more register position
+available to us.</p>
+
+<p>Why not implement a counter, to count how much data has been received
+from the various streams?</p>
+
+<p>Let’s count two things: First, we’ll count the number of data words transmitted
+or received on each channel.  Second, we’ll count the number of <code class="highlighter-rouge">TLAST</code>s on
+each channel.  Since we don’t really have a way of keeping these counters from
+overflowing, we’ll just accept that as a general consequence that the user
+will need to handle.</p>
+
+<p>Here’s the logic for the read counters.  First, they get cleared on reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">reads_completed</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">read_bursts_completed</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">reads_completed</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">read_bursts_completed</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>If we haven’t implemented the read sink, then we’ll count whether any data
+comes in that interface anyway.  It’s just dropping on the floor, but it might
+be worth knowing it was there in the first place.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_SINK</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">reads_completed</span> <span class="o">&lt;=</span> <span class="n">reads_completed</span> <span class="o">+</span> <span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="n">read_bursts_completed</span> <span class="o">&lt;=</span> <span class="n">read_bursts_completed</span>
+				<span class="o">+</span> <span class="p">((</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TLAST</span><span class="p">)</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Otherwise, we’ll count values received every time we read from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">read_rfifo</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">rfifo_empty</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">reads_completed</span> <span class="o">&lt;=</span> <span class="n">reads_completed</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">read_bursts_completed</span> <span class="o">&lt;=</span> <span class="n">read_bursts_completed</span> <span class="o">+</span> <span class="p">(</span><span class="n">rfifo_last</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>The write counters are almost identical.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SOURCE</span><span class="p">)</span>
+	<span class="k">begin</span>
+
+		<span class="k">initial</span>	<span class="n">writes_completed</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">initial</span>	<span class="n">write_bursts_completed</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">writes_completed</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">write_bursts_completed</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>Where the write counters differ is that we’ll count values leaving
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our core</a>
+rather than values written into our source
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">writes_completed</span> <span class="o">&lt;=</span> <span class="n">writes_completed</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="n">write_bursts_completed</span> <span class="o">&lt;=</span> <span class="n">write_bursts_completed</span>
+					<span class="o">+</span> <span class="p">(</span><span class="n">M_AXIS_TLAST</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span></code></pre></figure>
+
+<p>Since we are the source of this second stream, then the counter would be
+meaningless if the source functionality wasn’t enabled.  In that case,
+we’ll just hold the counters at zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">writes_completed</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">write_bursts_completed</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">end</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>The last important part of this core is the data read from it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axil_read_data</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">axil_read_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>The first rule of read data is that it can only change if the
+<a href="/formal/2018/12/28/axilite.html">AXI-lite bus</a>
+isn’t stalled.  By gating on <code class="highlighter-rouge">!RVALID || RREADY</code> we guarantee that we’ll
+meet this rule of the road.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_RVALID</span> <span class="o">||</span> <span class="n">S_AXI_RREADY</span><span class="p">)</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>Now let’s walk through the registers that we might wish to read from.</p>
+
+<p>If we read from the stream at all, we’ll be reading from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.  This will be true
+for both the “correct” address–which will remove a value from the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a> upon being read–as well
+as the <code class="highlighter-rouge">ADDR_SOURCE</code> address–which will just allow us to peek at the read
+data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">axil_read_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">casez</span><span class="p">(</span><span class="n">arskd_addr</span><span class="p">)</span>
+		<span class="o">{</span> <span class="n">ADDR_SINK</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">,</span> <span class="mb">1'b?</span> <span class="o">}:</span>	<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">OPT_SIGN_EXTEND</span> <span class="o">&amp;&amp;</span> <span class="n">rfifo_data</span><span class="p">[</span><span class="n">SW</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+				<span class="n">axil_read_data</span> <span class="o">&lt;=</span> <span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+			<span class="n">axil_read_data</span><span class="p">[</span><span class="n">SW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">rfifo_data</span><span class="o">;</span>
+			<span class="k">end</span></code></pre></figure>
+
+<p>Since we started this block by setting every bit to zero, we’ll only adjust
+bits here that are defined by the stream.  The exception is if we want to
+sign extend our data.  In that case, and if the data value has its sign bit
+set, then we’ll set everything to <code class="highlighter-rouge">1'b1</code> before rewriting the correct values
+to the stream bits.</p>
+
+<p>That brings us to our statistics register, containing counts of data received
+and transmitted.  This is straightforward.  The
+burst counters are four bits each, and the word counters are 12-bits each.
+We just form a word to return here from them.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">ADDR_STATS</span><span class="o">:</span> <span class="k">begin</span>
+			<span class="n">axil_read_data</span><span class="p">[</span><span class="mi">31</span><span class="o">:</span><span class="mi">28</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">write_bursts_completed</span><span class="o">;</span>
+			<span class="n">axil_read_data</span><span class="p">[</span><span class="mi">27</span><span class="o">:</span><span class="mi">16</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">writes_completed</span><span class="o">;</span>
+			<span class="n">axil_read_data</span><span class="p">[</span><span class="mi">15</span><span class="o">:</span><span class="mi">12</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">read_bursts_completed</span><span class="o">;</span>
+			<span class="n">axil_read_data</span><span class="p">[</span><span class="mi">11</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>  <span class="o">&lt;=</span> <span class="n">reads_completed</span><span class="o">;</span>
+			<span class="k">end</span></code></pre></figure>
+
+<p>After the statistics register is the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+fill register.  For this register, we’ll report the write (source)
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>’s
+fill in the top 16 bits, and the read (sink)
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>’s
+fill in the bottom 15-bits.  In many ways, it’s unlikely that our
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>
+size will ever be 32768 elements corresponding to 128kB–the
+maximum size that could be reported here.  Block RAM is just too precious
+to place all of it here.  Therefore, we can steal one of those bits to return
+a <code class="highlighter-rouge">TLAST</code> value from our stream sink.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">ADDR_FIFO</span><span class="o">:</span>	<span class="k">begin</span>
+			<span class="c1">// FIFO information
+</span>			<span class="n">axil_read_data</span><span class="p">[</span><span class="mi">16</span> <span class="o">+:</span> <span class="n">LGFIFO</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">wfifo_fill</span><span class="o">;</span>
+			<span class="n">axil_read_data</span><span class="p">[</span><span class="mi">15</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">rfifo_last</span><span class="o">;</span>
+			<span class="n">axil_read_data</span><span class="p">[</span><span class="n">LGFIFO</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">rfifo_fill</span><span class="o">;</span>
+			<span class="k">end</span>
+		<span class="k">endcase</span></code></pre></figure>
+
+<p>As one final touch, if nothing’s reading from
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>,
+and if we are building an (unproven) “low power” design, then we’ll clear
+the read data register.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">axil_read_ready</span><span class="p">)</span>
+			<span class="n">axil_read_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">end</span>
+
+	<span class="k">assign</span>	<span class="n">S_AXI_RDATA</span>  <span class="o">=</span> <span class="n">axil_read_data</span><span class="o">;</span></code></pre></figure>
+
+<p>That ends the basic logic for
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>.</p>
+
+<p>But how shall we know that it works?</p>
+
+<h2 id="verification">Verification</h2>
+
+<p>Here, we turn to formal methods.</p>
+
+<p>Have I tested this core in simulation yet?  In hardware?  No, not at this
+point.  Still, here are the properties I have.</p>
+
+<p>First, we’ll always assume that we start up with the reset active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_past_valid</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+		<span class="n">f_past_valid</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span><span class="p">)</span>
+		<span class="k">assume</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>That was easy.</p>
+
+<p>What else might we do?</p>
+
+<p>We can include our <a href="/formal/2018/12/28/axilite.html">AXI-lite formal property
+set</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">faxil_slave</span> <span class="p">#(</span>
+		<span class="o">.</span><span class="n">C_AXI_DATA_WIDTH</span><span class="p">(</span><span class="n">C_AXI_DATA_WIDTH</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="p">(</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">F_LGDEPTH</span><span class="p">(</span><span class="n">F_AXIL_LGDEPTH</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">F_AXI_MAXWAIT</span><span class="p">(</span><span class="n">OPT_TIMEOUT</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">F_AXI_MAXDELAY</span><span class="p">(</span><span class="n">OPT_TIMEOUT</span> <span class="o">+</span> <span class="mi">2</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">F_AXI_MAXRSTALL</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">F_OPT_COVER_BURST</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+	<span class="p">)</span> <span class="n">faxil</span><span class="p">(</span>
+		<span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_axi_reset_n</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">,</span>
+		<span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_axi_awvalid</span><span class="p">(</span><span class="n">S_AXI_AWVALID</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_awready</span><span class="p">(</span><span class="n">S_AXI_AWREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_awaddr</span><span class="p">(</span> <span class="n">S_AXI_AWADDR</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_awcache</span><span class="p">(</span><span class="mh">4'h0</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_awprot</span><span class="p">(</span> <span class="n">S_AXI_AWPROT</span><span class="p">)</span><span class="o">,</span>
+		<span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_axi_wvalid</span><span class="p">(</span><span class="n">S_AXI_WVALID</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_wready</span><span class="p">(</span><span class="n">S_AXI_WREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_wdata</span><span class="p">(</span> <span class="n">S_AXI_WDATA</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_wstrb</span><span class="p">(</span> <span class="n">S_AXI_WSTRB</span><span class="p">)</span><span class="o">,</span>
+		<span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_axi_bvalid</span><span class="p">(</span><span class="n">S_AXI_BVALID</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_bready</span><span class="p">(</span><span class="n">S_AXI_BREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_bresp</span><span class="p">(</span> <span class="n">S_AXI_BRESP</span><span class="p">)</span><span class="o">,</span>
+		<span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_axi_arvalid</span><span class="p">(</span><span class="n">S_AXI_ARVALID</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_arready</span><span class="p">(</span><span class="n">S_AXI_ARREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_araddr</span><span class="p">(</span> <span class="n">S_AXI_ARADDR</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_arcache</span><span class="p">(</span><span class="mh">4'h0</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_arprot</span><span class="p">(</span> <span class="n">S_AXI_ARPROT</span><span class="p">)</span><span class="o">,</span>
+		<span class="c1">//
+</span>		<span class="o">.</span><span class="n">i_axi_rvalid</span><span class="p">(</span><span class="n">S_AXI_RVALID</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_rready</span><span class="p">(</span><span class="n">S_AXI_RREADY</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_rdata</span><span class="p">(</span> <span class="n">S_AXI_RDATA</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_axi_rresp</span><span class="p">(</span> <span class="n">S_AXI_RRESP</span><span class="p">)</span><span class="o">,</span>
+		<span class="c1">//
+</span>		<span class="o">.</span><span class="n">f_axi_rd_outstanding</span><span class="p">(</span><span class="n">faxil_rd_outstanding</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">f_axi_wr_outstanding</span><span class="p">(</span><span class="n">faxil_wr_outstanding</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">f_axi_awr_outstanding</span><span class="p">(</span><span class="n">faxil_awr_outstanding</span><span class="p">)</span>
+		<span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>It’s unfortunate that instantiating
+<a href="/formal/2018/12/28/axilite.html">this property set</a>
+takes so much typing.  Half of the proof is captured by
+<a href="/formal/2018/12/28/axilite.html">that property set</a>.
+In other words, we’re half way home already.  A simple formal verification
+run at this point would prove that we are
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+compliant–that we haven’t messed anything up.</p>
+
+<p>If you looked closely, you might have noticed that this setup above was
+almost identical to the setup from our
+<a href="/blog/2020/03/08/easyaxil.html">easy AXI-lite</a>
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">example</a>.
+The difference was included in the two configuration parameters, <code class="highlighter-rouge">F_AXI_MAXWAIT</code>
+and <code class="highlighter-rouge">F_AXI_MAXDELAY</code>.  These parameters capture the maximum amount of time
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our core</a>
+should ever take to respond to the
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>.  In order to support a
+timeout of <code class="highlighter-rouge">OPT_TIMEOUT</code> clocks, we needed to extend these values somewhat.
+Other than that–no changes.</p>
+
+<p>The same goes for the
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+assertions.  The only change that’s meed made to these assertions is that
+I’ve removed the <code class="highlighter-rouge">OPT_SKIDBUFFER</code> option.  In all other respects, these
+following lines are unchanged.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_awr_outstanding</span><span class="o">==</span> <span class="p">(</span><span class="n">S_AXI_BVALID</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span>
+			<span class="o">+</span><span class="p">(</span><span class="n">S_AXI_AWREADY</span> <span class="o">?</span> <span class="mi">0</span><span class="o">:</span><span class="mi">1</span><span class="p">))</span><span class="o">;</span>
+
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_wr_outstanding</span> <span class="o">==</span> <span class="p">(</span><span class="n">S_AXI_BVALID</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span>
+			<span class="o">+</span><span class="p">(</span><span class="n">S_AXI_WREADY</span> <span class="o">?</span> <span class="mi">0</span><span class="o">:</span><span class="mi">1</span><span class="p">))</span><span class="o">;</span>
+
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_rd_outstanding</span> <span class="o">==</span> <span class="p">(</span><span class="n">S_AXI_RVALID</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span>
+			<span class="o">+</span><span class="p">(</span><span class="n">S_AXI_ARREADY</span> <span class="o">?</span> <span class="mi">0</span><span class="o">:</span><span class="mi">1</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>At this point, we should be able to pass an
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+check to know that
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our core</a>
+fully implements the AXI-lite specification: No
+<a href="https://en.wikipedia.org/wiki/Central_processing_unit">CPU</a>
+will hang trying to read from
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>.</p>
+
+<p>Let’s move on to our
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+properties.</p>
+
+<p>Remember how we had two properties?  First, <code class="highlighter-rouge">TVALID</code> must drop following any
+reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assume</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Second, if the stream is ever stalled, <code class="highlighter-rouge">TVALID</code> should remain high and any
+associated data should stay constant.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXIS_TREADY</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">S_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">S_AXIS_TDATA</span><span class="p">))</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">S_AXIS_TLAST</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Here, we’ve assumed these properties following my “master rule of formal
+verification”: Assume inputs, assert local state and outputs.  Since these
+signals are inputs to 
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">our design</a>,
+they are assumed.</p>
+
+<p>That also means that we’ll need another block where we assert these same
+properties of our output going stream.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXIS_TREADY</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">))</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXIS_TLAST</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Voila!  We now know this core will obey the rules of the road for both
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+and <a href="/doc/axi-stream.pdf">AXI Stream</a> protocols.</p>
+
+<p>But how well does
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">this core</a>
+work?  For that, we’ll turn to a <code class="highlighter-rouge">cover()</code> check.</p>
+
+<h2 id="cover-checks">Cover Checks</h2>
+
+<p>Once a core I’m working with passes it’s formal properties via induction, <a href="/formal/2018/07/14/dev-cycle.html">I
+next turn to <code class="highlighter-rouge">cover()</code></a>.
+This is usually my last step before qualifying a core for <a href="/blog/2018/08/22/what-is-simulation.html">integrated
+simulation</a>
+testing.</p>
+
+<p>What sorts of things should we test?  We’ll, I’d like to know what kind of
+throughput our
+<a href="/doc/axi-stream.pdf">AXI Stream</a>
+source might achieve.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span> <span class="o">&amp;&amp;</span> <span class="n">writes_completed</span> <span class="o">==</span> <span class="mi">16</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>From this one statement, I get the trace shown in Fig. 11 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 11. Stream Source throughput check</caption><tr><td><img src="/img/axil2axis/write-throughput.svg" alt="" width="780" /></td></tr></table>
+<p><!-- about 20+4=24 wide --></p>
+
+<p>As designed, values written to
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>
+are available on the outgoing stream one clock later.</p>
+
+<p>I can then repeat this same test on the stream sink side of the design.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span> <span class="o">&amp;&amp;</span> <span class="n">reads_completed</span> <span class="o">==</span> <span class="mi">16</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>As before, this one statement returns a valuable trace.  This time, I
+get the trace shown in Fig. 12 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 12. Simplified AXI-Stream signals</caption><tr><td><img src="/img/axil2axis/read-throughput.svg" alt="" width="780" /></td></tr></table>
+<p><!-- about 20+4=24 wide --></p>
+
+<p>This trace is a little more interesting.  In this case, the first read attempt
+stalled.  Why?  Because it takes a clock for data to pass from the incoming
+stream, through the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>, to where it can be
+read.  The neat part is, our design stalls properly as designed during this
+one extra cycle, before returning the requested value.</p>
+
+<p>Pretty cool, huh?</p>
+
+<p>How about a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>?
+Does my timeout logic work?  Can I generate a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> on the stream source side of
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the design</a>?</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">S_AXI_BVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_BRESP</span> <span class="o">!=</span> <span class="mb">2'b00</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Sure enough, Fig. 13 shows what a stream source
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> might look like.</p>
+
+<table align="center" style="float: none"><caption>Fig 13. Simplified AXI-Stream signals</caption><tr><td><img src="/img/axil2axis/write-err.svg" alt="" width="520" /></td></tr></table>
+<p><!-- about 12+4=16 wide --></p>
+
+<p>Yes, I <a href="https://github.com/ZipCPU/wb2axip/blob/acad02c188f1573cebf1decafaddddc8e2a162f5/bench/formal/axil2axis.sby#L26">shortened the size of the</a>
+<a href="/blog/2017/07/29/fifo.html">FIFO</a> to only four elements
+make it easier to generate this trace.</p>
+
+<p>In the trace, four values are written to the stream.  That’s enough to fill up
+the <a href="/blog/2017/07/29/fifo.html">FIFO</a>.  Since the stream
+slave holds <code class="highlighter-rouge">M_AXIS_TREADY</code> low, none of these values leaves the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a>.  Then, when we try to
+write the fifth value, <code class="highlighter-rouge">D4</code> to
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>,
+it has to stall.  There’s no where for this value to go.  After stalling
+for four cycles,
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>
+produces the desired
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> on the fifth cycle.</p>
+
+<p>Let’s repeat the same check on the stream sink side of
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axil2axis.v">the core</a>.
+What would it take to achieve a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> on that side?</p>
+
+<p>Again, the <code class="highlighter-rouge">cover()</code> statement is very easy to write.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">S_AXI_RVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXI_RRESP</span> <span class="o">!=</span> <span class="mb">2'b00</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>In this case, it’s a lot easier to generate a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.  Unlike generating a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> on the stream source side, we
+don’t have to wait for the <a href="/blog/2017/07/29/fifo.html">FIFO</a>
+to fill.  Read <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>s are instead generated when the
+<a href="/blog/2017/07/29/fifo.html">FIFO</a> is empty–such as it would
+be in it’s initial condition.</p>
+
+<p>This trace is shown in Fig. 14 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 14. Simplified AXI-Stream signals</caption><tr><td><img src="/img/axil2axis/read-err.svg" alt="" width="422" /></td></tr></table>
+<p><!-- about 9+4=13 wide --></p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>When students come to me to ask, how shall I do XYZ with an
+<a href="https://en.wikipedia.org/wiki/Field-programmable_gate_array">FPGA</a>?
+My response is usually that you need to start with some scaffolding, and
+then to X, then Y, and then Z.  Today’s design is an example of what such
+scaffolding might look like.  It’s not a design that you’d use within any
+final product.  However, it’s a design that you might need to use on your
+way towards getting there.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Behold, this have I found, saith the preacher, counting one by one, to find out the account (Eccl 7:27)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
