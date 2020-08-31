@@ -1,0 +1,1534 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Run length encoding, using an AXI stream</title>
+  <meta name="description" content="When I am forced to debug a design in actualhardware, I like touse my owninternal logic analyzer.It wasn’t hard to build, and my version has a feature not of...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2020/08/31/run-length-encoding.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Run length encoding, using an AXI stream</h1>
+    <p class="post-meta"><time datetime="2020-08-31T00:00:00-04:00" itemprop="datePublished">Aug 31, 2020</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>When I am <a href="/blog/2017/06/02/design-process.html">forced to debug a design in actual
+hardware</a>, I like to
+use <a href="https://github.com/ZipCPU/wbscope">my own</a>
+<a href="/blog/2017/06/08/simple-scope.html">internal logic analyzer</a>.
+It wasn’t hard to build, and my version has a feature not often found in
+others: <a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length encoding
+(RLE)</a>.  I call this
+<a href="/blog/2017/06/08/simple-scope.html">internal logic analyzer</a>
+with <a href="https://en.wikipedia.org/wiki/Run-length_encoding">RLE</a>
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">my “compressed
+scope”</a>.</p>
+
+<table align="center" style="float: right"><caption>Fig 1. Run length encoding</caption><tr><td><img src="/img/axisrle/encoding.svg" alt="" width="320" /></td></tr></table>
+
+<p>The scheme itself, as illustrated in Fig. 1, is quite simple: 31-bits of data
+come in, 32-bits go out.  When a value first comes in, it gets sent to a
+holding register, then copied to the output on the next clock cycle after
+having a zero bit prepended to the MSB of the output word.  Any subsequent
+copies of that same value coming in are then accumulated into a counter,
+and when a different value enters the holding register the counter is
+then forwarded to the output stage with a one bit prepended to the output
+word.  These two output words, shown in Fig. 1 on the right, form the simple
+basis for this encoding.</p>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 2. GPS serial port is active between PPS signals</caption><tr><td><img src="/img/axisrle/gps-example.svg" alt="" width="480" /></td></tr></table>
+
+<p>While the scheme is fairly simple, it’s kept me out of trouble a couple of
+times.  Once, I was <a href="https://github.com/ZipCPU/wbscope/tree/master/doc/examples/hdmi-eddc">building an I2C controller to the wrong
+spec</a>.
+The <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">compressed
+scope</a>
+helped me discover what wasn’t working.  In another example, I was working
+with a <a href="https://en.wikipedia.org/wiki/Global_Positioning_System">GPS</a>
+receiver and wanted to know how the one-part-per-second (PPS) signal and the
+<a href="https://en.wikipedia.org/wiki/Global_Positioning_System">GPS</a>
+serial port were related.  Specifically, when
+<a href="https://en.wikipedia.org/wiki/Global_Positioning_System">GPS</a> time was
+transmitted across the serial port, how easy would it be to confuse which
+PPS it was related to?  Being able to generate a trace, looking like Fig. 2
+and crossing several secondss, was very useful.  In both cases, it was very
+valuable to be able to record a signal for seconds or even minutes on end
+to then later analyze what happened within the design.</p>
+
+<p>Some time later, I got serious about verifying <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">my compressed scope
+implementation</a>
+and came across a couple issues that needed dealing with along the way.  First,
+I modified the scheme so that it wouldn’t turn on the
+<a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length compression</a>
+until the capture memory was full.  That way, the scope would be primed
+and ready for its first capture all the sooner.  Then, I adjusted the
+<a href="https://en.wikipedia.org/wiki/Run-length_encoding">RLE</a>
+scheme again so that it wouldn’t apply the encoding scheme to the sample
+that triggered the scope.  That meant that I could always back up from the
+end of the recording to know exactly what was happening at the time of the
+trigger.</p>
+
+<p>That left me ready for the next problem: when Xilinx’s Memory Interface
+Generator (MIG) generated a DDR3 core for my <a href="https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications">Nexys Video
+board</a>
+that wasn’t working, I pulled out <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">my compressed
+scope</a> again
+to see what was going on.  I was able to quickly determine that the MIG core
+was generating AXI RVALID signals without prior AXI ARVALID requests.  Not
+knowing how to fix what appeared to obviously be a problem with Xilinx’s
+MIG core, I wrote asking for help.</p>
+
+<p>I was first told that I must be crossing 4kB page boundaries within some
+AXI burst request.  Not possible, I said, since
+<a href="/blog/2020/03/23/wbm2axisp.html">my AXI master</a>
+wasn’t making burst requests.</p>
+
+<p>I was then told that these RVALID responses must have somehow gotten buried in
+the MIG system somewhere and so, somehow, my own logic was at fault for not
+remembering that it had made a prior request.  I went back and double checked
+the formal proof of
+<a href="/blog/2020/03/23/wbm2axisp.html">my design</a>.  It checked
+out.  I checked the formal proofs of everything up stream.  Those checked.
+I added a counter to my design–counting the number of ARVALIDs minus the
+RVALIDs.  Sure enough, I was getting an extra RVALID without a request.</p>
+
+<p>But how could I explain that to the Xilinx representative?</p>
+
+<p>In this case, I again turned to my <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">compressed
+scope</a>, and this
+time captured <em>EVERYTHING</em> from the AXI interactions–all of the ARVALID and
+RVALID signals, all of the AWVALID, WVALID, and BVALID signals, everything
+I thought would be relevant that would fit within 31-bits.  When I went back
+to Xilinx’s tech support the next time, I had a <em>four second</em> recording
+in just a couple kB of block RAM that captured every transaction from chip
+startup to the error, to when I stopped the analyzer to look at the trace.</p>
+
+<p>Sure enough, there was an extra RVALID.</p>
+
+<p>My contact at Xilinx had no idea what was going on.  I suppose I shouldn’t
+complain.  I wasn’t purchasing paid tech support.  I am very grateful that
+they took the time to even look into my problem, but the reality was that
+1) no one else was complaining about their designs being broken in a similar
+manner, and so 2) I was on my own to try to figure it out.  If you remember
+the story from <a href="/blog/2019/11/14/sdspi.html">when I shared it
+before</a>, you’ll remember the
+problem was that I had misconfigured Xilinx’s memory controller for the wrong
+DDR3 SDRAM chip.  My point here is simply that the <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">compressed logic
+analyzer</a>’s
+capability to collect more than 400 million clock ticks of data in only
+a few kB’s of block RAM was key to diagnosing and zeroing in on the problem.</p>
+
+<p>More recently, I came back to revisit
+<a href="https://github.com/ZipCPU/wbscope">my Wishbone scope project</a>
+and give it an <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axilscope.v">AXI
+capability</a>.
+First I created <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axilscope.v">an AXI-lite
+version</a>
+of the <a href="/blog/2017/06/08/simple-scope.html">basic scope</a>.
+Aside from the challenge of creating an
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+processing pipeline that was more than a single clock deep, <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axilscope.v">that
+design</a>
+was fairly unremarkable.  Then, as
+I was starting to figure out <a href="/blog/2020/06/16/axiaddr-limits.html">how to manage the full AXI interface with
+bursts</a>, I
+decided to try building <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">a logic analyzer that wrote it’s capture to an external
+memory</a>.  I
+called <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">the result a
+MEMSCOPE</a>.
+It made for a fun project, although to be honest I’m not sure what I’d do
+with a <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">logic analyzer capable of recording over a GB of
+data</a>.</p>
+
+<p>This week, I came back to that
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">MEMSCOPE</a> design
+and thought I might add my run-length encoding scheme to the front of it.
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">The result</a>
+forms the basis for today’s discussion below.</p>
+
+<h2 id="design-concept">Design Concept</h2>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 3. Design portlist</caption><tr><td><img src="/img/axisrle/rle-ioports.svg" alt="" width="320" /></td></tr></table>
+
+<p>Since my intent with this design was to build an AXI based design, I thought
+I’d go all the way and even build an <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">AXI-stream based run-length
+encoder</a>.
+It should take 31-bits in, and produce a 32-bits
+<a href="https://en.wikipedia.org/wiki/Run-length_encoding">RLE</a>
+stream out.</p>
+
+<p>Well, that was the basic idea, but as always not everything fits in an AXI
+stream.  For example, <a href="/blog/2017/06/08/simple-scope.html">many logic analyzer
+requirements</a>
+can’t handle backpressure.  Any backpressure would corrupt the incoming
+stream.  I also wanted two extra signals: one to indicate whether this word
+should be encoded in the first place, such as in the initial run-up when
+memory is being filled for the first time, and the second to indicate if this
+value should be associated with the trigger for the scope or not.
+These didn’t fit the AXI stream model either, since they were asynchronous
+to the stream itself–but I still found the AXI stream model a useful place to
+start from.</p>
+
+<p>Internally, the design broke apart nicely into four separate stages.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. Pipeline stages</caption><tr><td><img src="/img/axisrle/rle-pipeline.svg" alt="" width="780" /></td></tr></table>
+
+<p>There would be the initial
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+stage, followed by a check to see if this new word was the same as the last
+one.  That decision would then feed into the run-length counter proper, and
+the result of that would be our outgoing AXI stream.  I then assigned each
+of these stages a prefix, so that the registers associated with each of
+the stages could clearly be identified: <code class="highlighter-rouge">S_AXIS_*</code> would describe the input,
+<code class="highlighter-rouge">skd_*</code> the outputs from the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>, <code class="highlighter-rouge">mid_*</code>
+the results from the same-word detection, <code class="highlighter-rouge">run_*</code> for the actual run-length
+encoder and <code class="highlighter-rouge">M_AXIS_*</code> for the output.</p>
+
+<p>Let’s discuss each of these stages briefly in turn from a basic design
+standpoint.  Well, not quite each of them, since we’ve already discussed the
+basic <a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+before.  Therefore, let’s start with the same word detection.
+This one is pretty easy: if an output is available from the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>, compare
+it to the last output from this stage and mark the value as <code class="highlighter-rouge">mid_same</code> if
+the two match.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">skd_valid</span> <span class="o">&amp;&amp;</span> <span class="n">skd_ready</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="n">mid_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="n">mid_data</span>  <span class="o">&lt;=</span> <span class="n">skd_data</span><span class="o">;</span>
+	<span class="n">mid_same</span>  <span class="o">&lt;=</span> <span class="p">(</span><span class="n">mid_valid</span> <span class="o">||</span> <span class="n">run_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">mid_data</span> <span class="o">==</span> <span class="n">skd_data</span><span class="p">)</span><span class="o">;</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">run_ready</span><span class="p">)</span>
+	<span class="n">mid_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Here, I’ve used the <code class="highlighter-rouge">skd_*</code> prefix to describe the values coming from the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>,
+the <code class="highlighter-rouge">mid_*</code> prefix to describe the values in this same-word
+detection stage, and the <code class="highlighter-rouge">run_*</code> prefix to describe the run-length detection
+stage that follows.</p>
+
+<p>Ideally, this same-word detection would only check if the new data was the same
+as the last data,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">mid_same</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">mid_data</span> <span class="o">==</span> <span class="n">skd_data</span><span class="p">)</span></code></pre></figure>
+
+<p>There’s a couple of reasons why that’s not quite good enough.  It might be,
+for example, that we’ve just been reset and so never had any data come through
+here yet.  Therefore, we need to gate this against a valid signal somehow.
+While it makes the most sense to gate this against <code class="highlighter-rouge">mid_valid</code> since that
+flag caveats <code class="highlighter-rouge">mid_data</code> having the correct value in it, that’s not good enough
+since this stage will get flushed as soon as the next stage will allow it.
+Therefore, we’ll need to gate against both <code class="highlighter-rouge">mid_valid</code> and the <code class="highlighter-rouge">run_valid</code>
+signal from the following stage.</p>
+
+<p>The <a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length encoding</a>
+stage is a bit more interesting.  This is the one
+clock cycle where all the work gets done.  It’s also a stage that, once filled,
+will never empty: it will always keep the last value sent within it.  When
+a new value is provided, it will either kick that last value out to the output,
+or accumulate its count of repeats.</p>
+
+<p>Let’s see how we might build this.</p>
+
+<p>Our logic would focus on whenever new data comes in.  We’ll continue to use
+the <code class="highlighter-rouge">run_ready</code>  flag to indicate that we’re ready to move data from the <code class="highlighter-rouge">mid_*</code>
+stage to the <code class="highlighter-rouge">run_*</code> stage.</p>
+
+<p>The first step will be to set this stage as valid any time we move data into
+it, and then to copy the data that moves into it at that time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_ready</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">run_valid</span> <span class="o">&lt;=</span> <span class="n">mid_valid</span><span class="o">;</span>
+			<span class="n">run_data</span>  <span class="o">&lt;=</span> <span class="n">mid_data</span><span class="o">;</span></code></pre></figure>
+
+<p>That’s the easy part.</p>
+
+<p>The next part is where  things get a bit more fun.  Here’s where we do our
+actual run-length encoding.  If a new value comes from the <code class="highlighter-rouge">mid_*</code> stage
+that’s the same as the last one, that is with <code class="highlighter-rouge">mid_same</code> set, then we’ll start
+a new run and start counting repeats.  If we are already in a run when a
+new value comes in with <code class="highlighter-rouge">mid_same</code> set, then we’ll simply increment the length
+of that run, otherwise we just clear the run length in order to start counting.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="n">mid_valid</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="c1">// run_active: are we within a run or not?
+</span>				<span class="n">run_active</span> <span class="o">&lt;=</span> <span class="n">mid_same</span><span class="o">;</span>
+
+				<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span> <span class="o">&amp;&amp;</span> <span class="n">mid_same</span><span class="p">)</span>
+					<span class="n">run_length</span> <span class="o">&lt;=</span> <span class="n">run_length</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+				<span class="k">else</span>
+					<span class="n">run_length</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+
+			<span class="k">end</span> <span class="c1">// else ...
+</span>		<span class="k">end</span>
+		<span class="c1">// ...
+</span>	<span class="k">end</span></code></pre></figure>
+
+<p>This has the pleasant effect of making the counter zeros
+based.  Two consecutive and identical elements would then get encoded as
+<code class="highlighter-rouge">(clear LSB, data)</code>, followed by <code class="highlighter-rouge">(set LSB, 0)</code>.  Three consecutive identical
+elements would be encoded by <code class="highlighter-rouge">(clear LSB, data)</code>, followed by <code class="highlighter-rouge">(set LSB, 1)</code>
+and so forth.</p>
+
+<p>That brings us to the last stage, the one with the <code class="highlighter-rouge">M_AXIS_*</code> prefix.  We’ll
+want to send a value out whenever there’s a value in the <code class="highlighter-rouge">run_*</code> stage <em>AND</em>
+we’re not accumulating that value into a run.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">M_AXIS_TVALID</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">M_AXIS_TVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">M_AXIS_TVALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_valid</span> <span class="o">&amp;&amp;</span> <span class="n">run_ready</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">mid_same</span> <span class="o">||</span> <span class="o">!</span><span class="n">run_active</span><span class="p">))</span>
+			<span class="n">M_AXIS_TVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Setting <code class="highlighter-rouge">TDATA</code> is even easier–since we don’t need to worry about resets.
+Here, we’ll set <code class="highlighter-rouge">TDATA</code> to either the data from the <code class="highlighter-rouge">run_*</code> stage, if there’s
+no run active, or otherwise the length of the run if a run is active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span><span class="p">)</span>
+			<span class="n">M_AXIS_TDATA</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b1</span><span class="o">,</span> <span class="n">run_length</span> <span class="o">};</span>
+		<span class="k">else</span>
+			<span class="n">M_AXIS_TDATA</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">run_data</span> <span class="o">};</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That leaves two key pieces of logic that we’ve skipped: <code class="highlighter-rouge">run_ready</code> and
+<code class="highlighter-rouge">skd_ready</code>, the two handshaking flags that’ll tell us when we can step these
+stages forward.  These two values are very much key to the success of the
+algorithm, and they are complex enough that we can’t really gloss over them
+here.</p>
+
+<p>Internal to our algorithm, all of the ready signals are combinatorial.
+That means they’ll be simplest at the end of the pipeline, so that’s where
+we’ll start and work our way forwards.</p>
+
+<p>We can accept data into the <code class="highlighter-rouge">run_*</code> stage as long as there’s  new data coming
+from the same word detector and the following stage, the <code class="highlighter-rouge">M_AXIS_*</code> stage,
+is ready to accept data.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">run_ready</span> <span class="o">=</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">mid_valid</span><span class="o">;</span></code></pre></figure>
+
+<p>Only that’s too  restrictive.  We can also accept values into the
+<a href="https://en.wikipedia.org/wiki/Run-length_encoding">RLE</a>
+stage even if the output is stalled, but only if those values will be going
+into our run-length accumulator.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span> <span class="o">&amp;&amp;</span> <span class="n">mid_valid</span> <span class="o">&amp;&amp;</span> <span class="n">mid_same</span><span class="p">)</span>
+			<span class="n">run_ready</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>As it turns out, that’s the difficult signal.  The <code class="highlighter-rouge">skd_ready</code> signal is
+much simpler.  Basically, we can move data into the <code class="highlighter-rouge">mid_*</code> stage if either
+there’s nothing in the <code class="highlighter-rouge">mid_*</code> stage, or if the <code class="highlighter-rouge">mid_*</code> stage’s data is flowing
+into the <code class="highlighter-rouge">run_*</code> stage.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">skd_ready</span> <span class="o">=</span> <span class="o">!</span><span class="n">mid_valid</span> <span class="o">||</span> <span class="n">run_ready</span><span class="o">;</span></code></pre></figure>
+
+<p>Indeed, this is the common way to propagate ready values upstream when there
+are no exceptions to the general rule–as there were with <code class="highlighter-rouge">run_ready</code>.</p>
+
+<p>There you have the basics of the algorithm.  There are some other key
+details we’ll need to work out when we get into the weeds below.  For example,
+you don’t want to compress the trigger event–even if it is the same as all
+the events around it.  Similarly, you don’t want to compress when you are
+initially filling memory, since you want to fill that memory as fast as
+possible and since the logic analyzer can’t trigger until the memory has at
+least filled once–lest you get confused later by uninitialized data.</p>
+
+<p>There’s also one critical feature we’ll have to deal with below as well:
+how shall a counter overflow be handled?  You don’t want to drop data no
+matter what happens.  Therefore, once the run-length counter reaches its
+maximum value, we’ll need to output that value no matter what happens next.</p>
+
+<p>Other than those three exceptions, triggers, priming the capture, and overflow
+handling, that’s all the harder the algorithm is.  Indeed, <a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length
+encoding</a>
+is one of the simplest compression schemes you can implement in hardware:
+you can operate at full speed, and there’s no real need for any complicated
+tables to maintain.</p>
+
+<h2 id="detailed-implementation">Detailed Implementation</h2>
+
+<p>Let’s now move from our broad overview to a more detailed explanation of how
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this run-length
+encoder</a>
+works.</p>
+
+<p>The first difference between our broad overview and reality that we’ll have
+to deal with are the <code class="highlighter-rouge">i_encode</code> and <code class="highlighter-rouge">i_trigger</code> flags.
+The first flag, <code class="highlighter-rouge">i_encode</code>, enables the <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">run-length
+encoding</a>.
+This will be set to zero externally until the capture memory is first filled.
+The second, <code class="highlighter-rouge">i_trigger</code>, is the trigger for the
+<a href="/blog/2017/06/08/simple-scope.html">internal logic analyzer</a>.
+It needs to be kept synchronized with the data.  Moreover, if the trigger is
+ever active then the <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">run-length
+encoding</a>
+also needs to be disabled.</p>
+
+<p>The challenge associated with these two flags is that they may arrive
+asynchronous to the <a href="/blog/2017/08/14/strategies-for-pipelining.html">data
+handshake</a>.
+That means we’ll need to remember if we get triggered between sample values,
+and so apply the trigger to the next data sample.  Likewise, if we’re ever
+told not to <a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length
+encode</a>
+a piece of data, then we’ll need to turn off the encoding on either the sample
+presented on that clock cycle or the sample following if no sample is valid
+on that cycle.</p>
+
+<p>The first step in handling this is a set of values I call <code class="highlighter-rouge">sticky_*</code> values.
+These handle keeping track of what should happen to the next value–before
+that sample value has arrived.  They’ll take place before the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>, and just
+remember what happens between accepted samples.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">sticky_encode</span>  <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="k">initial</span>	<span class="n">sticky_trigger</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">sticky_encode</span>  <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">sticky_trigger</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Always reset our values when any sample is accepted
+</span>		<span class="n">sticky_encode</span>  <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">sticky_trigger</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+		<span class="c1">// Otherwise, remember what happens between samples
+</span>		<span class="n">sticky_encode</span>  <span class="o">&lt;=</span> <span class="n">sticky_encode</span> <span class="o">&amp;&amp;</span> <span class="n">i_encode</span><span class="o">;</span>
+		<span class="n">sticky_trigger</span> <span class="o">&lt;=</span> <span class="n">sticky_trigger</span> <span class="o">||</span> <span class="n">i_trigger</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>The next step is to go into the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>.
+This would be completely straightforward, except … the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+assumes that incoming data
+won’t change while <code class="highlighter-rouge">TVALID &amp;&amp; !TREADY</code> and our <code class="highlighter-rouge">sticky_*</code> values might
+change during this time.  This leaves us with a couple possibilities.  We
+could either adjust the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>’s formal
+properties so that we don’t make this assumption within it, or we can
+handle these signals separately.</p>
+
+<p>I chose to handle them separately.  Therefore, here’s the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>’s
+instantiation without those signals, and we’ll have to deal with them next.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">skidbuffer</span> <span class="p">#(</span>
+		<span class="o">.</span><span class="n">DW</span><span class="p">(</span><span class="n">W</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">OPT_OUTREG</span><span class="p">(</span><span class="mb">1'b0</span><span class="p">)</span>
+	<span class="p">)</span> <span class="n">skid</span><span class="p">(</span>
+		<span class="o">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_reset</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_valid</span><span class="p">(</span><span class="n">S_AXIS_TVALID</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">o_ready</span><span class="p">(</span><span class="n">S_AXIS_TREADY</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">i_data</span><span class="p">(</span><span class="n">S_AXIS_TDATA</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">o_valid</span><span class="p">(</span><span class="n">skd_valid</span><span class="p">)</span><span class="o">,</span> <span class="o">.</span><span class="n">i_ready</span><span class="p">(</span><span class="n">skd_ready</span><span class="p">)</span><span class="o">,</span>
+			<span class="o">.</span><span class="n">o_data</span><span class="p">(</span><span class="n">skd_data</span><span class="p">)</span>
+	<span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>That means I’ll need to implement a quick
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+by hand here.  Therefore, when any value is accepted, we’ll copy it to our
+(local) <a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+registers.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">r_trigger</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">i_trigger</span> <span class="o">||</span> <span class="n">sticky_trigger</span><span class="p">)</span><span class="o">;</span>
+		<span class="n">r_encode</span>  <span class="o">&lt;=</span> <span class="n">i_encode</span> <span class="o">&amp;&amp;</span> <span class="n">sticky_encode</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>The main <a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+will drop <code class="highlighter-rouge">S_AXIS_TREADY</code> on any stall, so we can use that
+as our indication of whether a value got stuck in the
+<a href="/blog/2019/05/22/skidbuffer.html">buffer</a>
+or not.  If nothing is stuck in the
+<a href="/blog/2019/05/22/skidbuffer.html">buffer</a>,
+we just use the current incoming values, otherwise we’ll use the <code class="highlighter-rouge">r_*</code>
+values we just set above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXIS_TREADY</span><span class="p">)</span>
+		<span class="o">{</span> <span class="n">skd_trigger</span><span class="o">,</span> <span class="n">skd_encode</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="p">(</span><span class="n">i_trigger</span> <span class="o">||</span> <span class="n">sticky_trigger</span><span class="p">)</span><span class="o">,</span>
+					<span class="p">(</span><span class="n">i_encode</span> <span class="o">&amp;&amp;</span> <span class="n">sticky_encode</span><span class="p">)</span> <span class="o">};</span>
+	<span class="k">else</span>
+		<span class="o">{</span> <span class="n">skd_trigger</span><span class="o">,</span> <span class="n">skd_encode</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">r_trigger</span><span class="o">,</span> <span class="n">r_encode</span> <span class="o">};</span></code></pre></figure>
+
+<p>That’s it for the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+stage shown in Fig. 4 above.  Now, onto the same word detection stage.</p>
+
+<p>You should recognize the first part of this from our preliminary design above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">skd_valid</span> <span class="o">&amp;&amp;</span> <span class="n">skd_ready</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">mid_valid</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+			<span class="n">mid_data</span> <span class="o">&lt;=</span> <span class="n">skd_data</span><span class="o">;</span>
+			<span class="n">mid_same</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">mid_valid</span> <span class="o">||</span> <span class="n">run_valid</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">skd_data</span> <span class="o">==</span> <span class="n">mid_data</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The biggest differences are the new <code class="highlighter-rouge">mid_trigger</code> and <code class="highlighter-rouge">r_triggered</code> signals,
+as well as our handling of the <code class="highlighter-rouge">skd_encode</code> and <code class="highlighter-rouge">skd_trigger</code> with respect
+to same word detection.</p>
+
+<p>Of the two, the trigger signal is easiest to explain: we just pass it from
+the <a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>
+to the output of the same-word stage.  We’ll also use an <code class="highlighter-rouge">r_triggered</code> signal
+to keep us from ever processing a second trigger signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="n">mid_trigger</span> <span class="o">&lt;=</span> <span class="n">skd_trigger</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">r_triggered</span><span class="o">;</span>
+			<span class="n">r_triggered</span> <span class="o">&lt;=</span> <span class="n">r_triggered</span> <span class="o">||</span> <span class="n">skd_trigger</span><span class="o">;</span></code></pre></figure>
+
+<p>From there we make our exceptions to the same word detection algorithm.
+If ever the encode flag is false, we’ll need mark this value as different so it
+won’t get folded into any <a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length
+encoding</a>.  Similarly, if
+ever the <code class="highlighter-rouge">skd_trigger</code> is true for this sample, and we haven’t seen the
+trigger before, then we’ll also keep this value from being folded into the
+<a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length encoding</a>
+as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">skd_encode</span> <span class="o">||</span> <span class="p">(</span><span class="n">skd_trigger</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">r_triggered</span><span class="p">))</span>
+				<span class="n">mid_same</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, when this value moves forward we’ll clear the valid and trigger
+signals–that way we don’t count these values more than once.  Likewise,
+on any reset we’ll clear those signals as well as the <code class="highlighter-rouge">r_triggered</code> signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">run_ready</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">mid_valid</span>   <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">mid_trigger</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">mid_valid</span>   <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">mid_trigger</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">r_triggered</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Perhaps you may have noticed that this form of a reset is kind of rare for me.
+Normally, when I write a clocked logic block I will place the reset test
+first, and only then the non-reset logic following.  That form wouldn’t work
+here–primarily because I’ve left the <code class="highlighter-rouge">mid_same</code> and <code class="highlighter-rouge">mid_data</code> signals in
+this always block.  Had I placed the reset first, that would have burdened the
+logic for setting these signals such that they would only be set if the reset
+wasn’t active.</p>
+
+<p>That leads to a more philosophical discussion of how logic should be broken into
+blocks.  My general rule is that if two or more signals share the same signaling
+structure, then they can share the same block.  This rule generally follows
+from <a href="/blog/2017/06/12/minimizing-luts.html">my focus on minimizing
+area</a>, and so I
+dislike adding more logic to a design than necessary.  In this case, that
+might refer to the <code class="highlighter-rouge">mid_data</code> signal as an example.  Otherwise, if the control
+logic is different between signals than I will separate their logic blocks
+within a design.  This usually leads to separating any logic for signals
+requiring resets into separate blocks from the other associated logic.</p>
+
+<p>In this case, the trailing reset check works just as good for only those
+signals that need to be reset here.  While I know others who are dogmatic about
+using this reset form, I’m still somewhat flexible in how I build my logic.</p>
+
+<p>Let’s move on to the <code class="highlighter-rouge">run_*</code> section.</p>
+
+<p>We’ll start with the simple stuff: when we’re ready to accept a value from
+the <code class="highlighter-rouge">mid_*</code> stage, we’ll set the <code class="highlighter-rouge">run_valid</code> signal and copy the data and
+trigger signals into this stage.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_ready</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">run_valid</span>  <span class="o">&lt;=</span> <span class="n">mid_valid</span><span class="o">;</span>
+			<span class="n">run_trigger</span><span class="o">&lt;=</span> <span class="n">mid_trigger</span><span class="o">;</span>
+			<span class="n">run_data</span>   <span class="o">&lt;=</span> <span class="n">mid_data</span><span class="o">;</span></code></pre></figure>
+
+<p>These new values will either start or continue a run if ever there is both
+1) a new data value, and 2) if that new value is the same as the last one we
+just processed.  Similarly, if we have already started a run, then we’ll
+increment it’s length now.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="n">run_active</span> <span class="o">&lt;=</span> <span class="n">mid_same</span> <span class="o">&amp;&amp;</span> <span class="n">mid_valid</span><span class="o">;</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span> <span class="o">&amp;&amp;</span> <span class="n">mid_same</span><span class="p">)</span>
+				<span class="n">run_length</span> <span class="o">&lt;=</span> <span class="n">run_length</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="k">else</span>
+				<span class="n">run_length</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+
+<p>Don’t overlook the offset here: <code class="highlighter-rouge">run_active</code> will get set first, on the
+same clock that <code class="highlighter-rouge">run_length</code> is still getting set to zero.  Only on the
+next value, the third in any run, will <code class="highlighter-rouge">run_length</code> start accumulating.</p>
+
+<p>Perhaps a figure might help, so let me reference Fig. 5 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 5. Run-length logic demonstration</caption><tr><td><a href="/img/axisrle/run-logic-trace.svg"><img src="/img/axisrle/run-logic-trace.svg" alt="" width="390" /></a></td></tr></table>
+
+<p>In this trace, you’ll see that on any first value of a new run, such as the
+yellow run in the trace, <code class="highlighter-rouge">mid_same</code> will be low.  When that value first
+repeats, <code class="highlighter-rouge">mid_same</code> will be set but <code class="highlighter-rouge">run_active</code> will be low.  On the
+second repeat, <code class="highlighter-rouge">run_active</code> will be set and <code class="highlighter-rouge">run_length</code> will be zero.  From
+there it starts accumulating as new data is given to it.</p>
+
+<p>The next trick is the <code class="highlighter-rouge">run_overflow</code> signal.  We skipped this signal earlier.
+I added it to the basic <a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length
+encoder</a> processing in
+order to keep the run-length counter from overflowing.  We’ll set this value
+to true any time the run-length will overflow if one more is added to it.
+I suppose
+that’s technically different from from overflow, but
+<code class="highlighter-rouge">run_length_counter_will_overflow</code> seemed a bit long for a signal name.</p>
+
+<p>At any rate, this <code class="highlighter-rouge">run_overflow</code> signal will be true if ever our <code class="highlighter-rouge">run_length</code>
+counter is all ones.  That means we can compare it against all ones but the
+last–a negative 2 if you will, and spare a bit in our comparison.  We’ll
+clear this flag if we either get a new value that doesn’t increase our run
+length, or if we are ever forced to output a value at the maximum run length.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="n">run_overflow</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">run_length</span> <span class="o">&gt;=</span> <span class="o">{</span>
+				<span class="o">{</span><span class="p">(</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b1</span><span class="o">}},</span> <span class="mb">1'b0</span> <span class="o">}</span><span class="p">)</span><span class="o">;</span>
+			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">mid_same</span> <span class="o">||</span> <span class="n">run_overflow</span><span class="p">)</span>
+				<span class="n">run_overflow</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>I’ll also clear just about all of these signals on reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">run_valid</span>    <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">run_active</span>   <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">run_overflow</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+			<span class="n">run_length</span>   <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">run_trigger</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That brings us to the ready <a href="/blog/2017/08/14/strategies-for-pipelining.html">handshaking
+signal</a>
+gating the entrance to the <code class="highlighter-rouge">run_*</code> stage.  This is one of the more critical
+pieces in this algorithm.  If we get it wrong we might either drop values from
+our pipeline or accidentally introduce phantom values into it.</p>
+
+<p>We’ll start with the clearest reason for <code class="highlighter-rouge">run_ready</code> to be true: We can set
+<code class="highlighter-rouge">run_ready</code> if the next stage is ready for another output.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">run_ready</span> <span class="o">=</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Even if the <code class="highlighter-rouge">M_AXIS_*</code> stage is stalled, however, we might still be able to
+accept a new value into the <code class="highlighter-rouge">run_*</code> stage if it were to only increase our
+run length counter.  Hence, we can set <code class="highlighter-rouge">run_ready</code> if we are in the middle
+of a run, <code class="highlighter-rouge">run_active</code>, and the next element continues this run, <code class="highlighter-rouge">mid_same</code>.
+The exception to this rule is if adding another element to the run would
+overflow our run-length counter.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">run_overflow</span> <span class="o">&amp;&amp;</span> <span class="n">mid_same</span><span class="p">)</span>
+			<span class="n">run_ready</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+
+<p>Finally, we don’t want the <code class="highlighter-rouge">run_*</code> stage to step at all if there isn’t a new
+valid to be placed into it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">mid_valid</span><span class="p">)</span>
+			<span class="n">run_ready</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Remember how the <code class="highlighter-rouge">run_*</code> stage works: It starts out idle, but after receiving
+its first value it then remains valid for all time with the next output value
+within it.  This value gets “stuck” in the <code class="highlighter-rouge">run_*</code> stage until we know
+the end of whatever run that might be within it.  That’s the time when the
+run value (or counter) will get kicked out by a new value from the <code class="highlighter-rouge">mid_*</code>
+stage.  It’s for this reason that we need to make certain that the <code class="highlighter-rouge">run_*</code>
+stage never moves forward unless there’s also a value entering from the
+<code class="highlighter-rouge">mid_*</code> stage.</p>
+
+<p>That leads us to the <code class="highlighter-rouge">M_AXIS_*</code> stage–the output stage in our processing
+pipeline.  We’ll need to set two values here, the <code class="highlighter-rouge">M_AXIS_TVALID</code> value,
+indicating that we have a value to send out, and the actual value,
+<code class="highlighter-rouge">M_AXIS_TDATA</code>.  (This design doesn’t make use of any of the other AXI-stream
+signals, such as <code class="highlighter-rouge">TLAST</code>, <code class="highlighter-rouge">TSTRB</code>, <code class="highlighter-rouge">TKEEP</code>, or <code class="highlighter-rouge">TID</code>.)</p>
+
+<p>We can start defining the <code class="highlighter-rouge">M_AXIS_TVALID</code> signal with the logic that would
+be used for any AXI-based <code class="highlighter-rouge">*VALID</code> signal.  This part is kind of a
+fill-in-the-blank logic form.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">M_AXIS_TVALID</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">M_AXIS_TVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>While this form might seem quite straightforward, do beware that it is still
+possible to mess it up–as Xilinx did in their AXI Ethernetlite controller.
+In that controller, they set their design to wait on <code class="highlighter-rouge">AXI_RREADY</code> without also
+checking for <code class="highlighter-rouge">!AXI_RVALID</code>.  The result was that, when the controller was
+subjected to a formal check, SymbiYosys managed to hang the core by simply
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a> found a way to make
+the core hang by simply holding <code class="highlighter-rouge">AXI_RREADY</code> low–such as any out-of-order
+AXI interconnect might do.</p>
+
+<p>That just leaves us with the blank in this logic form to fill in with
+our <code class="highlighter-rouge">M_AXIS_TVALID</code> logic.  In this case we’ll default to zero, and sending
+nothing.  After that, we can use the <code class="highlighter-rouge">run_ready</code> signal to help us know when
+to move forward.  We’ll place a value into the
+<code class="highlighter-rouge">M_AXIS_*</code> stage if there’s both a valid value in the <code class="highlighter-rouge">run_*</code> stage and if
+<code class="highlighter-rouge">run_ready</code> is true so that it’s moving forward.  While that’s a good
+start, however, it isn’t enough.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">M_AXIS_TVALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_valid</span> <span class="o">&amp;&amp;</span> <span class="n">run_ready</span><span class="p">)</span>
+		<span class="k">begin</span></code></pre></figure>
+
+<p>From the <code class="highlighter-rouge">run_*</code> stage, we only move an output forward on two conditions.
+First, we always move forward if there’s a new value entering into the
+<code class="highlighter-rouge">run_*</code> stage that would overflow the counter.  Second, we’ll always move
+forward on a new or different value.  Such a value would end any ongoing run.
+We’ll also move forward on the first item of any run–since we always need to
+place the data value before the subsequent run length itself.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span> <span class="o">&amp;&amp;</span> <span class="n">run_overflow</span><span class="p">)</span>
+				<span class="n">M_AXIS_TVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+
+			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">mid_same</span> <span class="o">||</span> <span class="o">!</span><span class="n">run_active</span><span class="p">)</span>
+				<span class="n">M_AXIS_TVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This also instroduces an unfortunate consequence into our <a href="/blog/2017/06/08/simple-scope.html">logic analyzer
+application</a>.
+As you may recall, the <a href="/blog/2017/06/08/simple-scope.html">logic
+analyzer</a> will record
+data until some programmable time after the trigger.  Nothing controls what
+the oldest value will be in memory at that time.  It might be a data value,
+or it might be a run encoding for … a never to be recovered value.  Worse,
+it might also be a series of run overflow encodings only ending with the
+value at the time of the trigger.  While that’s a potential reality of <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this
+particular
+implementation</a>,
+the good news is that it hasn’t (yet) seriously impacted any analysis I’ve
+needed to do.  Why not?  In most of my examples, the run length encoding is
+good enough that there’s always still more than enough data left for any
+necessary analysis.</p>
+
+<p>You can also think of it this way: it requires <code class="highlighter-rouge">2^32</code> elements to fill a run.
+At a (rough) 100MHz clock, that’s about 43 seconds of data.  Filling up an
+8kB buffer with run indications would therefore require about 4 days of data
+at this rate.  While it might happen, it’s definitely not likely.</p>
+
+<p>After <code class="highlighter-rouge">TVALID</code>, we’ll set <code class="highlighter-rouge">TDATA</code> any time <code class="highlighter-rouge">!TVALID || TREADY</code>.
+Again, this follows from the basic form of setting <em>any</em> AXI data value
+associated with any AXI stream.  Valid’s follow the form above, data follows
+the form below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>What value shall we set our result to?  Well, if we are ending a run, then
+we’ll want to output the fact of the run together with the run length.
+Otherwise, we’ll just output the data we’ve been holding on to.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span><span class="p">)</span>
+			<span class="n">M_AXIS_TDATA</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b1</span><span class="o">,</span> <span class="n">run_length</span> <span class="o">};</span>
+		<span class="k">else</span>
+			<span class="n">M_AXIS_TDATA</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">run_data</span> <span class="o">};</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That leaves only one last loose end to tie up before we complete our design,
+and that’s the outgoing trigger for the <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">logic analyzer
+subcore</a>.
+Remember, we’ve needed to keep
+this associated with the data that arrives concurrently to it.  Therefore,
+as we’ve moved data through our pipeline, we’ve kept the trigger indication
+together with the data in each and every stage.  Here, we just forward the
+trigger to the output when it leaves the <code class="highlighter-rouge">run_*</code> stage.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// o_trigger
+</span>	<span class="k">initial</span>	<span class="n">o_trigger</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">o_trigger</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span>
+		<span class="n">o_trigger</span> <span class="o">&lt;=</span> <span class="n">run_trigger</span> <span class="o">&amp;&amp;</span> <span class="n">run_ready</span><span class="o">;</span></code></pre></figure>
+
+<p>What about double checking that the trigger is only ever output for a data
+word, never a compressed word?  Or guaranteeing that this outgoing trigger
+is only true when <code class="highlighter-rouge">M_AXIS_TVALID</code> is also true?  For that, we’ll turn to
+formal methods and double check that we haven’t damaged our algorithm
+by simplifying it this far.</p>
+
+<p>Indeed, I should point out that even while writing this blog article I’ve done
+a lot of simplifying.  The result you see above you uses only an estimate 130
+Xilinx series-7 LUTs.  I’ve also leaned heavily on the formal proof to do
+this.  Why not?  A full proof of
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this core</a>
+takes only takes 20 seconds.  That makes it easy to make changes and adjust any
+logic.</p>
+
+<h2 id="formal-properties">Formal Properties</h2>
+
+<p>When I first built this design, I’ll admit I stared at the blank formal property
+section for a while just wondering what sort of properties I should use.  I
+eventually came up with a couple of ideas for verifying
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this core</a>
+that I haven’t discussed much on this blog.  They’ve been very useful.  These
+are:</p>
+
+<ol>
+  <li>Interface properties for AXI-stream</li>
+  <li>Counting</li>
+  <li>Counting special values</li>
+  <li>Negative logic checking</li>
+</ol>
+
+<p>There are probably better names for these concepts, but these are the best
+names I have for them so far.  Yes, we’ve discussed the <a href="/dsp/2020/04/20/axil2axis.html">AXI stream properties
+before</a>, and we’ve also
+counted transactions before when building <a href="/zipcpu/2017/11/07/wb-formal.html">bus property
+sets</a>.  I suppose,
+therefore, that these two concepts might not really be all that new to my blog.
+However, I am pretty sure that I’ve haven’t yet discussed either the special
+value or negative logic checking ideas before.</p>
+
+<h3 id="interface-properties">Interface properties</h3>
+
+<p>While I’ve written an <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxis_slave.v">AXI stream interface property
+file</a>,
+it’s really overkill for most AXI stream designs.  For today’s purpose, we
+only really need two checks: First, following a reset, all VALID’s need to
+be cleared.  Second, any time the channel is stalled the transaction details
+are not allowed to change.</p>
+
+<p>For the incoming AXI stream, this amounts to a couple of assumptions.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+		<span class="c1">// Clear valid on reset
+</span>		<span class="k">assume</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXIS_TREADY</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="c1">// Hold valid and data stable on any stall
+</span>		<span class="k">assume</span><span class="p">(</span><span class="n">S_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assume</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">S_AXIS_TDATA</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>The properties are the same for the outgoing stream–only they are
+now expressed as assertions instead of assumptions.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+		<span class="c1">// Clear valid on reset
+</span>		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXIS_TREADY</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="c1">// Hold valid and data stable on any stall
+</span>		<span class="k">assert</span><span class="p">(</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">))</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p><a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxis_slave.v">My AXI stream property
+file</a>
+has many more properties–overkill for most problems.  Things like minimum and
+maximum packet sizes, properties on the maximum time something can be stalled,
+or even properties forcing <code class="highlighter-rouge">TKEEP</code> and <code class="highlighter-rouge">TSTRB</code> to match.  Most cores don’t need
+this, and so sadly <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxis_slave.v">my AXI stream property
+file</a>
+hasn’t gotten much testing.</p>
+
+<h3 id="counting">Counting</h3>
+
+<p>The idea for counting is really simple: let’s count the number of items that
+enter into this design, and then verify that it matches the number of items
+output.  We did this for our <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone property
+file</a>, as well as <a href="/formal/2018/12/28/axilite.html">when
+we built our AXI-lite property
+file</a>.  In both cases,
+we used a count of outstanding transactions as part of a check that no
+acknowledgment would be returned without a prior request.</p>
+
+<p>We’ll do roughly the same thing here.  The first step will be to count the
+number of items that are <em>outstanding</em>–that is, the number of items that
+have come into
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this core</a>
+but haven’t yet been output.  The logic should look
+very similar to the logic for calculating the fill of a FIFO.  Notice the
+reset logic and the case statement–keys to doing both.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_outstanding</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">f_outstanding</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">case</span><span class="p">(</span><span class="o">{</span> <span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TREADY</span><span class="p">)</span><span class="o">,</span>
+			<span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span> <span class="o">}</span><span class="p">)</span>
+	<span class="mb">2'b00</span><span class="o">:</span> <span class="k">begin</span> <span class="k">end</span>
+	<span class="mb">2'b01</span><span class="o">:</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+			<span class="c1">// Count the items in the run
+</span>			<span class="n">f_outstanding</span> <span class="o">&lt;=</span> <span class="n">f_outstanding</span> <span class="o">-</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="n">f_outstanding</span> <span class="o">&lt;=</span> <span class="n">f_outstanding</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="mb">2'b10</span><span class="o">:</span> <span class="n">f_outstanding</span> <span class="o">&lt;=</span> <span class="n">f_outstanding</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="mb">2'b11</span><span class="o">:</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+		<span class="c1">// One new one, minus the number of items in the run
+</span>		<span class="n">f_outstanding</span> <span class="o">&lt;=</span> <span class="n">f_outstanding</span> <span class="o">-</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>What rules might we make of this counter?  We can start with the obvious one:
+we can’t place an item into the output unless there’s been a corresponding
+input.  The same counts for runs on the output–you need a corresponding
+number of values on the input before you can output a run.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+			<span class="c1">// Runs
+</span>			<span class="k">assert</span><span class="p">(</span><span class="n">f_outstanding</span> <span class="o">&gt;</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="c1">// Data elements
+</span>			<span class="k">assert</span><span class="p">(</span><span class="n">f_outstanding</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>While that makes for a great contract, it will never pass
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>.  The
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+engine will always find a way to start the design in an inconsistent
+state, and hence break these properties.  Over time, I’ve learned that this
+tends to happen with any <em>inequality</em> assertion–like the one above.  If you
+want to pass
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>,
+therefore, you’ll need to recount how many items are in the pipeline and then
+compare that to our outstanding number above–using an <em>equality</em> assertion.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// First, count everything in the pipeline:
+</span>		<span class="n">f_recount</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXIS_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">skd_valid</span><span class="p">)</span>
+			<span class="c1">// Count any items in the skidbuffer
+</span>			<span class="n">f_recount</span> <span class="o">=</span> <span class="n">f_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">mid_valid</span><span class="p">)</span>
+			<span class="c1">// Count any item in the mid stage
+</span>			<span class="n">f_recount</span> <span class="o">=</span> <span class="n">f_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_valid</span> <span class="o">&amp;&amp;</span> <span class="n">run_active</span><span class="p">)</span>
+			<span class="c1">// Count the current run
+</span>			<span class="n">f_recount</span> <span class="o">=</span> <span class="n">f_recount</span> <span class="o">+</span> <span class="n">run_length</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">run_valid</span><span class="p">)</span>
+			<span class="c1">// We we aren't in a run, then just count the one item
+</span>			<span class="c1">// in the run length processor
+</span>			<span class="n">f_recount</span> <span class="o">=</span> <span class="n">f_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+			<span class="c1">// Count runs on the output
+</span>			<span class="n">f_recount</span> <span class="o">=</span> <span class="n">f_recount</span> <span class="o">+</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span>
+			<span class="c1">// ... or just any output
+</span>			<span class="n">f_recount</span> <span class="o">=</span> <span class="n">f_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+
+		<span class="c1">// Now check that the count matches f_outstanding
+</span>		<span class="c1">//
+</span>		<span class="c1">// Since the skid buffer valid is sensitive to reset, we'll
+</span>		<span class="c1">// have to only make our check if the reset isn't active.
+</span>		<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">f_recount</span> <span class="o">==</span> <span class="n">f_outstanding</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>For good measure, I thought I’d add another property to this check: if the
+design is ever outputting a run, then there should be a new piece of data
+in the <code class="highlighter-rouge">run_*</code> stage–rather than a second run building.  Only, I didn’t
+think about the fact that two runs in a row might take place if the first
+one overflowed–at least not until the
+<a href="https://symbiyosys.readthedocs.io/en/latest">SymbiYosys</a>
+caught that bug.  Therefore, the check (now) includes an exception for
+overflow.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">]</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">(</span><span class="o">&amp;</span><span class="n">M_AXIS_TDATA</span><span class="p">))</span>
+			<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">run_active</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>I don’t know about you, but just counting items within the processing
+pipeline didn’t really convince me that my own design worked.  It’s really not
+enough that the right <em>amount</em> of data is passing through the pipeline, what
+I really want to know is whether or not the <em>right data</em> is passing through
+the pipeline.  For that, I needed another type of check.</p>
+
+<h3 id="counting-special-data">Counting Special data</h3>
+
+<p>So, I decided to count specific items within the pipeline as a measure of
+whether or not the right data is passing through it properly.  Here’s the idea:
+if for every possible data value going through this logic, the number in always
+matched the number output, then I can be sure that the right data is getting
+sent out.</p>
+
+<p>The first step in this check is to let the solver pick an arbitrary data value.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="p">(</span><span class="o">*</span> <span class="n">anyconst</span> <span class="o">*</span><span class="p">)</span>	<span class="kt">reg</span>	<span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_special_data</span><span class="o">;</span></code></pre></figure>
+
+<p>Every time I explain this concept to a student I’m reminded of a magician
+performing a card trick: “Pick a card.  Any card.”  The same sort of  thing
+is true here.  The solver is challenged to pick a data value–any data value,
+and I intend to prove the design works no matter which value the solver picks.</p>
+
+<p>For practical reasons, I also needed to keep track of whether or not any
+output run, in the <code class="highlighter-rouge">M_AXIS_*</code> stage, corresponded to this special value.
+That’s because when the output data value contains a run, there’s no data
+associated with the run value–so it’s impossible to tell if it’s the special
+data value or not any more.  Therefore, anytime <code class="highlighter-rouge">M_AXIS_*</code> could accept a new
+value, I used a formal-only register, <code class="highlighter-rouge">f_special_tdata</code>, to kept track of
+whether or not that new value was associated with the <code class="highlighter-rouge">f_special_data</code> value
+or not.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TREADY</span><span class="p">)</span>
+		<span class="n">f_special_tdata</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">run_data</span> <span class="o">==</span> <span class="n">f_special_data</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Just to make certain I had this done right, a quick assertion could verify
+that if the output wasn’t encoding a run, <code class="highlighter-rouge">f_special_tdata</code> truly encoded
+whether or not the outgoing data was our special value or not.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_special_tdata</span>
+			<span class="o">==</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">f_special_data</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Remember the comment about equalities versus inequalities?  The same can be
+said for implications verses if–and–only–if implications.  By using an
+<code class="highlighter-rouge">==</code> sign in the test above, I can check both halves of the implication.
+First, if <code class="highlighter-rouge">f_special_tdata</code>  is true, and then if it isn’t.  Checking both
+is always a good idea–if it is appropriate to your problem.</p>
+
+<p>Now with that little bit of logic under my belt, I can now count how many
+times this special value, <code class="highlighter-rouge">f_special_data</code>, has entered my pipeline minus
+the number of times it has left.  As before, this counter requires a reset and
+a case statement.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_special_count</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">f_special_count</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">case</span><span class="p">(</span><span class="o">{</span> <span class="p">(</span><span class="n">S_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TREADY</span>
+					<span class="o">&amp;&amp;</span> <span class="n">S_AXIS_TDATA</span> <span class="o">==</span> <span class="n">f_special_data</span><span class="p">)</span><span class="o">,</span>
+			<span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXIS_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">f_special_tdata</span><span class="p">)</span> <span class="o">}</span><span class="p">)</span>
+	<span class="mb">2'b00</span><span class="o">:</span> <span class="k">begin</span> <span class="k">end</span>	<span class="c1">// No change
+</span>	<span class="mb">2'b01</span><span class="o">:</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+			<span class="c1">// Outgoing run of special values
+</span>			<span class="n">f_special_count</span> <span class="o">&lt;=</span> <span class="n">f_special_count</span>
+						<span class="o">-</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">else</span>
+			<span class="c1">// Outgoing special data value
+</span>			<span class="n">f_special_count</span> <span class="o">&lt;=</span> <span class="n">f_special_count</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="mb">2'b10</span><span class="o">:</span>	<span class="c1">// New incoming special data value
+</span>		<span class="n">f_special_count</span> <span class="o">&lt;=</span> <span class="n">f_special_count</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="mb">2'b11</span><span class="o">:</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+		<span class="c1">// Outgoing run and incoming value at the same time
+</span>		<span class="n">f_special_count</span> <span class="o">&lt;=</span> <span class="n">f_special_count</span> <span class="o">-</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>I can now repeat the same contract checks as I did before: If a piece of data
+is being output, there should be enough counts of that data item within our
+pipeline to support that output.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">f_special_tdata</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+				<span class="k">assert</span><span class="p">(</span><span class="n">f_special_count</span> <span class="o">&gt;</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">])</span><span class="o">;</span>
+			<span class="k">else</span>
+				<span class="k">assert</span><span class="p">(</span><span class="n">f_special_count</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_special_count</span> <span class="o">&lt;=</span> <span class="n">f_outstanding</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>As before, this isn’t enough to handle
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>.
+Inequalities will rarely make it through an
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a> check.
+Therefore, let’s count every time this value shows up in our pipeline, and
+compare that combinatorial count to the registered one above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// f_special_recount
+</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Count how many times our special data value is in
+</span>		<span class="c1">// our pipeline
+</span>		<span class="n">f_special_recount</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXIS_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">skd_valid</span> <span class="o">&amp;&amp;</span> <span class="n">skd_data</span> <span class="o">==</span> <span class="n">f_special_data</span><span class="p">)</span>
+			<span class="c1">// Count our special item when it's in the skidbuffer
+</span>			<span class="n">f_special_recount</span> <span class="o">=</span> <span class="n">f_special_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">mid_valid</span> <span class="o">&amp;&amp;</span> <span class="n">mid_data</span> <span class="o">==</span> <span class="n">f_special_data</span><span class="p">)</span>
+			<span class="c1">// Count the special item when its in the mid stage
+</span>			<span class="n">f_special_recount</span> <span class="o">=</span> <span class="n">f_special_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_valid</span> <span class="o">&amp;&amp;</span> <span class="n">run_data</span> <span class="o">==</span> <span class="n">f_special_data</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// Count the number in the currently building run
+</span>			<span class="n">f_special_recount</span> <span class="o">=</span> <span class="n">f_special_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">run_active</span><span class="p">)</span>
+				<span class="n">f_special_recount</span> <span class="o">=</span> <span class="n">f_special_recount</span> <span class="o">+</span> <span class="n">run_length</span><span class="o">;</span>
+		<span class="k">end</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">f_special_tdata</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// Count the number on the output stage
+</span>			<span class="n">f_special_recount</span> <span class="o">=</span> <span class="n">f_special_recount</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">])</span>
+				<span class="n">f_special_recount</span> <span class="o">=</span> <span class="n">f_special_recount</span> <span class="o">+</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+		<span class="k">end</span>
+
+		<span class="c1">// Since the skid buffer valid is sensitive to reset, we'll
+</span>		<span class="c1">// have to only make our check if the reset is inactive.
+</span>		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span> <span class="o">||</span> <span class="n">f_special_recount</span> <span class="o">==</span> <span class="n">f_special_count</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<h3 id="other-induction-checks">Other Induction checks</h3>
+
+<p>Before getting to the negative logic checks, I should point out that I also
+have a lot of simple and basic checks on the various registers from within
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">the core</a>.
+In general, you’ll want to pin down any register within your design using
+an assertion based upon its surrounding logic.  That way the
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+engine doesn’t surprise you.</p>
+
+<p>There’s another reason for doing this as well.  If you pin everything down
+sufficiently, then you’ll known quickly if some update in the future breaks
+the design.  So let’s run through a couple of these quick checks.</p>
+
+<p>We’ll start with the <code class="highlighter-rouge">run_*</code> stage.  This stage always holds on to a value,
+only replacing it when there’s something replacing it.  Therefore, if
+<code class="highlighter-rouge">run_valid</code> ever becomes true, it should remain true for all time.  Likewise,
+if ever the <code class="highlighter-rouge">mid_*</code> stage became valid, then <code class="highlighter-rouge">run_valid</code> should become high on
+the next clock, assuming it wasn’t high already, and then remain high for
+the rest of time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// run_valid
+</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">run_valid</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">run_valid</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">run_valid</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">mid_valid</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">run_valid</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>That also means that you can’t ever get to an output without going through
+the <code class="highlighter-rouge">run_*</code> stage and leaving <code class="highlighter-rouge">run_valid</code> true behind you.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">run_valid</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Looking over <code class="highlighter-rouge">mid_same</code>, it should only ever be true if the data in
+<code class="highlighter-rouge">mid_data</code> matches the current <code class="highlighter-rouge">run_data</code>.  Likewise, if there’s nothing in
+the <code class="highlighter-rouge">mid_*</code> stage, then <code class="highlighter-rouge">mid_data</code> should match what’s in the next stage.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">mid_valid</span> <span class="o">&amp;&amp;</span> <span class="n">mid_same</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">run_valid</span> <span class="o">&amp;&amp;</span> <span class="n">mid_data</span> <span class="o">==</span> <span class="n">run_data</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">mid_valid</span> <span class="o">&amp;&amp;</span> <span class="n">run_valid</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">mid_data</span> <span class="o">==</span> <span class="n">run_data</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Let’s now turn to the <code class="highlighter-rouge">run_active</code> signal.  This signal should be low if
+there’s nothing (yet) in the <code class="highlighter-rouge">run_*</code> stage.  Further, anytime <code class="highlighter-rouge">run_active</code>
+is low, the <code class="highlighter-rouge">run_length</code> should also be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">run_valid</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">run_active</span><span class="p">)</span><span class="o">;</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">run_length</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">run_active</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">run_length</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Our overflow pending flag is specific: it should only ever be high if the
+<code class="highlighter-rouge">run_length</code> is about to overflow.  This will only be true, as proved above,
+if <code class="highlighter-rouge">run_valid &amp;&amp; run_active</code> are also true–so I’ve removed those last two
+conditions from this check.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">run_overflow</span> <span class="o">==</span> <span class="p">(</span><span class="o">&amp;</span><span class="n">run_length</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>The trigger in the middle section can only ever be true if the mid section
+has a valid item within it, if it’s not marked as being the same as the previous
+item, and if the <code class="highlighter-rouge">r_triggered</code> flag is now marked to indicate a trigger
+signal has been seen and processed.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">mid_valid</span> <span class="o">||</span> <span class="n">mid_same</span> <span class="o">||</span> <span class="o">!</span><span class="n">r_triggered</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">mid_trigger</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The same can be said of the trigger signal in the <code class="highlighter-rouge">run_*</code> stage,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">run_valid</span> <span class="o">||</span> <span class="n">run_active</span> <span class="o">||</span> <span class="o">!</span><span class="n">r_triggered</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">run_trigger</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>and again of our final output trigger.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXIS_TVALID</span> <span class="o">||</span> <span class="n">M_AXIS_TDATA</span><span class="p">[</span><span class="n">MSB</span><span class="p">]</span> <span class="o">||</span> <span class="o">!</span><span class="n">r_triggered</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_trigger</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Now that that’s out of the way, let’s look at the negative logic check.  That
+one was fun.</p>
+
+<h3 id="negative-logic-checking">Negative Logic Checking</h3>
+
+<p>Here’s the idea behind the negative logic check: If a particular value never
+enters into the design, then it should never be output.  It’s pretty simple,
+though it can also be pretty useful.</p>
+
+<p>The first step is to decide whether or not we want to do this check in the
+first place.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="p">(</span><span class="o">*</span> <span class="n">anyconst</span> <span class="o">*</span><span class="p">)</span>	<span class="kt">reg</span>		<span class="n">f_never_check</span><span class="o">;</span></code></pre></figure>
+
+<p>Here’s the problem that necessitates this <code class="highlighter-rouge">f_never_check</code> flag: Making an
+undue assumption about
+the input might somehow allow the proof to pass vacuously elsewhere.  Therefore,
+if there’s a possibility the proof might fail without this doing this check,
+then we want to keep that possibility open.  For that reason we’ll gate our
+assumptions and assertions below based upon this <code class="highlighter-rouge">f_never_check</code> signal.</p>
+
+<p>The next step is to let the solver pick an arbitrary value that we’ll never
+see.  I chose to call this value, <code class="highlighter-rouge">f_never_data</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="p">(</span><span class="o">*</span> <span class="n">anyconst</span> <span class="o">*</span><span class="p">)</span>	<span class="kt">reg</span>	<span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_never_data</span><span class="o">;</span></code></pre></figure>
+
+<p>Here’s how the check works:  First, we’ll assume that this data never
+enters into our design.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_never_check</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">S_AXIS_TVALID</span><span class="p">)</span>
+			<span class="k">assume</span><span class="p">(</span><span class="n">S_AXIS_TDATA</span> <span class="o">!=</span> <span class="n">f_never_data</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Our goal will be to prove that this item never comes out of the design at any
+time, so here’s that assertion.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">M_AXIS_TDATA</span> <span class="o">!=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">f_never_data</span> <span class="o">}</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Now, to pass induction, let’s make sure we never have that value internally
+anywhere.  If the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a> is producing
+a valid output, then we need to check that it’s not in the
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">skd_valid</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">skd_data</span> <span class="o">!=</span> <span class="n">f_never_data</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Likewise, if there are items in either the <code class="highlighter-rouge">mid_*</code> stage or the <code class="highlighter-rouge">run_*</code>
+stage, then those stages shouldn’t be containing this value at all.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">mid_valid</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">mid_data</span> <span class="o">!=</span> <span class="n">f_never_data</span><span class="p">)</span><span class="o">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">run_valid</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">run_data</span> <span class="o">!=</span> <span class="n">f_never_data</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Together, these formal properties gave me a strong confidence that <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this
+run-length encoder
+core</a>
+would never do the wrong thing.</p>
+
+<h2 id="cover-checks">Cover Checks</h2>
+
+<p>Unfortunately, that confidence was misplaced.</p>
+
+<p>While I really like assertion based formal property verification, <a href="/formal/2020/06/12/four-keys.html">I’ve been
+caught more than once with a resulting design that didn’t
+work</a>.
+Indeed, that was the case many times with <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this
+design</a>
+as I was building it–the proof above would pass, but the
+design wouldn’t have worked.</p>
+
+<p>I caught several of these last bugs using some <code class="highlighter-rouge">cover()</code> checks.
+That’s also one of the reasons why <a href="/formal/2020/06/12/four-keys.html">I require a cover check
+before I will sign-off any of my own
+designs</a>.</p>
+
+<p>Here was my idea: I wanted to verify that this design could indeed generate
+compressed data.  Therefore, I wanted to see an output from
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">the core</a>
+that showed a series of compressed data values.  I chose to use an index
+for this, forcing the design to produce alternating
+<a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length encoded</a>
+and non-runlength encoded data, as it ran through a series of outputs.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">cvr_index</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">cvr_index</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXIS_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXIS_TREADY</span>
+			<span class="o">&amp;&amp;</span> <span class="n">M_AXIS_TDATA</span> <span class="o">==</span> <span class="o">{</span> <span class="n">cvr_index</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">,</span> <span class="n">cvr_index</span><span class="p">[</span><span class="n">W</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">)</span>
+		<span class="n">cvr_index</span> <span class="o">&lt;=</span> <span class="n">cvr_index</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_index</span> <span class="o">==</span> <span class="mi">7</span> <span class="o">&amp;&amp;</span> <span class="n">o_trigger</span><span class="p">)</span><span class="o">;</span>
+<span class="k">endmodule</span></code></pre></figure>
+
+<p>That said, the logic I’ve shared above was the conclusion of getting this cover
+check (and some others) to pass.   In other words, it works <em>now</em>.</p>
+
+<p>So, how does it look?  Using this cover statement, I was able to generate the
+trace shown in Fig. 6 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 6. Example cover trace</caption><tr><td><a href="/img/axisrle/cover-trace.svg"><img src="/img/axisrle/cover-trace.svg" alt="" width="780" /></a></td></tr></table>
+
+<p>Let’s walk through how this works.  The first data value, <code class="highlighter-rouge">0</code>, can be
+immediately output.  After two more <code class="highlighter-rouge">0</code>’s are entered, a run of 2 is output.
+This is encoded as one less, allowing a run of zero to encode a repeat of the
+last value–as we’ve discussed above.  Then we have a data value of <code class="highlighter-rouge">2</code>–as
+forced by the <code class="highlighter-rouge">cvr_index</code> check above.  This is followed by an additional
+four <code class="highlighter-rouge">2</code>’s, and so a run of 4 (encoded as a 3) is output.  We then have seven
+<code class="highlighter-rouge">4</code>’s.  This results in an output of <code class="highlighter-rouge">4</code> (the first data element) followed
+by a run of 6 (encoded as a 5).  The last value <code class="highlighter-rouge">6</code> is then received, followed
+by an arbitrary (different) data value having the trigger set.  Sure enough,
+these two values appear in the output as desired.</p>
+
+<p>That’s what I wanted!</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Building <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this simple run-length
+encoder</a> turned
+into a fun afternoon project!  Even better, I learned a lot when verifying
+it.  From a blank slate, I think I came up with some very useful properties
+for knowing whether it works or not.  I also think I can say confidently that
+the outgoing encoding will be a valid representation of the input.  Further,
+I can also confidently say that the resulting stream will be AXI stream protocol
+compliant.  The only thing I’m not quite so certain of is how well
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">the core</a>
+will handle either the trigger input or the run-length encoding enable input.
+Those two checks might require a bit more work.</p>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 7. The wrapper doesn't integrate the components well yet</caption><tr><td><img src="/img/axisrle/memscopc.svg" alt="" width="480" /></td></tr></table>
+
+<p>While <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this run length
+encoder</a>
+looks like it will work quite well, the entire <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscopc.v">compressed
+memory scope</a>
+design, shown in Fig. 7 on the left, is (sadly) not finished yet.  Yes, <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscopc.v">it’s
+posted</a>,
+but if details matter (and they often do), then I’m going to need to go back
+and pay attention to how <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this compression
+scheme</a>
+is <em>integrated</em> into the rest of the design.  It’s not well integrated at
+present.  As I see it, there are four problems I’ll need to come back and
+pay some more attention to.</p>
+
+<ol>
+  <li>
+    <p>Since the internal <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">memory scope
+subcore</a>
+handles the <a href="/formal/2018/12/28/axilite.html">AXI-lite bus</a>,
+only the <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">MEMSCOPE
+subcore</a>
+currently knows about any request for a manual trigger.  That means that
+the manual trigger will therefore be applied <em>downstream</em> of our <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">run-length
+encoder</a>.
+If this happens, the manual trigger might take place in the middle of a
+run, violating our rule that the trigger must only happen on a data
+element and never on a run-length coded element.</p>
+  </li>
+  <li>
+    <p><a href="/blog/2017/06/08/simple-scope.html">The scope’s semantics</a>
+require that it be <em>primed</em> before it can be triggered.  Priming involves
+filling all of the scope’s memory with valid data.  That way, when one
+reads out the memory later, there won’t be any confusion over which memory
+values have been initialized with good data and which have not.  Sadly, the
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscopc.v">wrapper</a>
+shown in Fig. 7 doesn’t (yet) know exactly when the <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">MEMSCOPE within
+it</a> has been
+primed, and so it might not activate the
+<a href="https://en.wikipedia.org/wiki/Run-length_encoding">run-length encoder</a>
+until a buffer (or two) after all memory has been filled.</p>
+  </li>
+  <li>
+    <p>The <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">MEMSCOPE</a>
+subcore includes AXI stream overflow detection.  This check circuit looks
+for any violations of the AXI stream protocol as a way of knowing if it
+can or can’t keep up with the data source.  The problem is that we’ve
+just formally verified that <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this run-length encoding
+core</a>
+will never violate the AXI stream protocol.  Any potential overflows
+will be upstream of <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axisrle.v">this
+core</a>–where
+there’s no overflow detection.  This renders the overflow detection circuit
+irrelevant.</p>
+  </li>
+</ol>
+
+<p>Perhaps I shouldn’t be so down on myself–the <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">original compressed (run-length
+encoded) scope</a>
+didn’t support these features at first either.  They were added as an
+afterthought long after <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/wbscopc.v">that
+core</a> had been
+used successfully many times over.</p>
+
+<p>Until then, I’ll just <a href="https://github.com/ZipCPU/wbscope/blob/e2535a1220b9656f9a1e525e0dd5375fc080e6fe/rtl/memscopc.v#L12-L29">note the problems</a> with the
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscopc.v">compressed memory scope
+wrapper</a> in its
+<a href="https://github.com/ZipCPU/wbscope/blob/e2535a1220b9656f9a1e525e0dd5375fc080e6fe/rtl/memscopc.v#L12-L29">file header</a>.
+That way I’ll remember these issues later when I come back to update the
+<a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscopc.v">wrapper</a>.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Who can number the clouds in wisdom? or who can stay the bottles of heaven (Job 38:37)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
