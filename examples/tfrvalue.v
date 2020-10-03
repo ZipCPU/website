@@ -61,11 +61,11 @@ module tfrvalue #(
 	always @(posedge i_a_clk, negedge i_a_reset_n)
 	if (!i_a_reset_n)
 		a_req <= 1'b0;
-	else if (i_a_valid && (a_req == a_ack))
+	else if (i_a_valid && o_a_ready)
 		a_req  <= !a_req;
 
 	always @(posedge i_a_clk)
-	if (i_a_valid && (a_req == a_ack))
+	if (i_a_valid && o_a_ready)
 		a_data <= i_a_data;
 	// }}}
 
@@ -122,11 +122,14 @@ module tfrvalue #(
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 `ifdef	FORMAL
+	// Define our registers, and f_past_valid_*
+	// {{{
 	(* gclk *) reg gbl_clk;
 			reg		f_past_valid_gbl, f_past_valid_a,
 					f_past_valid_b;
-	(* anyconst *)	reg	[3:0]	f_step_a,  f_step_b;
-			reg	[4:0]	f_count_a, f_count_b;
+	localparam	LGCLK = 5;
+	(* anyconst *)	reg	[LGCLK-2:0]	f_step_a,  f_step_b;
+			reg	[LGCLK-1:0]	f_count_a, f_count_b;
 
 	initial	f_past_valid_gbl = 0;
 	always @(posedge gbl_clk)
@@ -139,7 +142,7 @@ module tfrvalue #(
 	initial	f_past_valid_b = 0;
 	always @(posedge i_b_clk)
 		f_past_valid_b <= 1;
-
+	// }}}
 	////////////////////////////////////////////////////////////////////////
 	//
 	// Assume two clocks
@@ -155,10 +158,10 @@ module tfrvalue #(
 	end
 
 	always @(*)
-		assume(i_a_clk == f_count_a[4]);
+		assume(i_a_clk == f_count_a[LGCLK-1]);
 	
 	always @(*)
-		assume(i_b_clk == f_count_b[4]);
+		assume(i_b_clk == f_count_b[LGCLK-1]);
 	
 	// }}}
 	////////////////////////////////////////////////////////////////////////
@@ -196,6 +199,8 @@ module tfrvalue #(
 		assume(!$rose(i_a_reset_n));
 		assume($stable(i_a_valid));
 		assume($stable(i_a_data));
+		if (i_a_reset_n)
+			assert($stable(o_a_ready));
 	end
 	// }}}
 
@@ -206,6 +211,8 @@ module tfrvalue #(
 	if (!$rose(i_b_clk))
 	begin
 		assume(!$rose(i_b_reset_n));
+		if (i_b_reset_n)
+			assume($stable(i_b_ready));
 		if (f_past_valid_b && i_b_reset_n && $stable(i_b_reset_n))
 		begin
 			assert($stable(o_b_valid));
