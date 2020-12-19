@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Formally verifying register handling</title>
+  <meta name="description" content="Symbiotic EDA has a fascinating product called MCY: Mutation coverage withYosys.  The idea behindMCY is that it will subtly change(mutate) your design to the...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2020/12/19/axil-register-checking.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Formally verifying register handling</h1>
+    <p class="post-meta"><time datetime="2020-12-19T00:00:00-05:00" itemprop="datePublished">Dec 19, 2020</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Symbiotic EDA has a fascinating product called <a href="https://github.com/YosysHQ/mcy">MCY: Mutation coverage with
+Yosys</a>.  The idea behind
+<a href="https://github.com/YosysHQ/mcy">MCY</a> is that it will subtly change
+(mutate) your design to then see if your test bench can catch the changes.
+The goal is to measure, not how good your design is, but rather how complete
+your test bench is.</p>
+
+<p>I’ve now tried <a href="https://github.com/YosysHQ/mcy">MCY</a>
+on a couple of my designs.  I’ve tried it on the
+<a href="/about/zipcpu.html">ZipCPU</a>,
+and I’ve tried it on the <a href="/blog/2020/03/08/easyaxil.html">Easy AXI-lite slave we built together on the
+blog</a>.
+In both cases, it worked as advertised, yet left me a little bit unsettled
+by what my test benches weren’t checking for.</p>
+
+<p>In the case of the <a href="/about/zipcpu.html">ZipCPU</a>, I already
+knew that my test bench was flawed: I’d long since abandoned it for serious
+testing <a href="/blog/2018/04/02/formal-cpu-bugs.html">in favor of formal
+methods</a>.  Sure enough,
+<a href="https://github.com/YosysHQ/mcy">MCY</a> found holes in my
+test bench–primarily in the fact that just running a program on the
+<a href="/about/zipcpu.html">ZipCPU</a>
+from simulation never checked the debugging interface.
+Even the test bench that did check the debugging interface never checked that
+registers within the CPU could be read or written to via the same debugging
+interface.</p>
+
+<p>Shame on me.  That should’ve been a part of my test bench.</p>
+
+<p>The <a href="/blog/2020/03/08/easyaxil.html">Easy AXI-lite slave made for another valuable
+test</a>.  In this case, I
+had built a very quick <a href="/blog/2020/04/08/axitb.html">Verilator-based simulation test
+bench</a> for it to test it
+against.  <a href="https://github.com/YosysHQ/mcy">MCY</a> gave this test bench a
+coverage number of only 60% or so, meaning that my <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/mcy/easyaxil/easyaxil_tb.cpp">Verilator based test
+bench</a>
+could only find 60% of the mutations.</p>
+
+<p>What did I miss?</p>
+
+<ul>
+  <li>
+    <p>My simulation never checked whether or not the byte enables were handled
+properly.  This follows from the fact that my test bench only ever checked
+reading from and writing to entire words.</p>
+  </li>
+  <li>
+    <p>The simulation never checked whether or not the design could handle
+<a href="https://en.wikipedia.org/wiki/Back_pressure">back-pressure</a> on the
+<a href="/formal/2018/12/28/axilite.html">AXI bus</a>.</p>
+
+    <p>This is a sad reality of simulations.  Why check for proper
+<a href="https://en.wikipedia.org/wiki/Back_pressure">back-pressure</a> handling
+if you know, whenever you issue a request, that you’ll want to get a response
+from that request?</p>
+
+    <p>I find roughly 1-2 help requests per week on <a href="https://forums.xilinx.com">Xilinx’s
+forums</a> are due to individuals using one of
+<a href="/formal/2019/09/06/axi-story.html">Xilinx’s broken AXI demonstration
+cores</a>.
+As you may recall, these cores were primarily broken because they didn’t
+properly handle <a href="https://en.wikipedia.org/wiki/Back_pressure">back-pressure</a>.
+Because simulations never checked for this, and <a href="https://www.xilinx.com/products/intellectual-property/axi-vip.html">their AXI
+VIP</a> never
+generated <a href="https://en.wikipedia.org/wiki/Back_pressure">back-pressure</a>,
+users are often left with a false sense of security that their design works
+when the opposite is the case.</p>
+  </li>
+</ul>
+
+<p>When I reconfigured <a href="https://github.com/YosysHQ/mcy">MCY</a> to check the
+<em>formal</em> proof of my <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">Easy AXI-lite design
+(EASYAXIL)</a>,
+coverage then went up to 79%.  Wait, only 79%?  Isn’t
+<a href="/blog/2017/10/19/formal-intro.html">formal verification</a>
+supposed to be comprehensive?  Isn’t it supposed to be exhaustive?  What
+happened?</p>
+
+<p>What happened was that I had set up my formal proof to check for bus protocol
+violations.  I never checked whether or not the values returned by the bus were
+the right ones.  In other words, of the <a href="/formal/2020/06/12/four-keys.html">four checks required for any formal
+sign off</a>, I had only
+checked three.</p>
+
+<p>Since then, I’ve had many opportunities to build simple bus slaves, and this
+lesson has left me knowing that my simulations and formal proofs were often
+incomplete.  This has left me feeling exposed and vulnerable, and so today
+I’d like to correct that lack.  Let’s take a look, therefore, at a simple
+property set we can add to our design to make certain that any registers within
+it behave as desired.</p>
+
+<p>First, however, lets back up and look at what I was able to learn from
+<a href="https://github.com/YosysHQ/mcy">MCY</a>.</p>
+
+<h2 id="mcy-results">MCY Results</h2>
+
+<p><a href="https://github.com/YosysHQ/mcy">MCY</a> requires a bit of setup to get
+it up and running.  Sadly, that setup is often different from one simulator
+to the next.  It’s complicated enough that I’m not going to go into all the
+details here.  If you wan to see how I did it, feel free to check out <a href="https://github.com/ZipCPU/wb2axip/tree/master/bench/mcy/easyaxil">my setup
+here</a>.</p>
+
+<p>One of my frustrations with this setup is that I was unable to use my design
+as it was written.  Normally, I build a design and write formal properties into
+the design at the bottom of the file.  Why?  Because passing induction
+requires making assertions about the state of the design across register states.
+This leads to a white box testing approach, rather than the more traditional
+black box testing approach.  Keeping the properties together with the design
+seems to facilitate that for me.</p>
+
+<p>The problem with leaving properties at the bottom of the design is that the
+mutation engine might mutate the properties, and not just the logic.  To make
+this work, the two must be separated.  This forced me to create a <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/mcy/easyaxil/easyprops.sv">separate
+property file to encapsulate the properties required to verify my
+design</a>,
+and <a href="http://www.asic-world.com/systemverilog/assertions22.html">then to <em>bind</em> it to the
+design</a>.
+Access to the SVA <em>bind</em> capability currently requires the commercial version
+of SymbiYosys.</p>
+
+<p>Still, once set up, I could initialize
+<a href="https://github.com/YosysHQ/mcy">MCY</a> and apply it to my design.
+Here, for example, are the results from applying my Verilator-based
+simulation test alone.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">% mcy init
+% mcy run -j 6
+# ... Lots of outputs ...
+Database contains 2000 cached results.
+Database contains 979 cached "FAIL" results for "test_eq".
+Database contains 21 cached "PASS" results for "test_eq".
+Database contains 634 cached "FAIL" results for "test_sim".
+Database contains 366 cached "PASS" results for "test_sim".
+Tagged 627 mutations as "COVERED".
+Tagged 7 mutations as "EQGAP".
+Tagged 14 mutations as "NOCHANGE".
+Tagged 352 mutations as "UNCOVERED".
+Found 7 mutations exposing a formal equivalence gap!
+Coverage: 64.04%</code></pre></figure>
+
+<p>This tells us that, without formal verification, of the 1000 mutations
+that were applied to this design, 634 were were caught by the simulation check.
+That’s a good thing, though I would like this number to be higher. However, it
+might be that a change may have been made to the design that doesn’t affect
+any of its outputs.  In order to check for this possibility, I applied an
+equivalence check to the two designs.  If this check finds the mutated design
+equivalent to the non-mutated design, after searching through (in this case)
+15 time steps then the difference might be irrelevant–so we’ll call it
+“NOCHANGE”.  Of all of the mutations, there were only 21 of 1000
+times where the equivalence check couldn’t find any difference in performance
+as a result of the mutation.  Of those 21 times, the simulation caught the
+mutation 7 of those times–showing that our equivalence check couldn’t quite
+catch all the changes.</p>
+
+<p>In general, though, <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/mcy/easyaxil/easyaxil_tb.cpp">my simulation test
+bench</a>
+only caught 64% of all of the mutations.  That’s not a great number.
+That means 36% of the time a bug might get past my simulation.</p>
+
+<p>Let’s see if we can improve upon this number by adding formal verification
+into the mix.  Here you can see the end of the output below.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">Database contains 2359 cached results.
+Database contains 981 cached "FAIL" results for "test_eq".
+Database contains 19 cached "PASS" results for "test_eq".
+Database contains 143 cached "FAIL" results for "test_fm".
+Database contains 216 cached "PASS" results for "test_fm".
+Database contains 641 cached "FAIL" results for "test_sim".
+Database contains 359 cached "PASS" results for "test_sim".
+Tagged 777 mutations as "COVERED".
+Tagged 7 mutations as "EQGAP".
+Tagged 143 mutations as "FMONLY".
+Tagged 12 mutations as "NOCHANGE".
+Tagged 204 mutations as "UNCOVERED".
+Found 7 mutations exposing a formal equivalence gap!
+Coverage: 79.20%</code></pre></figure>
+
+<p>In this case, we applied our formal check to only those mutations that
+didn’t pass the simulation test.  Here we find that 641 mutations of the total
+1000 were caught by simulation, and of those 359 tests that were missed, another
+143 were caught by formal verification <a href="/blog/2020/03/08/easyaxil.html">using the properties we developed
+before</a>.</p>
+
+<p>The problem is that this number should be much higher.  Formal methods
+<em>should’ve</em> caught everything.  They didn’t, however, because we never checked
+the return data from the design (<code class="highlighter-rouge">S_AXI_RDATA</code>)–we only checked that there
+was an output value, not that it was the right one.</p>
+
+<p>For that, we’re going to add register checking to our test.  This time, our
+coverage goes up to 99.9%.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">Database contains 2386 cached results.
+Database contains 981 cached "FAIL" results for "test_eq".
+Database contains 19 cached "PASS" results for "test_eq".
+Database contains 373 cached "FAIL" results for "test_fm".
+Database contains 13 cached "PASS" results for "test_fm".
+Database contains 614 cached "FAIL" results for "test_sim".
+Database contains 386 cached "PASS" results for "test_sim".
+Tagged 980 mutations as "COVERED".
+Tagged 7 mutations as "EQGAP".
+Tagged 373 mutations as "FMONLY".
+Tagged 12 mutations as "NOCHANGE".
+Tagged 1 mutations as "UNCOVERED".
+Found 7 mutations exposing a formal equivalence gap!
+Coverage: 99.90%</code></pre></figure>
+
+<p>That means that 99.9% of all mutations were (now) properly found by either
+our simulation check, or the updated formal properties for
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">this core</a>.</p>
+
+<table align="center" style="float: right; padding: 20px"><caption>Fig 1. Verification Coverage</caption><tr><td><img src="/img/regcheck/rcheck-pie.png" alt="" width="357" /></td></tr></table>
+
+<p>Let’s plot out these numbers in Fig. 1, and then go back them to see if we
+can get a feel for what’s going on.  First, of the 1000 mutation checks, 614
+of them, or 61.4%, were caught by simulation alone.
+(This is really backwards, as my first step to verifying a core is <a href="/blog/2020/04/01/design-flow.html">typically a
+formal verification check</a>,
+not simulation check, but running simulation first was how I was shown to
+set up <a href="https://github.com/YosysHQ/mcy">MCY</a>.)
+Of the 386 times where simulation didn’t find the mutation, a
+<a href="/formal/2018/12/28/axilite.html">formal property check</a>
+was applied to the design.  In
+373 of those cases, the formal property check found the mutation leaving
+13 cases were neither formal nor simulation were able to find the mutation.
+Twelve of those cases involved a design that didn’t fundamentally change,
+whereas the last one was a protocol valid design that was just … different
+from the original.  The difference?  The mutated design took an extra clock
+to return the result.  Since it was valid, from a protocol standpoint, it
+passed the formal check.  Since the mutated design wasn’t externally equivalent
+to the original, <a href="https://github.com/YosysHQ/mcy">MCY</a> flagged this as
+an “UNCOVERED” mutation above.</p>
+
+<p>That explains the blue, “Simulation only”, region and the green “No change”
+region in Fig. 1 above.  However, the register checking and AXI property
+regions–while adding up to 373, are only approximately supported by the data
+above.  Sadly, I violated several principles of data handling to plot the
+differences between these two sets, so
+let me at least explain what I did: The second test showed that
+641/1000 mutations were found via simulation, and an additional 143/1000 were
+found via simulation alone.  If we accept that a rough 143 mutations chosen
+in the third test therefore would’ve been found using formal methods with
+<a href="/formal/2018/12/28/axilite.html">AXI properties</a>
+alone–you might come up
+with 143/1000 or 14.3% additional coverage via using formal properties.
+Sadly, this isn’t truly an apples to apples comparison, since the second and
+third runs of <a href="https://github.com/YosysHQ/mcy">MCY</a> were based upon two
+separate sets of mutations and I’m now comparing statistics drawn from one
+sample set to those of another.  Therefore, let me only say that these
+percentages are somewhat approximate–since they will change from run to
+run as the mutation engine randomly picks different design mutations.</p>
+
+<p>So for the rest of this article, I’d like to look at what it took to get this
+design from a formal proof that only verified 79% of its functionality
+(run #2) to one that gets to the 99.9% shown in Fig. 1.  The difference was a
+<a href="/formal/2020/06/12/four-keys.html">contract check</a>
+that I used to verify the various internal register values.</p>
+
+<h2 id="register-checking">Register Checking</h2>
+
+<p>Let me start by addressing the question of “what is a register”, followed
+by my approach to register checking.</p>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 2. An AXI-Lite GPIO peripheral, with a register for output control</caption><tr><td><img src="/img/regcheck/axil-gpio-reg.svg" alt="" width="420" /></td></tr></table>
+
+<p>Many designs have multiple registers within them that can be controlled from an
+external bus by writing to or reading from some address in the design’s <a href="https://en.wikipedia.org/wiki/Memory_map">memory
+map</a>.  A classic example would be a
+<a href="/zipcpu/2019/02/09/cpu-blinky.html">GPIO device</a>, such
+as the one shown in Fig. 2.  Such a device might simply control the outgoing
+voltage on a series of output wires.  If you set a particular bit in a <a href="/zipcpu/2019/02/09/cpu-blinky.html">GPIO
+register</a>
+to a ‘1’, the wire controlled by that register might emit a positive voltage
+on the external output pin, whereas if the bit were set to ‘0’ the wire is
+held at ground.</p>
+
+<table align="center" style="float: right; padding: 20px"><caption>Fig 3. An AXI DMA has several control registers</caption><tr><td><img src="/img/regcheck/axidma.svg" alt="" width="420" /></td></tr></table>
+
+<p>Register uses go well beyond simple
+<a href="/zipcpu/2019/02/09/cpu-blinky.html">GPIO peripherals</a>.
+Indeed, most if not all of the peripherals and controllers I’ve built have
+some form of register control to them.  In the case of <a href="https://github.com/ZipCPU/wb2axip">my DMA
+engines</a>, shown in Fig. 3, the transfer
+length, source and destination addresses are all configured via a
+bus-accessible register.  For <a href="https://github.com/ZipCPU/wbuart32">my UART</a>,
+the baud rate can be configured via the bus.  For <a href="/zipcpu/2018/04/17/ziptimer.html">the countdown
+timer</a>?  The time duration.
+<a href="/zipcpu/2019/04/02/icontrol.html">The interrupt controller</a>?
+Which interrupts are enabled and which are cleared.  The <a href="/blog/2019/03/27/qflexpress.html">QSPI flash
+controller</a>?  Which mode
+the controller is currently operating within.  How about the <a href="/blog/2017/07/08/getting-started-with-wbscope.html">Wishbone
+scope</a>?
+The delay from trigger to the end of the capture.  The list goes on.  Indeed,
+it might seem that every RTL controller I’ve built has some amount of registers
+within it.</p>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 4. Xilinx's IPIF</caption><tr><td><img src="/img/regcheck/ipif.svg" alt="" width="420" /></td></tr></table>
+
+<p>Today, we’re going to focus on modifying the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">EASYAXIL
+design</a> to add
+formal register checking to the formal properties checking this design.  This
+way, if any future modification breaks the design later on, the properties will
+be able to quickly catch the change.</p>
+
+<p>Here’s how we’ll do it: we’ll create a <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_register.v">formal register checking module</a>,
+and then we’ll attach <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_register.v">this module</a>
+to each of the four registers internal to this design to make certain that
+those registers can each be both read from and written to.</p>
+
+<p>Let’s look through how we might build <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_register.v">such a
+module</a>.</p>
+
+<p>If we want to verify that our register gets written to or read from on
+any bus access to a given address, then the first step will be to configure
+our check for the right address.  That means we’ll need to configure this
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_register.v">formal register property set</a>
+with an address, <code class="highlighter-rouge">ADDR</code>, that is <code class="highlighter-rouge">AW</code> bits wide,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span>	<span class="n">faxil_register</span> <span class="p">#(</span>
+		<span class="k">parameter</span>		<span class="n">AW</span> <span class="o">=</span> <span class="mi">4</span><span class="o">,</span>
+		<span class="k">parameter</span> <span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">ADDR</span> <span class="o">=</span> <span class="mi">0</span><span class="o">,</span></code></pre></figure>
+
+<p>and for a bus of some data width, <code class="highlighter-rouge">DW</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">parameter</span>		<span class="n">DW</span> <span class="o">=</span> <span class="mi">32</span><span class="o">,</span></code></pre></figure>
+
+<p>Not all registers can be fully written to.  For example, if you write to the
+configuration register in my <a href="/blog/2019/03/27/qflexpress.html">QSPI
+controller</a>,
+then the bottom eight bits might get sent out the QSPI port, while bits <code class="highlighter-rouge">[11:8]</code>
+can be read and written like a (normal) register.
+The <a href="/blog/2017/07/08/getting-started-with-wbscope.html">Wishbone
+scope</a>
+is similar: the bottom 20 bits control the <a href="/blog/2017/06/08/simple-scope.html">holdoff from the
+trigger</a>, whereas the top
+4 bits are status bits returned by the design.  To
+know which bits should be checked for a generic read/write capability, we’ll
+need a <code class="highlighter-rouge">MASK</code> parameter.  Under this scheme, for every <code class="highlighter-rouge">MASK[BIT]</code> that is
+set, the bit numbered <code class="highlighter-rouge">BIT</code> will be checked to see if it can be read and
+written from the bus.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">parameter</span> <span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">MASK</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="o">,</span></code></pre></figure>
+<p>.</p>
+
+<p>As a final parameter, some designs require asynchronous resets.  While I
+don’t normally use them, some contexts require them.  Therefore we’ll make an
+option for asynchronous reset handling, and come back to this again later.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">parameter</span> <span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>		<span class="n">OPT_ASYNC_RESET</span> <span class="o">=</span> <span class="mb">1'b0</span></code></pre></figure>
+<p>.</p>
+
+<p>That’s the first step, knowing how to configure the <a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_register.v">property
+checker</a>
+for our register.</p>
+
+<p>The next step will be to keep a local copy of the register within the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_register.v">formal register property set</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span> <span class="p">[</span><span class="n">DW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">f_reg</span><span class="o">;</span></code></pre></figure>
+
+<p>Now, any time the register we are checking is written to, we’ll keep track of
+it’s value in our local copy, <code class="highlighter-rouge">f_reg</code>.  To do this, I’ve slightly simplified the
+interface slightly from the AXI-lite protocol.  Specifically, I’ve created an
+<code class="highlighter-rouge">S_AXIL_AWW</code> port with a (rough) equivalence to
+<code class="highlighter-rouge">S_AXIL_AWVALID &amp;&amp; S_AXIL_AWREADY</code> and <code class="highlighter-rouge">S_AXIL_WVALID &amp;&amp; S_AXIL_WREADY</code>–since
+this is our rule for writing to the register in the first place.  If
+therefore <code class="highlighter-rouge">S_AXIL_AWW</code> is true and the requested address matches the
+address of our register, then we’ll update the various bytes in <code class="highlighter-rouge">f_reg</code>
+as requested by the bus.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">localparam</span>	<span class="n">AXILLSB</span> <span class="o">=</span> <span class="p">$</span><span class="nb">clog2</span><span class="p">(</span><span class="n">DW</span><span class="o">/</span><span class="mi">8</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXIL_AWW</span>
+		<span class="o">&amp;&amp;</span> <span class="n">S_AXIL_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]</span> <span class="o">==</span> <span class="n">ADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">])</span>
+	<span class="k">begin</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">ik</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">ik</span> <span class="o">&lt;</span> <span class="n">DW</span><span class="o">/</span><span class="mi">8</span><span class="o">;</span> <span class="n">ik</span><span class="o">=</span><span class="n">ik</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">S_AXIL_WSTRB</span><span class="p">[</span><span class="n">ik</span><span class="p">])</span>
+			<span class="n">f_reg</span><span class="p">[</span><span class="n">ik</span><span class="o">*</span><span class="mi">8</span> <span class="o">+:</span> <span class="mi">8</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">S_AXIL_WDATA</span><span class="p">[</span><span class="n">ik</span><span class="o">*</span><span class="mi">8</span> <span class="o">+:</span> <span class="mi">8</span><span class="p">]</span><span class="o">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>If we want any hope of passing
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>, then
+we’ll want to check this register when nothing is happening.  To make that
+happen, let’s have the design pass what it thinks the value of the register
+is in an <code class="highlighter-rouge">i_register</code> input port.  We can then check this value against <code class="highlighter-rouge">f_reg</code>
+on all clock cycles.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_ARESETN</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(((</span><span class="n">f_reg</span> <span class="o">^</span> <span class="n">i_register</span><span class="p">)</span> <span class="o">&amp;</span> <span class="n">MASK</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>This is a rather convoluted way of saying that all of the bits of <code class="highlighter-rouge">MASK</code>
+should match <code class="highlighter-rouge">f_reg</code>, and that we can ignore any other bits.  Just to convince
+ourselves that this works, if any two bits are identical then their exclusive
+OR will be zero.  Anything that’s not zero represents a difference between
+these two values.  When we then AND the result with <code class="highlighter-rouge">MASK</code>, we check for
+only those bit-differences that we actually care about.</p>
+
+<p>In an attempt to be complete, I also added return strobe checking to this
+register coding check.  In short sum, <code class="highlighter-rouge">BVALID</code> should be set following any
+write, and <code class="highlighter-rouge">RVALID</code> should be set following any read request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// BVALID must be set following any write to this register
+</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+			<span class="o">||</span> <span class="p">(</span><span class="n">OPT_ASYNC_RESET</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXIL_BVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXIL_AWW</span>
+			<span class="o">&amp;&amp;</span> <span class="n">S_AXIL_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]</span> <span class="o">==</span> <span class="n">ADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">S_AXIL_BVALID</span><span class="p">)</span><span class="o">;</span>
+
+	<span class="c1">// RVALID must be set following any read from this register
+</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+			<span class="o">||</span> <span class="p">(</span><span class="n">OPT_ASYNC_RESET</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">S_AXIL_RVALID</span><span class="p">)</span><span class="o">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXIL_AR</span>
+			<span class="o">&amp;&amp;</span> <span class="n">S_AXIL_ARADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]</span> <span class="o">==</span> <span class="n">ADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">S_AXIL_RVALID</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>The actual check is complicated by the fact that we’re not really checking for
+<code class="highlighter-rouge">!BVALID</code> or <code class="highlighter-rouge">!RVALID</code>.  Sure, we’ve got a reset check–but that’s really
+just to make sure the reset doesn’t interfere with the check that follows.
+The reality is that we can’t do a complete check of either <code class="highlighter-rouge">BVALID</code> or <code class="highlighter-rouge">RVALID</code>
+here since we don’t know if or when some other register will be accessed.  It
+might be that we are checking the register located at
+address <code class="highlighter-rouge">8</code> here, but <code class="highlighter-rouge">BVALID</code> gets set due to a write to register found at
+address <code class="highlighter-rouge">4</code>.  This only works because we’ve already done a <a href="/formal/2018/12/28/axilite.html">full protocol
+check</a>–we’re just
+checking register values now.</p>
+
+<p>Our last register check will be on the return value.  If there’s ever a
+request to read from our register, denoted here by <code class="highlighter-rouge">S_AXIL_AR</code> which is
+equivalent to <code class="highlighter-rouge">S_AXIL_ARVALID &amp;&amp; S_AXIL_ARREADY</code> (or it’s equivalent coming
+from the <a href="/blog/2019/05/22/skidbuffer.html">skidbuffer</a>),
+then we’ll check the result against the register that’s supposed to be returned.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_ARESETN</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span> <span class="o">&amp;&amp;</span> <span class="n">S_AXIL_AR</span>
+		<span class="o">&amp;&amp;</span> <span class="n">S_AXIL_ARADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]</span> <span class="o">==</span> <span class="n">ADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">S_AXIL_RDATA</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_register</span><span class="p">))</span><span class="o">;</span></code></pre></figure>
+
+<p>Or, at least, that’s the basics of what we want to do: 1) maintain a copy
+of the register, 2) adjust that copy on any write, 3) check our copy against
+the copy within the design, and 4) verify that any read requests return
+that value.</p>
+
+<p>There’s one sticking point that haven’t yet addressed: how shall this register
+be initialized?  My current approach has been to copy to the <code class="highlighter-rouge">i_register</code>
+value following any reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_ASYNC_RESET</span><span class="p">)</span>
+	<span class="k">begin</span> <span class="o">:</span> <span class="n">ASYNC_DATA</span>
+
+		<span class="c1">// Asynchronous reset handling option: Assume i_register is
+</span>		<span class="c1">// properly set on any asynchronous reset.
+</span>		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span> <span class="kt">or</span> <span class="kt">negedge</span> <span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+			<span class="n">f_reg</span> <span class="o">&lt;=</span> <span class="n">i_register</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_AXIL_AWW</span>
+			<span class="o">&amp;&amp;</span> <span class="n">S_AXIL_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]</span> <span class="o">==</span> <span class="n">ADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">])</span>
+		<span class="k">begin</span>
+			<span class="k">for</span><span class="p">(</span><span class="n">ik</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">ik</span> <span class="o">&lt;</span> <span class="n">DW</span><span class="o">/</span><span class="mi">8</span><span class="o">;</span> <span class="n">ik</span><span class="o">=</span><span class="n">ik</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">S_AXIL_WSTRB</span><span class="p">[</span><span class="n">ik</span><span class="p">])</span>
+				<span class="n">f_reg</span><span class="p">[</span><span class="n">ik</span><span class="o">*</span><span class="mi">8</span> <span class="o">+:</span> <span class="mi">8</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">S_AXIL_WDATA</span><span class="p">[</span><span class="n">ik</span><span class="o">*</span><span class="mi">8</span> <span class="o">+:</span> <span class="mi">8</span><span class="p">]</span><span class="o">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span> <span class="o">:</span> <span class="n">SYNC_DATA</span>
+		<span class="kt">reg</span>	<span class="n">last_reset</span><span class="o">;</span>
+
+		<span class="k">initial</span>	<span class="n">last_reset</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="o">;</span>
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+			<span class="n">last_reset</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="o">;</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">last_reset</span><span class="p">)</span>
+			<span class="c1">// Copy the register following any reset
+</span>			<span class="n">f_reg</span> <span class="o">&lt;=</span> <span class="n">i_register</span><span class="o">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_AXIL_AWW</span>
+			<span class="o">&amp;&amp;</span> <span class="n">S_AXIL_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">]</span> <span class="o">==</span> <span class="n">ADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">AXILLSB</span><span class="p">])</span>
+		<span class="k">begin</span>
+			<span class="k">for</span><span class="p">(</span><span class="n">ik</span><span class="o">=</span><span class="mi">0</span><span class="o">;</span> <span class="n">ik</span> <span class="o">&lt;</span> <span class="n">DW</span><span class="o">/</span><span class="mi">8</span><span class="o">;</span> <span class="n">ik</span><span class="o">=</span><span class="n">ik</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">S_AXIL_WSTRB</span><span class="p">[</span><span class="n">ik</span><span class="p">])</span>
+				<span class="n">f_reg</span><span class="p">[</span><span class="n">ik</span><span class="o">*</span><span class="mi">8</span> <span class="o">+:</span> <span class="mi">8</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">S_AXIL_WDATA</span><span class="p">[</span><span class="n">ik</span><span class="o">*</span><span class="mi">8</span> <span class="o">+:</span> <span class="mi">8</span><span class="p">]</span><span class="o">;</span>
+		<span class="k">end</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>In hindsight, a better solution might be to create a default parameter, and
+then <em>verify</em> that <code class="highlighter-rouge">i_register</code> actually has the right value–rather than
+just trusting its reset value.  For this reason, I might come back and adjust
+this logic to make that happen at a later time.  For now, let’s try it out and
+see how it works.</p>
+
+<h2 id="updating-the-easy-axi-lite-demonstration-core">Updating the Easy AXI-lite demonstration core</h2>
+
+<p>The last step is to incorporate this register check into the formal property
+section of our <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">EASYAXIL
+core</a>.  This is
+the easy step–we just instantiate it like any other module–once per each of
+our four registers.  Here’s what the first one looks like.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">faxil_register</span> <span class="p">#(</span>
+		<span class="o">.</span><span class="n">AW</span><span class="p">(</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">DW</span><span class="p">(</span><span class="n">C_AXI_DATA_WIDTH</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">ADDR</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+	<span class="p">)</span> <span class="n">fr0</span> <span class="p">(</span>
+		<span class="o">.</span><span class="n">S_AXI_ACLK</span><span class="p">(</span><span class="n">S_AXI_ACLK</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXI_ARESETN</span><span class="p">(</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_AWW</span><span class="p">(</span><span class="n">axil_write_ready</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_AWADDR</span><span class="p">(</span><span class="o">{</span> <span class="n">awskd_addr</span><span class="o">,</span> <span class="o">{</span><span class="p">(</span><span class="n">ADDRLSB</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_WDATA</span><span class="p">(</span><span class="n">wskd_data</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_WSTRB</span><span class="p">(</span><span class="n">wskd_strb</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_BVALID</span><span class="p">(</span><span class="n">S_AXI_BVALID</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_AR</span><span class="p">(</span><span class="n">axil_read_ready</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_ARADDR</span><span class="p">(</span><span class="o">{</span> <span class="n">arskd_addr</span><span class="o">,</span> <span class="o">{</span><span class="p">(</span><span class="n">ADDRLSB</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_RVALID</span><span class="p">(</span><span class="n">S_AXI_RVALID</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">S_AXIL_RDATA</span><span class="p">(</span><span class="n">S_AXI_RDATA</span><span class="p">)</span><span class="o">,</span>
+		<span class="o">.</span><span class="n">i_register</span><span class="p">(</span><span class="n">r0</span><span class="p">)</span>
+	<span class="p">)</span><span class="o">;</span></code></pre></figure>
+
+<p>Since the other four are (nearly) identical, I’ll skip repeating myself here
+for brevity.</p>
+
+<p>Before going on, let me remind you of the definitions of the <code class="highlighter-rouge">axil_write_ready</code>
+and <code class="highlighter-rouge">axil_read_ready</code> signals.  These are two signals found within the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">EASYAXIL core</a>.
+They’re used as the signal, internal to the design, that writes (or reads)
+are to happen on a given clock cycle.  Their actual definition depends upon
+whether or not the design is using
+<a href="/blog/2019/05/22/skidbuffer.html">skidbuffers</a> or not.</p>
+
+<p>The bottom line is that it’s easy to add this check into our design, and as
+a result we now go from 79% to 99% verification coverage.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>So, let me ask, would I ever use this in practice?</p>
+
+<p>Well, when I first saw the mutation coverage gap in this design, I somewhat
+scoffed at it.  Of course my design “worked”.  I could look it over and be
+certain it worked.  Why would I need to add in more properties?</p>
+
+<p>Since that time, I’ve started building simulation-based register connectivity
+checks when running the <a href="/about/zipcpu.html">ZipCPU</a> with
+any new design.  These checks are run from software (i.e. C/C++), to make
+certain that all registers might be reachable and configurable in simulation.
+This is actually a really good test to run, since I am aware of at least one
+ASIC project where the designer forgot to connect the byte-enable lines between
+the CPU and the bus and this would catch that bug.  The check also catches
+mis-matched address bugs, etc.  It’s a really good test to run, and so I’m
+starting to add it to my bring up code for any new design.</p>
+
+<p>Then I started building a register set for an ASIC project I’m working on.
+That design doesn’t (yet) have a <a href="/about/zipcpu.html">ZipCPU</a>
+to run software tests from.  (That’s why I’m building an AXI interface for the
+<a href="/about/zipcpu.html">ZipCPU</a>–but that’s another topic.)
+Unlike the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/easyaxil.v">EASYAXIL
+design</a>, this ASIC
+design was much more complicated.  Some register bits needed setting, others
+had other controls, and … well, it was just complicated enough that I
+needed a little more assurance I was doing it right–hence the reason
+for the little module above.  Did I find bugs in my early drafts?  You bet!
+Have I found bugs since when updating the design?  Yes.  Indeed, more than
+one update to that design introduced bugs that were then found and fixed by
+this register checking approach.</p>
+
+<p>Just as an example, without this check I might’ve allowed the following logic
+through:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="o">,</span> <span class="kt">negedge</span> <span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">val_one</span> <span class="o">&lt;=</span> <span class="mh">4'h0</span><span class="o">;</span>
+		<span class="n">val_two</span> <span class="o">&lt;=</span> <span class="mh">6'h0</span><span class="o">;</span>
+		<span class="n">val_thr</span> <span class="o">&lt;=</span> <span class="mh">3'h0</span><span class="o">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">axil_write_ready</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_WSTR</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+			<span class="n">val_one</span> <span class="o">&lt;=</span> <span class="n">S_AXI_WDATA</span><span class="p">[</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_WSTR</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>			<span class="c1">// &lt;-- Bug #1
+</span>			<span class="n">val_two</span> <span class="o">&lt;=</span> <span class="n">S_AXI_WDATA</span><span class="p">[</span><span class="mi">13</span><span class="o">:</span><span class="mi">8</span><span class="p">]</span><span class="o">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">S_AXI_WSTR</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+			<span class="n">val_thr</span> <span class="o">&lt;=</span> <span class="n">S_AXI_WDATA</span><span class="p">[</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>	<span class="c1">// &lt;-- Bug #2
+</span>	<span class="k">end</span></code></pre></figure>
+
+<p>These two bugs are representative of the sorts of bugs I found using these
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_register.v">register value properties</a>.</p>
+
+<p>The bottom line is that, while this might seem like a simple test, it’s an
+important one in order to complete the proof of a slave register set.</p>
+
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Judgment also will I lay to the line, and righteousness to the plummet: and the hail shall sweep away the refuge of lies, and the waters shall overflow the hiding place. (Is 28:17)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
