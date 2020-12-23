@@ -103,8 +103,8 @@ requests.</p>
 <p>It’s not easy.</p>
 
 <p>Today, let’s dig into one of the harder challenges involved in building a
-bursting AXI master: how to handle setting the various <code class="highlighter-rouge">AxVALID</code>, <code class="highlighter-rouge">AxADDR</code>,
-and <code class="highlighter-rouge">AxLEN</code> bus signals.   In particular, the <a href="/doc/axi-spec.pdf">AXI bus
+bursting AXI master: how to handle setting the various <code class="language-plaintext highlighter-rouge">AxVALID</code>, <code class="language-plaintext highlighter-rouge">AxADDR</code>,
+and <code class="language-plaintext highlighter-rouge">AxLEN</code> bus signals.   In particular, the <a href="/doc/axi-spec.pdf">AXI bus
 protocol</a> imposes several
 constraints on these signals that all need to be met at the same time.  The
 challenge is figuring out how to generate bursts, meeting all of these
@@ -126,44 +126,44 @@ different way, so they form a useful set of examples to learn from.</p>
 
 <h2 id="axvalid-axlen-and-what-makes-this-difficult">AxVALID, AxLEN, and what makes this difficult</h2>
 
-<p>Let’s start by taking a peek at the logic required when setting <code class="highlighter-rouge">AxLEN</code>, and
-then what’s required to set <code class="highlighter-rouge">AxVALID</code>.  Here, I’m using the <code class="highlighter-rouge">Ax</code> prefix to
-reference either the <code class="highlighter-rouge">AW</code> (write address) channel or the <code class="highlighter-rouge">AR</code> (read address)
+<p>Let’s start by taking a peek at the logic required when setting <code class="language-plaintext highlighter-rouge">AxLEN</code>, and
+then what’s required to set <code class="language-plaintext highlighter-rouge">AxVALID</code>.  Here, I’m using the <code class="language-plaintext highlighter-rouge">Ax</code> prefix to
+reference either the <code class="language-plaintext highlighter-rouge">AW</code> (write address) channel or the <code class="language-plaintext highlighter-rouge">AR</code> (read address)
 channel interchangeably.  Specifically, there are four challenging requirements
-when driving <code class="highlighter-rouge">AxLEN</code>, and then some other requirements when driving <code class="highlighter-rouge">AxVALID</code>.
+when driving <code class="language-plaintext highlighter-rouge">AxLEN</code>, and then some other requirements when driving <code class="language-plaintext highlighter-rouge">AxVALID</code>.
 These requirements also impact the addresses we might choose to send, and so
-also the <code class="highlighter-rouge">AxADDR</code> signal.  Getting all of these requirements right, without
+also the <code class="language-plaintext highlighter-rouge">AxADDR</code> signal.  Getting all of these requirements right, without
 impacting the maximum frequency of the design, tends to be one of the most
 challenging parts of generating AXI bursts.</p>
 
-<p>So let’s start out by looking over the four requirements of <code class="highlighter-rouge">AxLEN</code>.</p>
+<p>So let’s start out by looking over the four requirements of <code class="language-plaintext highlighter-rouge">AxLEN</code>.</p>
 
 <ol>
   <li>
-    <p><code class="highlighter-rouge">AxLEN</code> can’t be any larger than one less than your maximum burst size.</p>
+    <p><code class="language-plaintext highlighter-rouge">AxLEN</code> can’t be any larger than one less than your maximum burst size.</p>
 
-    <p>For AXI4, the maximum burst length is 256 beats.  Since <code class="highlighter-rouge">AxLEN</code> is one less
+    <p>For AXI4, the maximum burst length is 256 beats.  Since <code class="language-plaintext highlighter-rouge">AxLEN</code> is one less
 than the requested burst size, that means AxLEN must be no greater than 255.
-AXI3 is similar, but with a maximum burst size of 16 beats, so the <code class="highlighter-rouge">AxLEN</code>
+AXI3 is similar, but with a maximum burst size of 16 beats, so the <code class="language-plaintext highlighter-rouge">AxLEN</code>
 signal in AXI3 can be no larger than 15.</p>
 
     <p>I’ve tried to capture this basic protocol difference using a parameter
-containing the log of this maximum burst size, <code class="highlighter-rouge">LGMAXBURST</code>, which will be
-set to either <code class="highlighter-rouge">8</code>, for a 255 beat burst, or <code class="highlighter-rouge">4</code>, for a 16 beat burst, or to
+containing the log of this maximum burst size, <code class="language-plaintext highlighter-rouge">LGMAXBURST</code>, which will be
+set to either <code class="language-plaintext highlighter-rouge">8</code>, for a 255 beat burst, or <code class="language-plaintext highlighter-rouge">4</code>, for a 16 beat burst, or to
 any user configurable value less than the protocol maximum.
-This allows us to express the maximum burst size as <code class="highlighter-rouge">(1&lt;&lt;LGMAXBURST)</code>, and
-the maximum <code class="highlighter-rouge">AxLEN</code> value as <code class="highlighter-rouge">(1&lt;&lt;LGMAXBURST)-1</code>.</p>
+This allows us to express the maximum burst size as <code class="language-plaintext highlighter-rouge">(1&lt;&lt;LGMAXBURST)</code>, and
+the maximum <code class="language-plaintext highlighter-rouge">AxLEN</code> value as <code class="language-plaintext highlighter-rouge">(1&lt;&lt;LGMAXBURST)-1</code>.</p>
 
     <p>To illustrate these various constraints, let’s build a draft of the logic
-necessary to calculate this <code class="highlighter-rouge">AxLEN</code> value, and then update it after each
+necessary to calculate this <code class="language-plaintext highlighter-rouge">AxLEN</code> value, and then update it after each
 constraint.  To start out, we’ll obviously like to move as much data as
 we can, so our first constraint would be that we want to set the next
-<code class="highlighter-rouge">AxLEN</code> value to the size of a full burst.</p>
+<code class="language-plaintext highlighter-rouge">AxLEN</code> value to the size of a full burst.</p>
   </li>
 </ol>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
-	<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+	<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
 
 <ol start="2">
   <li>
@@ -179,9 +179,9 @@ building a CPU cache.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@*</span>
 <span class="k">begin</span>
-	<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">fixed_burst</span><span class="p">)</span>
-		<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 <span class="k">end</span></code></pre></figure>
 
 <table align="center" style="float: left; padding: 20px"><caption>Fig 1. Goals when building an AXI master component</caption><tr><td><img src="/img/axil2axis/throughput-goal.svg" alt="" width="320" /></td></tr></table>
@@ -193,7 +193,7 @@ building a CPU cache.</p>
    minimizing any overhead.  That then means that I’ll need to use
    256-beat bursts when writing
    to incrementing (subsequent) addresses, and 16-beat bursts when writing
-   to fixed (identical) addresses.  This forces the <code class="highlighter-rouge">if</code> statement above.</p>
+   to fixed (identical) addresses.  This forces the <code class="language-plaintext highlighter-rouge">if</code> statement above.</p>
 
 <ol start="3">
   <li>
@@ -211,21 +211,21 @@ from needing to check whether or not a particular burst
 needs to be split when crossing device boundaries.</p>
 
     <p>Either way, this requirement is going to mean that we’re going to need
-to limit our <code class="highlighter-rouge">AxLEN</code> field again.  This time it will need to be limited
-such that <code class="highlighter-rouge">AxADDR[11:ADDRLSB] + (AxLEN +1) &lt; 4kB</code></p>
+to limit our <code class="language-plaintext highlighter-rouge">AxLEN</code> field again.  This time it will need to be limited
+such that <code class="language-plaintext highlighter-rouge">AxADDR[11:ADDRLSB] + (AxLEN +1) &lt; 4kB</code></p>
   </li>
 </ol>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="c1">// ADDRLSB captures the the word size of the bus in relevant address bits
-</span><span class="k">localparam</span>	<span class="n">ADDRLSB</span> <span class="o">=</span> <span class="p">$</span><span class="nb">clog2</span><span class="p">(</span><span class="n">C_AXI_DATA_WIDTH</span><span class="p">)</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="c1">// ADDRLSB captures the the word size of the bus in relevant address bits</span>
+<span class="k">localparam</span>	<span class="n">ADDRLSB</span> <span class="o">=</span> <span class="p">$</span><span class="nb">clog2</span><span class="p">(</span><span class="n">C_AXI_DATA_WIDTH</span><span class="p">);</span>
 
 <span class="k">always</span> <span class="o">@</span>
 <span class="k">begin</span>
-	<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">fixed_burst</span><span class="p">)</span>
-		<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">next_address</span><span class="p">[</span><span class="mi">11</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span> <span class="o">+</span> <span class="n">next_axlen</span> <span class="o">&gt;</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="mi">12</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">)))</span>
-		<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="mi">12</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">))</span><span class="o">-</span><span class="n">next_address</span><span class="p">[</span><span class="mi">11</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="mi">12</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">))</span><span class="o">-</span><span class="n">next_address</span><span class="p">[</span><span class="mi">11</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">];</span>
 <span class="k">end</span></code></pre></figure>
 
 <table align="center" style="float: right"><caption>Fig 2. Aligned addressing</caption><tr><td><img src="/img/axiaddr-limits/wbs2mm.svg" alt="" width="480" /></td></tr></table>
@@ -254,10 +254,10 @@ that counts down as each burst is requested, so you can always know how
 much data you have left to send.  Then, using this counter, you can ask
 whether or not your burst length is less than the maximum burst length,
 and if so you would then only transmit what’s remaining.  That is,
-if you have <code class="highlighter-rouge">LEN</code> words remaining in your transfer, you don’t want to
-transfer more than those <code class="highlighter-rouge">LEN</code> words.</p>
+if you have <code class="language-plaintext highlighter-rouge">LEN</code> words remaining in your transfer, you don’t want to
+transfer more than those <code class="language-plaintext highlighter-rouge">LEN</code> words.</p>
 
-    <p>We’ll use <code class="highlighter-rouge">remaining_transfer_length</code> as our value below.  Further, for
+    <p>We’ll use <code class="language-plaintext highlighter-rouge">remaining_transfer_length</code> as our value below.  Further, for
 a full featured data mover, checking this value requires a comparison
 across as many bits as you are using to represent LEN.  Since I tend to
 be a perfectionist, that can be a 32-bit comparison.</p>
@@ -266,56 +266,56 @@ be a perfectionist, that can be a 32-bit comparison.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span>
 <span class="k">begin</span>
-	<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+	<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">fixed_burst</span><span class="p">)</span>
-		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">next_address</span><span class="p">[</span><span class="mi">11</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span> <span class="o">+</span> <span class="n">next_axlen</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="mi">12</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">)))</span>
-		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="mi">12</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">))</span><span class="o">-</span><span class="n">next_address</span><span class="p">[</span><span class="mi">11</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="mi">12</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">))</span><span class="o">-</span><span class="n">next_address</span><span class="p">[</span><span class="mi">11</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">next_axlen</span> <span class="o">&gt;=</span> <span class="n">remaining_transfer_length</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-		<span class="n">next_axlen</span> <span class="o">=</span> <span class="n">remaining_transfer_length</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">=</span> <span class="n">remaining_transfer_length</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 <span class="k">end</span></code></pre></figure>
 
 <p>That’s our four criteria.</p>
 
 <p>Now let’s add to this mess my rule of thumb that any 32-bit operation takes
-one clock cycle.  That means that calculating the next <code class="highlighter-rouge">AxLEN</code> value alone
+one clock cycle.  That means that calculating the next <code class="language-plaintext highlighter-rouge">AxLEN</code> value alone
 is going to require two clock cycles.</p>
 
 <table align="center" style="float: none"><caption>Fig 3. Clock Cycles</caption><tr><td><img src="/img/axiaddr-limits/double-op.svg" alt="" width="560" /></td></tr></table>
 
 <p>This is still unacceptable.</p>
 
-<p>We have a second and similar problem with <code class="highlighter-rouge">AxVALID</code>, although it’s not nearly
-quite as bad.  The problem with AxVALID is that you don’t want to set <code class="highlighter-rouge">AxVALID</code>
-unless you have <code class="highlighter-rouge">next_axlen+1</code> data items available to be sent, in the case of
-writing, or <code class="highlighter-rouge">next_axlen+1</code> spaces available in your FIFO if you are reading.
+<p>We have a second and similar problem with <code class="language-plaintext highlighter-rouge">AxVALID</code>, although it’s not nearly
+quite as bad.  The problem with AxVALID is that you don’t want to set <code class="language-plaintext highlighter-rouge">AxVALID</code>
+unless you have <code class="language-plaintext highlighter-rouge">next_axlen+1</code> data items available to be sent, in the case of
+writing, or <code class="language-plaintext highlighter-rouge">next_axlen+1</code> spaces available in your FIFO if you are reading.
 Sure, the AXI bus allows you to stall the bus in both directions if the data
 isn’t quite ready yet, but do you really want to slow the rest of your design
 down by this component?  Indeed, the rule of thumb here should be that once a
-burst has been requested then either <code class="highlighter-rouge">WVALID</code>, for writes, or <code class="highlighter-rouge">RREADY</code> for
+burst has been requested then either <code class="language-plaintext highlighter-rouge">WVALID</code>, for writes, or <code class="language-plaintext highlighter-rouge">RREADY</code> for
 reads, such remain asserted until all of the beats of the burst transfer are
 complete.</p>
 
 <p>So let’s build up some generic logic for starting a burst.  We’ll call this
-<code class="highlighter-rouge">start_transaction</code> here, and we’ll make it combinatorial–since many things
+<code class="language-plaintext highlighter-rouge">start_transaction</code> here, and we’ll make it combinatorial–since many things
 might depend upon it.  So, in general, we’ll start a burst as soon as we
 either have data or space available for the transfer.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 <span class="k">begin</span>
-	<span class="n">start_transaction</span> <span class="o">=</span> <span class="p">(</span><span class="n">data_or_space_available</span> <span class="o">&gt;</span> <span class="n">next_axlen</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+	<span class="n">start_transaction</span> <span class="o">=</span> <span class="p">(</span><span class="n">data_or_space_available</span> <span class="o">&gt;</span> <span class="n">next_axlen</span><span class="p">);</span></code></pre></figure>
 
 <p>We’re going to need ot be careful not to start a new transaction while the
 last transaction request remains outstanding and stalled.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
-		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Moreover, we don’t want to start a transaction while a burst write is in
 process.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_WLAST</span> <span class="o">||</span> <span class="o">!</span><span class="n">M_AXI_WREADY</span><span class="p">))</span>
-		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>This will also align the write address and write data channels.  While this
 isn’t specifically required by the <a href="/doc/axi-spec.pdf">AXI
@@ -333,14 +333,14 @@ error or external user reset
 request</a>.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">if</span> <span class="p">(</span><span class="n">soft_reset</span><span class="p">)</span>
-		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>You also want to be able to guarantee that you won’t start an operation until
-the user has requested it.  We’ll use an <code class="highlighter-rouge">r_busy</code> here to indicate that the AXI
+the user has requested it.  We’ll use an <code class="language-plaintext highlighter-rouge">r_busy</code> here to indicate that the AXI
 master is in it’s “transfer data” state.  This yields another start condition.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span><span class="p">)</span>
-		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>If we’re not careful, all of this logic will eat into our timing slack, slowing
 down our over all data transfer rate.  The worst offender in this chain is
@@ -369,25 +369,25 @@ In this case, the logic would get <em>really</em> simple.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 <span class="k">begin</span>
-	<span class="c1">// Always do singleton bursts
-</span>	<span class="n">next_axlen</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
-	<span class="c1">//
-</span>	<span class="c1">// Every burst advances the address by one word
-</span>	<span class="n">next_axaddr</span> <span class="o">=</span> <span class="n">axaddr</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">ADDRLSB</span><span class="p">)</span><span class="o">;</span>
-	<span class="c1">//
-</span>	<span class="c1">// Word-align all subsequent burst addresses
-</span>	<span class="n">next_axaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
-	<span class="c1">//
-</span>	<span class="c1">// Start a transaction as soon as space is available
-</span>	<span class="n">start_transaction</span> <span class="o">=</span> <span class="p">(</span><span class="n">data_or_space_available</span> <span class="o">&gt;</span> <span class="p">(</span><span class="n">axvalid</span> <span class="o">?</span> <span class="mi">2</span><span class="o">:</span><span class="mi">1</span><span class="p">))</span><span class="o">;</span>
-	<span class="c1">//
-</span>	<span class="c1">// We'll still need to check other start transaction checks though
-</span>	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
-		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="c1">// Always do singleton bursts</span>
+	<span class="n">next_axlen</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="c1">//</span>
+	<span class="c1">// Every burst advances the address by one word</span>
+	<span class="n">next_axaddr</span> <span class="o">=</span> <span class="n">axaddr</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">ADDRLSB</span><span class="p">);</span>
+	<span class="c1">//</span>
+	<span class="c1">// Word-align all subsequent burst addresses</span>
+	<span class="n">next_axaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="c1">//</span>
+	<span class="c1">// Start a transaction as soon as space is available</span>
+	<span class="n">start_transaction</span> <span class="o">=</span> <span class="p">(</span><span class="n">data_or_space_available</span> <span class="o">&gt;</span> <span class="p">(</span><span class="n">axvalid</span> <span class="o">?</span> <span class="mi">2</span><span class="o">:</span><span class="mi">1</span><span class="p">));</span>
+	<span class="c1">//</span>
+	<span class="c1">// We'll still need to check other start transaction checks though</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
+		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_WREADY</span><span class="p">)</span>
-		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">soft_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">r_busy</span><span class="p">)</span>
-		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">start_transaction</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 <span class="k">end</span></code></pre></figure>
 
 <p>If you are going straight into a MIG generated memory controller, this would
@@ -421,17 +421,17 @@ check, but nothing following would need to check for crossing any boundaries.</p
 <span class="k">begin</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">fixed_burst</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">initial_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">initial_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
-		<span class="n">initial_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">initial_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 		<span class="k">if</span> <span class="p">(</span><span class="n">initial_address</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">]</span> <span class="o">+</span> <span class="n">initial_axlen</span>
 				<span class="o">&gt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">))</span>
 			<span class="n">initial_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">LGMAXBURST</span><span class="o">-</span><span class="n">ADDRLSB</span><span class="p">))</span>
-				<span class="o">-</span> <span class="n">initial_address</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+				<span class="o">-</span> <span class="n">initial_address</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 	<span class="k">end</span>
 
 	<span class="k">if</span> <span class="p">(</span><span class="n">initial_axlen</span><span class="o">+</span><span class="mi">1</span> <span class="o">&gt;=</span> <span class="n">transfer_length</span><span class="p">)</span>
-		<span class="n">initial_axlen</span> <span class="o">=</span> <span class="n">transfer_length</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">initial_axlen</span> <span class="o">=</span> <span class="n">transfer_length</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 <span class="k">end</span></code></pre></figure>
 
 <p>That gets us down to three constraints–down from four.  Wait, though, it gets
@@ -441,12 +441,12 @@ transfer size alone.</p>
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span>
 <span class="k">begin</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">fixed_burst</span><span class="p">)</span>
-		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 	<span class="k">else</span>
-		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 
 	<span class="k">if</span> <span class="p">(</span><span class="n">next_axlen</span><span class="o">+</span><span class="mi">1</span> <span class="o">&gt;=</span> <span class="n">remaining_transfer_length</span><span class="p">)</span>
-		<span class="n">next_axlen</span> <span class="o">=</span> <span class="n">remaining_transfer_length</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+		<span class="n">next_axlen</span> <span class="o">=</span> <span class="n">remaining_transfer_length</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 <span class="k">end</span></code></pre></figure>
 
 <p>Even though the initial length will still take two cycles, the subsequent
@@ -456,7 +456,7 @@ length calculation might now just fit within a single clock cycle.</p>
 
 <p>Let’s take a step back for a moment though.  Our goal is to be able to maintain
 100% throughput across our bus.  That means that we should be able to transfer
-one beat of information, whether <code class="highlighter-rouge">WVALID &amp;&amp; WREADY</code> or <code class="highlighter-rouge">RVALID &amp;&amp; RREADY</code>, on
+one beat of information, whether <code class="language-plaintext highlighter-rouge">WVALID &amp;&amp; WREADY</code> or <code class="language-plaintext highlighter-rouge">RVALID &amp;&amp; RREADY</code>, on
 every clock cycle.  Our goal is also to issue bus requests as soon
 as we either have the data available for any write requests, or alternatively
 as soon as we have the space available for any read requests.  If our burst
@@ -465,17 +465,17 @@ take a clock or two to calculate these values as long as they are calculated
 and issued early enough so as not to impact performace?</p>
 
 <p>Let’s therefore take one clock cycle to start the transaction, and then a
-second clock cycle between any two <code class="highlighter-rouge">AxVALID</code> signals to do our work above.</p>
+second clock cycle between any two <code class="language-plaintext highlighter-rouge">AxVALID</code> signals to do our work above.</p>
 
 <p>Fig. 4 below shows what this might look like for a write process.</p>
 
 <table align="center" style="float: none"><caption>Fig 4. Hiding write address calculations</caption><tr><td><img src="/img/axiaddr-limits/write-recycle.svg" alt="" width="560" /></td></tr></table>
 
-<p>The burst would start by setting both <code class="highlighter-rouge">AWVALID</code> and <code class="highlighter-rouge">WVALID</code> at the same time.
+<p>The burst would start by setting both <code class="language-plaintext highlighter-rouge">AWVALID</code> and <code class="language-plaintext highlighter-rouge">WVALID</code> at the same time.
 The core could then take one clock cycle to be able to regenerate the next
-<code class="highlighter-rouge">AWVALID</code>.  However, we wouldn’t set it until after sending <code class="highlighter-rouge">WLAST</code>.  Therefore,
+<code class="language-plaintext highlighter-rouge">AWVALID</code>.  However, we wouldn’t set it until after sending <code class="language-plaintext highlighter-rouge">WLAST</code>.  Therefore,
 as long as the burst is longer than two beats, we won’t suffer any loss.
-I’ve tried to show this by making the <code class="highlighter-rouge">AWVALID</code> signal in Fig. 4 an unknown,
+I’ve tried to show this by making the <code class="language-plaintext highlighter-rouge">AWVALID</code> signal in Fig. 4 an unknown,
 just to mark that it could go high early, but the fact is that it isn’t an
 unknown: it’s zero until the last beat is sent.  There’s also the less likely
 possibility of needing to send a burst that’s just one beat away from
@@ -497,16 +497,16 @@ if the burst is less than two beats.</p>
 
 <p>That could buy us some time.</p>
 
-<p>What would happen, though, if the slave didn’t accept our <code class="highlighter-rouge">AxVALID</code> signal
+<p>What would happen, though, if the slave didn’t accept our <code class="language-plaintext highlighter-rouge">AxVALID</code> signal
 immediately?  The answer is that it could impact our throughput if we waited
 for the burst to be accepted before calculating the next burst’s parameters.</p>
 
-<p>This is why I started using <code class="highlighter-rouge">phantom</code> signals as I called them.  You’ll see
+<p>This is why I started using <code class="language-plaintext highlighter-rouge">phantom</code> signals as I called them.  You’ll see
 them throughout <a href="https://github.com/ZipCPU/wb2axip">all of my AXI bursting
 master</a> designs–all named something
-like <code class="highlighter-rouge">phantom_read</code>, <code class="highlighter-rouge">phantom_write</code>, or perhaps even <code class="highlighter-rouge">phantom_start</code>.  The
+like <code class="language-plaintext highlighter-rouge">phantom_read</code>, <code class="language-plaintext highlighter-rouge">phantom_write</code>, or perhaps even <code class="language-plaintext highlighter-rouge">phantom_start</code>.  The
 idea is that all of our burst calculation logic can take place when the
-<code class="highlighter-rouge">phantom</code> signal is true.  We can then hide this logic inside any potential
+<code class="language-plaintext highlighter-rouge">phantom</code> signal is true.  We can then hide this logic inside any potential
 stall signals.</p>
 
 <table align="center" style="float: none"><caption>Fig 6. "Phantom" start signals</caption><tr><td><img src="/img/axiaddr-limits/phantom-starts.svg" alt="" width="560" /></td></tr></table>
@@ -515,39 +515,39 @@ stall signals.</p>
 
 <ol>
   <li>
-    <p>First, we’d have our <code class="highlighter-rouge">start_transaction</code> signal–whatever it is.  This
+    <p>First, we’d have our <code class="language-plaintext highlighter-rouge">start_transaction</code> signal–whatever it is.  This
 is a combinatorial signal, and simply tells us that it’s time to start a
 new burst.</p>
   </li>
   <li>
-    <p>Then, on the next cycle, <code class="highlighter-rouge">AxVALID</code> would be high–indicating a registered
-transaction start.  On this same cycle, the <code class="highlighter-rouge">phantom_write</code> or <code class="highlighter-rouge">phantom_read</code>
+    <p>Then, on the next cycle, <code class="language-plaintext highlighter-rouge">AxVALID</code> would be high–indicating a registered
+transaction start.  On this same cycle, the <code class="language-plaintext highlighter-rouge">phantom_write</code> or <code class="language-plaintext highlighter-rouge">phantom_read</code>
 signal would also be high–but only for one cycle only.  This would be a
 signal internal to the design that registered values (not the actual AXI
 protocol signals) can be adjusted as though the burst request had actually
 taken place.</p>
   </li>
   <li>
-    <p>On the third cycle, the <code class="highlighter-rouge">phantom</code> signal would be low again–even though
-<code class="highlighter-rouge">AxVALID</code> might stay high until the channel was no longer stalled.  This
+    <p>On the third cycle, the <code class="language-plaintext highlighter-rouge">phantom</code> signal would be low again–even though
+<code class="language-plaintext highlighter-rouge">AxVALID</code> might stay high until the channel was no longer stalled.  This
 is the clock we’ll take to recycle our addressing.  It’s also the first
-cycle where the <code class="highlighter-rouge">start_transaction</code> combinatorial signal might be high
+cycle where the <code class="language-plaintext highlighter-rouge">start_transaction</code> combinatorial signal might be high
 again.</p>
 
-    <p>This is partially what’s being shown in Fig. 6 above.  The <code class="highlighter-rouge">phantom_read</code>
+    <p>This is partially what’s being shown in Fig. 6 above.  The <code class="language-plaintext highlighter-rouge">phantom_read</code>
 signal is only high for one clock tick, but on the first clock of any new
 read request cycle.  That way, if it takes a couple cycles for the
 read to be acknowledged, we’ll be ready for the next cycle at that time.</p>
   </li>
   <li>
-    <p>Once the <code class="highlighter-rouge">AxVALID &amp;&amp; AxREADY</code> indicates a request has been accepted, we
-then can set <code class="highlighter-rouge">start_transaction</code> on the next cycle and the
+    <p>Once the <code class="language-plaintext highlighter-rouge">AxVALID &amp;&amp; AxREADY</code> indicates a request has been accepted, we
+then can set <code class="language-plaintext highlighter-rouge">start_transaction</code> on the next cycle and the
 process repeats until the transfer is complete.</p>
   </li>
 </ol>
 
-<p>I’ve found this <code class="highlighter-rouge">phantom</code> starting signal to be quite useful.  It decouples the
-<code class="highlighter-rouge">AxLEN</code> constraint logic from needing to wait on <code class="highlighter-rouge">AxREADY</code>.  Better yet, it
+<p>I’ve found this <code class="language-plaintext highlighter-rouge">phantom</code> starting signal to be quite useful.  It decouples the
+<code class="language-plaintext highlighter-rouge">AxLEN</code> constraint logic from needing to wait on <code class="language-plaintext highlighter-rouge">AxREADY</code>.  Better yet, it
 allows us to issue burst requests as fast as one burst request every other
 clock cycle–even when we are requesting full length bursts.</p>
 
@@ -565,13 +565,13 @@ there’s somewhere for the returned data to go.</p>
 <p>In general, this means you need to keep track of a counter of either the data
 available to be written, or the space available to be read into.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// For writes, the amount of data available in the FIFO which can be
-</span>	<span class="c1">// sent across the interface
-</span>	<span class="k">assign</span>	<span class="n">data_available</span> <span class="o">=</span> <span class="n">fifo_fill</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// For writes, the amount of data available in the FIFO which can be</span>
+	<span class="c1">// sent across the interface</span>
+	<span class="k">assign</span>	<span class="n">data_available</span> <span class="o">=</span> <span class="n">fifo_fill</span><span class="p">;</span>
 
-	<span class="c1">// For reads, the amount of empty space available in the FIFO which
-</span>	<span class="c1">// can be filled with a subsequent read.
-</span>	<span class="k">assign</span>	<span class="n">space_available</span> <span class="o">=</span> <span class="n">FIFO_SIZE</span> <span class="o">-</span> <span class="n">fifo_fill</span><span class="o">;</span></code></pre></figure>
+	<span class="c1">// For reads, the amount of empty space available in the FIFO which</span>
+	<span class="c1">// can be filled with a subsequent read.</span>
+	<span class="k">assign</span>	<span class="n">space_available</span> <span class="o">=</span> <span class="n">FIFO_SIZE</span> <span class="o">-</span> <span class="n">fifo_fill</span><span class="p">;</span></code></pre></figure>
 
 <p>Only … it’s not quite so simple.  In particular, after issuing a burst
 request, even if nothing else in the FIFO changes, the amount of data (or space)
@@ -581,18 +581,18 @@ available changes just due to the fact that we’ve requested the transfer.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
 <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
-	<span class="n">data_available</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
-<span class="k">else</span> <span class="k">case</span><span class="p">(</span><span class="o">{</span> <span class="n">fifo_write</span><span class="o">,</span> <span class="n">phantom_write</span> <span class="o">}</span><span class="p">)</span>
+	<span class="n">data_available</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">else</span> <span class="k">case</span><span class="p">(</span><span class="o">{</span> <span class="n">fifo_write</span><span class="p">,</span> <span class="n">phantom_write</span> <span class="o">}</span><span class="p">)</span>
 <span class="mb">2'b00</span><span class="o">:</span> <span class="k">begin</span> <span class="k">end</span>
-<span class="mb">2'b10</span><span class="o">:</span> <span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">data_available</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
-<span class="mb">2'b01</span><span class="o">:</span> <span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span> <span class="o">-</span><span class="mi">1</span><span class="o">;</span>
-<span class="mb">2'b11</span><span class="o">:</span> <span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span><span class="o">;</span>
+<span class="mb">2'b10</span><span class="o">:</span> <span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">data_available</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+<span class="mb">2'b01</span><span class="o">:</span> <span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+<span class="mb">2'b11</span><span class="o">:</span> <span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span><span class="p">;</span>
 <span class="k">endcase</span></code></pre></figure>
 
 <table align="center" style="float: right"><caption>Fig 7. Data Available</caption><tr><td><img src="/img/axiaddr-limits/data-available.svg" alt="" width="360" /></td></tr></table>
 
-<p>Data then enters the FIFO any time <code class="highlighter-rouge">fifo_write</code> is true.  Once enough data
-has accumulated to form a burst write request, the <code class="highlighter-rouge">data_available</code> counter
+<p>Data then enters the FIFO any time <code class="language-plaintext highlighter-rouge">fifo_write</code> is true.  Once enough data
+has accumulated to form a burst write request, the <code class="language-plaintext highlighter-rouge">data_available</code> counter
 is dropped by the length of that request–even before the data is read out of
 the FIFO.  That way we make certain we aren’t requesting writes based upon
 data that’s already been committed to a prior write.  Indeed, I’ll often
@@ -600,7 +600,7 @@ add the assertion to my design that,</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 <span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span><span class="p">)</span>
-	<span class="k">assert</span><span class="p">(</span><span class="n">fifo_fill</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+	<span class="k">assert</span><span class="p">(</span><span class="n">fifo_fill</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">);</span></code></pre></figure>
 
 <p>just to make certain that I never request a data transfer for data that isn’t
 present.</p>
@@ -619,7 +619,7 @@ what we keep track of.</p>
 <p>A similar structure would work nicely for reads, as illustrated in Fig. 8.  The
 difference is that you’d be counting uncommitted <em>empty</em> space.  That count
 would start with the full FIFO’s size as space available, and would then be
-decremented on any <code class="highlighter-rouge">phantom_read</code> signal.  Once the data was (later) read
+decremented on any <code class="language-plaintext highlighter-rouge">phantom_read</code> signal.  Once the data was (later) read
 out of the FIFO, you could return it to the count of uncommitted space
 available.</p>
 
@@ -634,9 +634,9 @@ new trainload, but also for all other trains to empty in the bin that may have
 been previously ordered but not (yet) arrived.  That’s the idea behind the
 “space available” calculation used with reads.</p>
 
-<p>The <code class="highlighter-rouge">phantom</code> signals also allows us to hide the calculation of the amount
+<p>The <code class="language-plaintext highlighter-rouge">phantom</code> signals also allows us to hide the calculation of the amount
 of data (or space) available, similar to the way we handled our other
-calculations.  That way if <code class="highlighter-rouge">AxVALID</code> is ever stalled, even by one clock
+calculations.  That way if <code class="language-plaintext highlighter-rouge">AxVALID</code> is ever stalled, even by one clock
 cycle, we’ll have this answer ready to request the next burst as soon as
 it’s no longer stalled.</p>
 
@@ -645,32 +645,32 @@ data are present in this counter as well.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 <span class="k">begin</span>
-	<span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span><span class="o">;</span>
-	<span class="k">case</span><span class="p">(</span><span class="o">{</span> <span class="n">fifo_write</span><span class="o">,</span> <span class="n">phantom_write</span> <span class="o">}</span><span class="p">)</span>
+	<span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span><span class="p">;</span>
+	<span class="k">case</span><span class="p">(</span><span class="o">{</span> <span class="n">fifo_write</span><span class="p">,</span> <span class="n">phantom_write</span> <span class="o">}</span><span class="p">)</span>
 	<span class="mb">2'b00</span><span class="o">:</span> <span class="k">begin</span> <span class="k">end</span>
-	<span class="mb">2'b10</span><span class="o">:</span> <span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span> <span class="o">+</span> <span class="mi">1</span><span class="o">;</span>
-	<span class="mb">2'b01</span><span class="o">:</span> <span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span> <span class="o">-</span><span class="mi">1</span><span class="o">;</span>
-	<span class="mb">2'b11</span><span class="o">:</span> <span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span><span class="o">;</span>
+	<span class="mb">2'b10</span><span class="o">:</span> <span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="mb">2'b01</span><span class="o">:</span> <span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+	<span class="mb">2'b11</span><span class="o">:</span> <span class="n">new_data_available</span> <span class="o">=</span> <span class="n">data_available</span> <span class="o">-</span> <span class="n">AWLEN</span><span class="p">;</span>
 	<span class="k">endcase</span>
 <span class="k">end</span>
 
 <span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
 <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
-	<span class="n">data_available</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
-	<span class="n">multiple_bursts_available</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+	<span class="n">data_available</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">multiple_bursts_available</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 <span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
-	<span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">new_data_available</span><span class="o">;</span>
-	<span class="n">multiple_bursts_available</span> <span class="o">&lt;=</span> <span class="o">|</span><span class="n">new_data_available</span><span class="p">[</span><span class="n">LGFIFO</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="p">]</span><span class="o">;</span>
+	<span class="n">data_available</span> <span class="o">&lt;=</span> <span class="n">new_data_available</span><span class="p">;</span>
+	<span class="n">multiple_bursts_available</span> <span class="o">&lt;=</span> <span class="o">|</span><span class="n">new_data_available</span><span class="p">[</span><span class="n">LGFIFO</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="p">];</span>
 <span class="k">end</span></code></pre></figure>
 
-<p>While not all of my examples below use this <code class="highlighter-rouge">multiple_bursts_available</code>
+<p>While not all of my examples below use this <code class="language-plaintext highlighter-rouge">multiple_bursts_available</code>
 signal, it can be useful if the FIFO “size” is much larger than the maximum
 burst size.  In that case, a 32-bit comparison might be reduced to 9-bits.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 <span class="k">begin</span>
 	<span class="n">start_transaction</span> <span class="o">=</span> <span class="p">(</span><span class="n">multiple_bursts_available</span><span class="p">)</span>
-			<span class="o">||</span> <span class="p">(</span><span class="n">data_available</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">next_awlen</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+			<span class="o">||</span> <span class="p">(</span><span class="n">data_available</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">next_awlen</span><span class="p">);</span></code></pre></figure>
 
 <p>With those preliminaries out of the way, let’s take a look at several example
 designs to see how these problems might be either solved or at least mitigated.</p>
@@ -703,23 +703,23 @@ at all.</p>
 below, just for simplicity, although the read path is quite similar.</p>
 
 <p>The first step is to determe when we are ready to write a burst of data to
-memory.  This is the combinatorial flag, called <code class="highlighter-rouge">start_write</code> in this design,
-that takes place before the <code class="highlighter-rouge">phantom</code> signal–the same signal we called
-<code class="highlighter-rouge">start_transaction</code> above.</p>
+memory.  This is the combinatorial flag, called <code class="language-plaintext highlighter-rouge">start_write</code> in this design,
+that takes place before the <code class="language-plaintext highlighter-rouge">phantom</code> signal–the same signal we called
+<code class="language-plaintext highlighter-rouge">start_transaction</code> above.</p>
 
 <p>We’ll start any write as soon as we have enough data in our incoming FIFO to
-fill up a burst.  Note here that even if our FIFO can hold <code class="highlighter-rouge">(1&lt;&lt;LGFIFO)</code>
-elements, this comparison only requires <code class="highlighter-rouge">LGFIFO-LGMAXBURST</code> bits.  It’s
+fill up a burst.  Note here that even if our FIFO can hold <code class="language-plaintext highlighter-rouge">(1&lt;&lt;LGFIFO)</code>
+elements, this comparison only requires <code class="language-plaintext highlighter-rouge">LGFIFO-LGMAXBURST</code> bits.  It’s
 a nifty trick you can often get away with, but you’ll have to be aware
-of the difference between <code class="highlighter-rouge">&gt;</code> and <code class="highlighter-rouge">&gt;=</code> to do it.  (Using <code class="highlighter-rouge">&gt;</code> would’ve created
-an <code class="highlighter-rouge">LGFIFO</code> bit comparison, not an <code class="highlighter-rouge">LGFIFO-LGMAXBURST</code> bit comparison.)</p>
+of the difference between <code class="language-plaintext highlighter-rouge">&gt;</code> and <code class="language-plaintext highlighter-rouge">&gt;=</code> to do it.  (Using <code class="language-plaintext highlighter-rouge">&gt;</code> would’ve created
+an <code class="language-plaintext highlighter-rouge">LGFIFO</code> bit comparison, not an <code class="language-plaintext highlighter-rouge">LGFIFO-LGMAXBURST</code> bit comparison.)</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 
 		<span class="k">if</span> <span class="p">(</span><span class="n">ififo_fill</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">))</span>
-			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span></code></pre></figure>
+			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
 
 <p>However, we can’t start writing if the entire FIFO–equivalent to the
 size of the external SDRAM–is full.  Yes, that would take a <em>lot</em> of data to
@@ -731,26 +731,26 @@ are still in the middle of a
 (A <a href="/blog/2020/03/14/axi-reset.html">soft reset</a>
 is where we reset the core without resetting the bus.)  Similarly, we won’t
 start any new burst on that same cycle where we’ve just issued a new
-request–to give us a clock for the <code class="highlighter-rouge">space_available</code> counter to adjust.</p>
+request–to give us a clock for the <code class="language-plaintext highlighter-rouge">space_available</code> counter to adjust.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">vfifo_full</span> <span class="o">||</span> <span class="n">soft_reset</span> <span class="o">||</span> <span class="n">phantom_write</span><span class="p">)</span>
-			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Further, if there’s no external/SDRAM memory space available for
 us to put this burst into, then we’ll just have to wait and start again
 once data is available.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">mem_space_available_w</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
-			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
-<p>How is this different from the <code class="highlighter-rouge">vfifo_full</code> flag above?  As I’ve currently
+<p>How is this different from the <code class="language-plaintext highlighter-rouge">vfifo_full</code> flag above?  As I’ve currently
 defined the
 <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axivfifo.v">virtual FIFO</a>,
 it only has much space available as there is memory space.  Practically, it
 also has space for the two FIFO’s as well, but since I’m counting them
 separately I need to check for them separately here as well.</p>
 
-<p>Next, this <code class="highlighter-rouge">mem_space_available_w</code> flag represents whether or not there’s a
+<p>Next, this <code class="language-plaintext highlighter-rouge">mem_space_available_w</code> flag represents whether or not there’s a
 full burst’s worth of space available in the 
 <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axivfifo.v">FIFO</a>’s
 memory or not.  It’s not counting beats, but rather bursts.  That way we
@@ -762,9 +762,9 @@ can check 20-bits of a memories address space instead of 32–assuming a
 while the last one is either still in progress or stalled while being issued.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_WREADY</span> <span class="o">||</span> <span class="o">!</span><span class="n">M_AXI_WLAST</span><span class="p">))</span>
-			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
-			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>I think I mentioned above that I like aligning my write address channel
 request with the first data word of the first data beat.  While the AXI bus
@@ -785,7 +785,7 @@ comes to a hard stop following any
 <a href="https://en.wikipedia.org/wiki/Bus_error">errors</a>.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">o_err</span><span class="p">)</span>
-			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">start_write</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>Address adjustments are fairly easy as well.  On a reset, the address gets
@@ -796,24 +796,24 @@ outstanding (stalled) request.  In all other cases, we just add one burst
 length (times the bus address width) to the address every time a burst has
 been accepted.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_awaddr</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_awaddr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_AWREADY</span><span class="p">)</span>
 			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="p">]</span>
-			<span class="o">&lt;=</span> <span class="n">axi_awaddr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="p">]</span> <span class="o">+</span><span class="mi">1</span><span class="o">;</span>
+			<span class="o">&lt;=</span> <span class="n">axi_awaddr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="p">]</span> <span class="o">+</span><span class="mi">1</span><span class="p">;</span>
 
 		<span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">M_AXI_AWVALID</span> <span class="o">||</span> <span class="n">M_AXI_AWREADY</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">soft_reset</span><span class="p">)</span>
-			<span class="n">axi_awaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">axi_awaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 
 		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
-			<span class="n">axi_awaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">axi_awaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Well, there is one trick here.  Specifically, since I know that every burst must
 be aligned, I’m going to make certain that all of the lower address bits remain
 zero on every clock cycle.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>This has two purposes.  First, it simplifies the synthesis optimization pass
@@ -823,7 +823,7 @@ zero–since they’ll be set back to zero on every clock cycle.</p>
 
 <p>The final step is to set the write address length to the size of one burst.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">M_AXI_AWLEN</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">LGMAXBURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span></code></pre></figure>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">M_AXI_AWLEN</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">&lt;&lt;</span> <span class="n">LGMAXBURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span></code></pre></figure>
 
 <p>To see how this works, let’s take a peek at a nominal trace, shown in Fig. 10.
 This is a shortened trace for demonstration purposes only.  Specifically, the
@@ -833,10 +833,10 @@ burst length has been shortened to 4-beats, whereas it would normally be
 <table align="center" style="float: none"><caption>Fig 10. Approximate virtual FIFO trace</caption><tr><td><img src="/img/axiaddr-limits/vfifo-trace.svg" alt="" width="780" /></td></tr></table>
 
 <p>Here in this figure you can see incoming data coming into the FIFO.  Once a
-full burst has arrived, the <code class="highlighter-rouge">start_write</code> flag is raised.  This starts the
+full burst has arrived, the <code class="language-plaintext highlighter-rouge">start_write</code> flag is raised.  This starts the
 cycle whereby this burst gets written to the external RAM.  Once the
-<code class="highlighter-rouge">BVALID</code> acknowledgment is returned, there’s then memory available to be read
-so the <code class="highlighter-rouge">start_read</code> flag gets set and a read transaction begins.  Further read
+<code class="language-plaintext highlighter-rouge">BVALID</code> acknowledgment is returned, there’s then memory available to be read
+so the <code class="language-plaintext highlighter-rouge">start_read</code> flag gets set and a read transaction begins.  Further read
 transactions are then triggered every time there’s sufficient data in memory
 to trigger them.  The data is read into an outgoing FIFO, and then delivered to
 any follow on AXI stream component from there.</p>
@@ -880,8 +880,8 @@ just perpetually overwrites memory until it is told to stop.</p>
 
 <p>Let’s take a peek at how this works.</p>
 
-<p>We’ll start with the combinatorial <code class="highlighter-rouge">start_transaction</code> signal, herein called
-the <code class="highlighter-rouge">w_phantom_start</code> signal.</p>
+<p>We’ll start with the combinatorial <code class="language-plaintext highlighter-rouge">start_transaction</code> signal, herein called
+the <code class="language-plaintext highlighter-rouge">w_phantom_start</code> signal.</p>
 
 <p>As before, we only want to start if there’s data available in our local
 FIFO storage.  Unlike before, we also have to check whether or not the
@@ -891,26 +891,26 @@ to be written.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="c1">// We start again if there's more information to transfer
-</span>		<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="p">(</span><span class="n">data_available</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">))</span>
+		<span class="c1">// We start again if there's more information to transfer</span>
+		<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="p">(</span><span class="n">data_available</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">))</span>
 				<span class="o">||</span><span class="p">(</span><span class="n">s_stopped</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">data_available</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span>
-					<span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_WVALID</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+					<span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_WVALID</span><span class="p">);</span></code></pre></figure>
 
 <p>Of course, we can’t start a new burst if the write address channel is still
 stalled with the last burst.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// If the address channel is stalled, then we can't issue any
-</span>		<span class="c1">// new requests
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// If the address channel is stalled, then we can't issue any</span>
+		<span class="c1">// new requests</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Neither do we want to issue a new burst request if the data from the last
 burst hasn’t (yet) finished writing to memory.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// If we're still writing the last burst, then don't start
-</span>		<span class="c1">// any new ones
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_WLAST</span> <span class="o">||</span> <span class="o">!</span><span class="n">M_AXI_WREADY</span><span class="p">))</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// If we're still writing the last burst, then don't start</span>
+		<span class="c1">// any new ones</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_WLAST</span> <span class="o">||</span> <span class="o">!</span><span class="n">M_AXI_WREADY</span><span class="p">))</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>During a
 <a href="/blog/2020/03/14/axi-reset.html">soft reset</a>,
@@ -921,15 +921,15 @@ has stopped collecting data, we’ll want to avoid
 writing anything more to the external RAM.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">scope_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">r_busy</span><span class="p">)</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Finally, we insist on one clock between new burst requests to allow all of our
 registered counters to adjust to the new burst.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Finally, don't start any new bursts if we aren't haven't
-</span>		<span class="c1">// yet adjusted our counters from the last burst
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">phantom_start</span><span class="p">)</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Finally, don't start any new bursts if we aren't haven't</span>
+		<span class="c1">// yet adjusted our counters from the last burst</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">phantom_start</span><span class="p">)</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>So far, this should look very similar to the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axivfifo.v">Virtual
@@ -939,15 +939,15 @@ FIFO</a>.</p>
 send a full burst unless we’ve stopped collecting data and there remains a
 partial burst’s worth of data left.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_awaddr</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_awaddr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_AWVALID</span> <span class="o">||</span> <span class="n">M_AXI_AWREADY</span><span class="p">)</span>
 		<span class="k">begin</span>
 			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">s_stopped</span> <span class="o">||</span> <span class="p">(</span><span class="o">|</span><span class="n">data_available</span><span class="p">[</span><span class="n">LGFIFO</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="p">]))</span>
-				<span class="n">axi_awlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+				<span class="n">axi_awlen</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 			<span class="k">else</span>
-				<span class="n">axi_awlen</span>  <span class="o">&lt;=</span> <span class="n">data_available</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="o">;</span>
+				<span class="n">axi_awlen</span>  <span class="o">&lt;=</span> <span class="n">data_available</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
 		<span class="k">end</span></code></pre></figure>
 
 <p>The neat thing about this is that we don’t ever need to check against any 4kB
@@ -956,35 +956,35 @@ boundaries–even though we permit an other-than-full-length burst.</p>
 <p>The write address signal is only slightly more complex than the one for the
 <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axivfifo.v">Virtual FIFO</a>.
 Here, we use the AWLEN value for the burst that has just been
-completed to adjust the address–meaning that when we stop, the <code class="highlighter-rouge">AWADDR</code>
+completed to adjust the address–meaning that when we stop, the <code class="language-plaintext highlighter-rouge">AWADDR</code>
 signal will point to the oldest address in memory.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_AWREADY</span><span class="p">)</span>
 		<span class="k">begin</span>
-			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span>
 				    <span class="o">&lt;=</span> <span class="n">axi_awaddr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span>
-						<span class="o">+</span> <span class="p">(</span><span class="n">M_AXI_AWLEN</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">;</span>
+						<span class="o">+</span> <span class="p">(</span><span class="n">M_AXI_AWLEN</span><span class="o">+</span><span class="mi">1</span><span class="p">);</span>
 		<span class="k">end</span></code></pre></figure>
 
 <p>Up until the <a href="/blog/2017/06/08/simple-scope.html">scope</a>
 stops, however, the lower bits will remain aligned.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">s_stopped</span><span class="p">)</span>
-			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Of course, we’ll start back at the beginning of RAM on any reset.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span> <span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span> <span class="o">&amp;&amp;</span> <span class="n">scope_reset</span><span class="p">))</span>
-			<span class="n">axi_awaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">axi_awaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>This core also issues word-aligned requests only.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>So, that wasn’t so bad.  As you saw, we were able to nicely simplify those
-four <code class="highlighter-rouge">AxLEN</code> criteria down to something usable, and so only lost one clock
+four <code class="language-plaintext highlighter-rouge">AxLEN</code> criteria down to something usable, and so only lost one clock
 between initiating one burst transaction and being able to initiate a
 second–a clock cycle that wouldn’t be noticed anyway due to the fact that
 we don’t issue write requests until the last one is complete.</p>
@@ -1025,18 +1025,18 @@ It should match Fig. 13 above quite nicely.</p>
 always starts reading from the beginning of a frame.</li>
 </ol>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">req_addr</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
-	<span class="k">initial</span>	<span class="n">req_line_addr</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">req_addr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">req_line_addr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span>  <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="n">r_stopped</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">req_addr</span>       <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">cfg_frame_addr</span> <span class="o">};</span>
-		<span class="n">req_line_addr</span>  <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">cfg_frame_addr</span> <span class="o">};</span>
-		<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">cfg_line_words</span><span class="o">;</span></code></pre></figure>
+		<span class="n">req_addr</span>       <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">cfg_frame_addr</span> <span class="o">}</span><span class="p">;</span>
+		<span class="n">req_line_addr</span>  <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">cfg_frame_addr</span> <span class="o">}</span><span class="p">;</span>
+		<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">cfg_line_words</span><span class="p">;</span></code></pre></figure>
 
 <ol start="2">
   <li>The internal addresses are only adjusted when a new read is <em>issued</em>.
-This is separate and distinct from the <code class="highlighter-rouge">ARVALID &amp;&amp; ARREADY</code> cycle  where it
+This is separate and distinct from the <code class="language-plaintext highlighter-rouge">ARVALID &amp;&amp; ARREADY</code> cycle  where it
 is <em>accepted</em> by the bus.</li>
 </ol>
 
@@ -1046,26 +1046,26 @@ is <em>accepted</em> by the bus.</li>
 <ol start="3">
   <li>
     <p>Internally, line and frame control are driven by two control signals:
-<code class="highlighter-rouge">req_hlast</code> (the last burst request in a line has been issued), and
-<code class="highlighter-rouge">req_vlast</code> (we are processing the last line in a frame).  If both of
+<code class="language-plaintext highlighter-rouge">req_hlast</code> (the last burst request in a line has been issued), and
+<code class="language-plaintext highlighter-rouge">req_vlast</code> (we are processing the last line in a frame).  If both of
 these signals are true, then we need to re-start processing from the base
 address of the entire video frame.</p>
 
-    <p>In this case, the <code class="highlighter-rouge">cfg_</code> prefix denotes configuration values set by the user
+    <p>In this case, the <code class="language-plaintext highlighter-rouge">cfg_</code> prefix denotes configuration values set by the user
 at run time.</p>
   </li>
 </ol>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">req_hlast</span> <span class="o">&amp;&amp;</span> <span class="n">req_vlast</span><span class="p">)</span>
 		<span class="k">begin</span>
-			<span class="n">req_addr</span>       <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">cfg_frame_addr</span> <span class="o">};</span>
-			<span class="n">req_line_addr</span>  <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">cfg_frame_addr</span> <span class="o">};</span>
-			<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">cfg_line_words</span><span class="o">;</span></code></pre></figure>
+			<span class="n">req_addr</span>       <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">cfg_frame_addr</span> <span class="o">}</span><span class="p">;</span>
+			<span class="n">req_line_addr</span>  <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">cfg_frame_addr</span> <span class="o">}</span><span class="p">;</span>
+			<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">cfg_line_words</span><span class="p">;</span></code></pre></figure>
 
 <ol start="4">
   <li>Otherwise, if this isn’t the last line of the frame, but we have already
 issued the last burst of the line, then we need to step our burst
-starting address, herein called <code class="highlighter-rouge">req_addr</code>, forward by one line.  In order
+starting address, herein called <code class="language-plaintext highlighter-rouge">req_addr</code>, forward by one line.  In order
 to maintain where the first line of the frame was, we’ll also step the
 “beginning of line” address forward by one line as well.  Finally, we’ll
 charge a counter containing the remaining number of words to be read in this
@@ -1074,39 +1074,39 @@ line to its full width.</li>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">req_hlast</span><span class="p">)</span>
 		<span class="k">begin</span>
-			<span class="c1">// verilator lint_off WIDTH
-</span>			<span class="n">req_addr</span> <span class="o">&lt;=</span> <span class="n">req_line_addr</span>
-					<span class="o">+</span> <span class="p">(</span><span class="n">r_line_step</span> <span class="o">&lt;&lt;</span> <span class="n">M_AXI_ARSIZE</span><span class="p">)</span><span class="o">;</span>
+			<span class="c1">// verilator lint_off WIDTH</span>
+			<span class="n">req_addr</span> <span class="o">&lt;=</span> <span class="n">req_line_addr</span>
+					<span class="o">+</span> <span class="p">(</span><span class="n">r_line_step</span> <span class="o">&lt;&lt;</span> <span class="n">M_AXI_ARSIZE</span><span class="p">);</span>
 			<span class="n">req_line_addr</span>  <span class="o">&lt;=</span> <span class="n">req_line_addr</span>
-					<span class="o">+</span> <span class="p">(</span><span class="n">r_line_step</span> <span class="o">&lt;&lt;</span> <span class="n">M_AXI_ARSIZE</span><span class="p">)</span><span class="o">;</span>
-			<span class="c1">// verilator lint_on WIDTH
-</span>			<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">r_line_words</span><span class="o">;</span></code></pre></figure>
+					<span class="o">+</span> <span class="p">(</span><span class="n">r_line_step</span> <span class="o">&lt;&lt;</span> <span class="n">M_AXI_ARSIZE</span><span class="p">);</span>
+			<span class="c1">// verilator lint_on WIDTH</span>
+			<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">r_line_words</span><span class="p">;</span></code></pre></figure>
 
 <ol start="5">
   <li>
     <p>In all other circumstances, we’ll step forward by the length of one
 burst–whatever that might currently be.</p>
 
-    <p>You might also notice the <code class="highlighter-rouge">ADDRLSB</code> value in the request below.  As you
+    <p>You might also notice the <code class="language-plaintext highlighter-rouge">ADDRLSB</code> value in the request below.  As you
 may recall from above, this is the log (based two) of the bus width in
-bytes.  It’s equivalent to AXI’s <code class="highlighter-rouge">M_AXI_ARSIZE</code> and it’s simply used here
+bytes.  It’s equivalent to AXI’s <code class="language-plaintext highlighter-rouge">M_AXI_ARSIZE</code> and it’s simply used here
 to adjust our burst address by the number of bytes within a single bus word.</p>
 
     <p>One final point I want to bring out here: whereas the first burst of any
 line might be misaligned, subsequent bursts will always be aligned
 <em>with a maximum burst sized boundary</em>.  For this reason, you can always
-clear the bottom <code class="highlighter-rouge">LGMAXBURST+ADDRLSB</code> bits, even though measuring the
+clear the bottom <code class="language-plaintext highlighter-rouge">LGMAXBURST+ADDRLSB</code> bits, even though measuring the
 number of remaining words will take a bit more work.</p>
   </li>
 </ol>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
-			<span class="c1">// verilator lint_off WIDTH
-</span>			<span class="n">req_addr</span> <span class="o">&lt;=</span> <span class="n">req_addr</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="p">))</span><span class="o">;</span>
-			<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">req_line_words</span> <span class="o">-</span> <span class="p">(</span><span class="n">M_AXI_ARLEN</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">;</span>
-			<span class="c1">// verilator lint_on  WIDTH
-</span>
-			<span class="n">req_addr</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="c1">// verilator lint_off WIDTH</span>
+			<span class="n">req_addr</span> <span class="o">&lt;=</span> <span class="n">req_addr</span> <span class="o">+</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="p">));</span>
+			<span class="n">req_line_words</span> <span class="o">&lt;=</span> <span class="n">req_line_words</span> <span class="o">-</span> <span class="p">(</span><span class="n">M_AXI_ARLEN</span><span class="o">+</span><span class="mi">1</span><span class="p">);</span>
+			<span class="c1">// verilator lint_on  WIDTH</span>
+
+			<span class="n">req_addr</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 		<span class="k">end</span>
 	<span class="k">end</span></code></pre></figure>
 
@@ -1140,20 +1140,20 @@ just don’t think that’s required here.</p>
 
 <ol>
   <li>
-    <p>There’s the first clock of the calculation.  I’ll use the flag, <code class="highlighter-rouge">lag_start</code>,
+    <p>There’s the first clock of the calculation.  I’ll use the flag, <code class="language-plaintext highlighter-rouge">lag_start</code>,
 to identify this clock.</p>
   </li>
   <li>
-    <p>There’s the combinatorial clock when <code class="highlighter-rouge">start_burst</code> is true.  This clock
-cycle follows the <code class="highlighter-rouge">lag_start</code> cycle, and forms the second of the two
+    <p>There’s the combinatorial clock when <code class="language-plaintext highlighter-rouge">start_burst</code> is true.  This clock
+cycle follows the <code class="language-plaintext highlighter-rouge">lag_start</code> cycle, and forms the second of the two
 clocks between burst starts.</p>
   </li>
   <li>
-    <p>Finally, there’s the clock cycle where <code class="highlighter-rouge">phantom_start</code> is true.  This is
+    <p>Finally, there’s the clock cycle where <code class="language-plaintext highlighter-rouge">phantom_start</code> is true.  This is
 the clock cycle where the actual read is first issued on the bus.</p>
   </li>
   <li>
-    <p>This is followed by another <code class="highlighter-rouge">lag_start</code> clock and the cycle repeats.</p>
+    <p>This is followed by another <code class="language-plaintext highlighter-rouge">lag_start</code> clock and the cycle repeats.</p>
   </li>
 </ol>
 
@@ -1161,8 +1161,8 @@ the clock cycle where the actual read is first issued on the bus.</p>
 under the assumption of a very large FIFO for the receive data.  As such, more
 requests are issued for memory than there are beats returned in this trace.
 That’s actually a good thing–when the slave can’t handle any more requests,
-it will drop <code class="highlighter-rouge">ARREADY</code>.  That’s a slave responsibility.  It’s not the master’s
-responsibility.  The master should be holding <code class="highlighter-rouge">ARVALID</code> high anytime it knows
+it will drop <code class="language-plaintext highlighter-rouge">ARREADY</code>.  That’s a slave responsibility.  It’s not the master’s
+responsibility.  The master should be holding <code class="language-plaintext highlighter-rouge">ARVALID</code> high anytime it knows
 it wants to request another packet.  In the meantime, our requests will cross
 the <a href="/blog/2019/07/17/crossbar.html">interconnect</a>
 while waiting for the slave to finish replying to our request.  This means that
@@ -1182,38 +1182,38 @@ words per line and the number of lines per frame to the core.  On the next
 cycle, the user gives
 <a href="https://github.com/ZipCPU/wb2axip/blob/master/axivdma.v">the core</a>
 the frame’s base address.  Finally, the user turns the interface on.  From
-there on out, <code class="highlighter-rouge">cfg_active</code> is asserted indicating that the configuration
+there on out, <code class="language-plaintext highlighter-rouge">cfg_active</code> is asserted indicating that the configuration
 is active.</p>
   </li>
   <li>
     <p>It takes us three clocks to get started once the configuration becomes
-active.  On the last of these clocks, the <code class="highlighter-rouge">req_addr</code> is set.  This will
+active.  On the last of these clocks, the <code class="language-plaintext highlighter-rouge">req_addr</code> is set.  This will
 form the basics of the request that follows.</p>
   </li>
   <li>
     <p>A second clock is used to determine the maximum allowable burst length.</p>
   </li>
   <li>
-    <p>From this maximum allowable burst length we can now set <code class="highlighter-rouge">ARLEN</code> and issue
+    <p>From this maximum allowable burst length we can now set <code class="language-plaintext highlighter-rouge">ARLEN</code> and issue
 a read command.</p>
   </li>
   <li>
     <p>Immediately after the read command, and possibly even before it is accepted
-by the bus, the <code class="highlighter-rouge">lag_start</code> signal goes high and we restart the process all
+by the bus, the <code class="language-plaintext highlighter-rouge">lag_start</code> signal goes high and we restart the process all
 over again.</p>
   </li>
 </ol>
 
 <p>Let’s now take a look into the design to see how all this was accomplished.
-We’ll start by examining the <code class="highlighter-rouge">start_transaction</code> combinatorial flag, which in
+We’ll start by examining the <code class="language-plaintext highlighter-rouge">start_transaction</code> combinatorial flag, which in
 this core is called `start_burst.  In this design, burst requests are issued
 if there’s room in the FIFO to receive another burst’s worth of data.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
 		<span class="k">if</span> <span class="p">(</span><span class="n">no_fifo_space_available</span><span class="p">)</span>
-			<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>What might not be apparent here is that I’m checking for whether or not there’s
 space enough for a full burst in the FIFO.  This particular
@@ -1228,37 +1228,37 @@ the last core.  In this case, we’ll start if we have room in our FIFO unless
 we are in one of our two burst data calculation clocks.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">phantom_start</span> <span class="o">||</span> <span class="n">lag_start</span><span class="p">)</span>
-			<span class="c1">// Insist on a minimum of two clocks between burst
-</span>			<span class="c1">// starts, so we can get our lengths right
-</span>			<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+			<span class="c1">// Insist on a minimum of two clocks between burst</span>
+			<span class="c1">// starts, so we can get our lengths right</span>
+			<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Similarly, we can’t request a new burst if we are still stalled waiting for the
 last burst request to be accepted.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Can't start a new burst if the outgoing channel is still
-</span>		<span class="c1">// stalled.
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_ARVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_ARREADY</span><span class="p">)</span>
-			<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Can't start a new burst if the outgoing channel is still</span>
+		<span class="c1">// stalled.</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_ARVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_ARREADY</span><span class="p">)</span>
+			<span class="n">start_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Finally, if the user has turned off video production, i.e. if he has dropped
-the <code class="highlighter-rouge">cfg_active</code> flag, or if we are waiting to for a
-<a href="/blog/2020/03/14/axi-reset.html"><code class="highlighter-rouge">soft_reset</code></a>
+the <code class="language-plaintext highlighter-rouge">cfg_active</code> flag, or if we are waiting to for a
+<a href="/blog/2020/03/14/axi-reset.html"><code class="language-plaintext highlighter-rouge">soft_reset</code></a>
 to complete, then we refuse to start a new burst until after we come to a
 complete halt.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// If the user wants us to stop, then stop
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">soft_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">cfg_active</span><span class="p">)</span>
-			<span class="n">start_burst</span>  <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// If the user wants us to stop, then stop</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">soft_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">cfg_active</span><span class="p">)</span>
+			<span class="n">start_burst</span>  <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p><a href="/blog/2017/06/12/minimizing-luts.html">How much logic did we
 use</a>?  Well,
 everything in this combinatorial path is one bit, save for the
-<code class="highlighter-rouge">no_fifo_space_available</code> signal which just checks the
+<code class="language-plaintext highlighter-rouge">no_fifo_space_available</code> signal which just checks the
 top bits of how much space is available, so perhaps about 7-8 bits.  This
 is quite within reason.</p>
 
-<p>Now we need to calculate the actual burst length, <code class="highlighter-rouge">ARLEN</code>, we are going to
+<p>Now we need to calculate the actual burst length, <code class="language-plaintext highlighter-rouge">ARLEN</code>, we are going to
 request.  This is the hard part, and so we’ll do this in two steps.</p>
 
 <p>For the first step, we check the remaining number of words to be read in the
@@ -1270,65 +1270,65 @@ much requested data is available.</p>
 	<span class="k">if</span> <span class="p">(</span><span class="n">lag_start</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="k">if</span> <span class="p">(</span><span class="n">req_line_words</span> <span class="o">&gt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">))</span>
-			<span class="n">max_burst</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span><span class="o">;</span>
+			<span class="n">max_burst</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">);</span>
 		<span class="k">else</span>
-			<span class="n">max_burst</span> <span class="o">&lt;=</span> <span class="n">req_line_words</span><span class="o">;</span>
+			<span class="n">max_burst</span> <span class="o">&lt;=</span> <span class="n">req_line_words</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
-<p>This happens on the <code class="highlighter-rouge">lag_start</code> clock cycle.</p>
+<p>This happens on the <code class="language-plaintext highlighter-rouge">lag_start</code> clock cycle.</p>
 
-<p>The key piece of this check is that <code class="highlighter-rouge">req_line_words</code>, our signal holding the
-number of words remaining in a line, is set on the <code class="highlighter-rouge">phantom_start</code> clock cycle
+<p>The key piece of this check is that <code class="language-plaintext highlighter-rouge">req_line_words</code>, our signal holding the
+number of words remaining in a line, is set on the <code class="language-plaintext highlighter-rouge">phantom_start</code> clock cycle
 and this check is taking place on the cycle following–as soon as a new
-<code class="highlighter-rouge">req_line_words</code> value is available.  For reference, this is shown in Fig. 14
-above as part of <code class="highlighter-rouge">req_addr</code>.</p>
+<code class="language-plaintext highlighter-rouge">req_line_words</code> value is available.  For reference, this is shown in Fig. 14
+above as part of <code class="language-plaintext highlighter-rouge">req_addr</code>.</p>
 
-<p>That’s only the first part of generating <code class="highlighter-rouge">arlen</code>.  For the second step, we’ll
+<p>That’s only the first part of generating <code class="language-plaintext highlighter-rouge">arlen</code>.  For the second step, we’ll
 now need to compare this value against how many beats are between us and the
 nearest burst boundary.  Again, we check against the nearest burst boundary
 because it’s at most an 8-bit check, rather than the 12-bit check required
 for a full 4kB check.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// till_boundary is the distance to the boundary (minus one)
-</span>	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
-		<span class="n">till_boundary</span> <span class="o">=</span> <span class="o">~</span><span class="n">req_addr</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">]</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// till_boundary is the distance to the boundary (minus one)</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">till_boundary</span> <span class="o">=</span> <span class="o">~</span><span class="n">req_addr</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">];</span>
 
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_ARVALID</span> <span class="o">||</span> <span class="n">M_AXI_ARREADY</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="k">if</span> <span class="p">(</span><span class="n">till_boundary</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">max_burst</span> <span class="o">&lt;=</span> <span class="n">till_boundary</span><span class="p">)</span>
-			<span class="n">axi_arlen</span> <span class="o">&lt;=</span> <span class="n">max_burst</span><span class="o">-</span><span class="mi">1</span><span class="o">;</span>
+			<span class="n">axi_arlen</span> <span class="o">&lt;=</span> <span class="n">max_burst</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
 		<span class="k">else</span>
-			<span class="n">axi_arlen</span> <span class="o">&lt;=</span> <span class="n">till_boundary</span><span class="o">;</span>
+			<span class="n">axi_arlen</span> <span class="o">&lt;=</span> <span class="n">till_boundary</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>You might notice above that I played a little sleight of hand with the two’s
-compliment check.  I want to check whether or not the <code class="highlighter-rouge">req_addr + max_burst</code>
-is greater than <code class="highlighter-rouge">(1 &lt;&lt; LGMAXBURST)</code> (checking only the lowest
-<code class="highlighter-rouge">ADDRLSB +: LGMAXBURST</code> bits of <code class="highlighter-rouge">req_addr</code>).  After subtracting these <code class="highlighter-rouge">req_addr</code>
-bits from both sides, I then want to check whether or not <code class="highlighter-rouge">max_burst</code> is
-greater than <code class="highlighter-rouge">(1 &lt;&lt; LGMAXBURST) - req_addr</code>.  This is the same as checking
-whether <code class="highlighter-rouge">max_burst &gt; (1 &lt;&lt; LGMAXBURST) + ~req_addr + 1</code>.  (Just a two’s
-compliment equality replacement here.)  If I then swap from a <code class="highlighter-rouge">&gt;</code> check to
-a <code class="highlighter-rouge">&gt;=</code> check I can drop the <code class="highlighter-rouge">+1</code> and the carry chain–as you can see above.</p>
+compliment check.  I want to check whether or not the <code class="language-plaintext highlighter-rouge">req_addr + max_burst</code>
+is greater than <code class="language-plaintext highlighter-rouge">(1 &lt;&lt; LGMAXBURST)</code> (checking only the lowest
+<code class="language-plaintext highlighter-rouge">ADDRLSB +: LGMAXBURST</code> bits of <code class="language-plaintext highlighter-rouge">req_addr</code>).  After subtracting these <code class="language-plaintext highlighter-rouge">req_addr</code>
+bits from both sides, I then want to check whether or not <code class="language-plaintext highlighter-rouge">max_burst</code> is
+greater than <code class="language-plaintext highlighter-rouge">(1 &lt;&lt; LGMAXBURST) - req_addr</code>.  This is the same as checking
+whether <code class="language-plaintext highlighter-rouge">max_burst &gt; (1 &lt;&lt; LGMAXBURST) + ~req_addr + 1</code>.  (Just a two’s
+compliment equality replacement here.)  If I then swap from a <code class="language-plaintext highlighter-rouge">&gt;</code> check to
+a <code class="language-plaintext highlighter-rouge">&gt;=</code> check I can drop the <code class="language-plaintext highlighter-rouge">+1</code> and the carry chain–as you can see above.</p>
 
 <p>This computation will take place on the clock period just prior to
-<code class="highlighter-rouge">phantom_start</code>, and so we have the time to do this.</p>
+<code class="language-plaintext highlighter-rouge">phantom_start</code>, and so we have the time to do this.</p>
 
 <p>The last step is to generate the AXI address.  This was calculated a couple of
-clocks earlier by <code class="highlighter-rouge">req_addr</code> above, so it’s simply listed below as,</p>
+clocks earlier by <code class="language-plaintext highlighter-rouge">req_addr</code> above, so it’s simply listed below as,</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_araddr</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">axi_araddr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="k">if</span> <span class="p">(</span><span class="n">start_burst</span><span class="p">)</span>
-			<span class="n">axi_araddr</span> <span class="o">&lt;=</span> <span class="n">req_addr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">;</span>
+			<span class="n">axi_araddr</span> <span class="o">&lt;=</span> <span class="n">req_addr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">];</span>
 
-		<span class="n">axi_araddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">axi_araddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>The key point to remember from this algorithm is that, yes, we did take two
-clocks to calculate the burst size, <code class="highlighter-rouge">ARLEN</code>.  However, most video streams would
+clocks to calculate the burst size, <code class="language-plaintext highlighter-rouge">ARLEN</code>.  However, most video streams would
 never notice this two clock hiccup.</p>
 
 <p>That said, I have thought about adjusting this so that we only take two clocks
@@ -1374,7 +1374,7 @@ programming logic controller, perhaps even an output controller of some type.
 This adds a new requirement to our list of things to check: we now have to
 check against one of two maximum burst sizes depending upon whether or not
 the user wants us to used the fixed addressing mode (max burst size of 16)
-or not (max burst size of 256, and <code class="highlighter-rouge">r_increment</code> is asserted).</p>
+or not (max burst size of 256, and <code class="language-plaintext highlighter-rouge">r_increment</code> is asserted).</p>
   </li>
 </ol>
 
@@ -1395,21 +1395,21 @@ the memory copy.  This configuration ends with the user issuing a command
 to start.</p>
 
 <p>As the user enters a new address, we’ll set two flags.  One flag,
-<code class="highlighter-rouge">aw_needs_alignment</code>, records whether or not the first burst will be
+<code class="language-plaintext highlighter-rouge">aw_needs_alignment</code>, records whether or not the first burst will be
 artificially limited to the burst boundary.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">aw_needs_alignment</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+		<span class="n">aw_needs_alignment</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 
 		<span class="k">if</span> <span class="p">(</span><span class="o">|</span><span class="n">new_wideaddr</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">])</span>
 		<span class="k">begin</span>
 			<span class="k">if</span> <span class="p">(</span><span class="o">|</span><span class="n">new_widelen</span><span class="p">[</span><span class="n">LGLEN</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="p">(</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="n">ADDRLSB</span><span class="p">)])</span>
-				<span class="n">aw_needs_alignment</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+				<span class="n">aw_needs_alignment</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
 			<span class="k">if</span> <span class="p">(</span><span class="o">~</span><span class="n">new_wideaddr</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">]</span>
 					<span class="o">&lt;</span> <span class="n">new_widelen</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">])</span>
-				<span class="n">aw_needs_alignment</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+				<span class="n">aw_needs_alignment</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
 		<span class="k">end</span>
 	<span class="k">end</span></code></pre></figure>
 
@@ -1423,30 +1423,30 @@ checks whether the transfer would require multiple bursts of
 <p>Only once the user issues the start command do we know which of the two
 will limits will constrain us.  That means we’re going to need a flag to
 let us know that this initial burst computation isn’t (quite) done yet.
-That’s the purpose of the <code class="highlighter-rouge">r_pre_start</code> flag, also shown in Fig. 16 above.</p>
+That’s the purpose of the <code class="language-plaintext highlighter-rouge">r_pre_start</code> flag, also shown in Fig. 16 above.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span><span class="p">)</span>
-		<span class="n">r_pre_start</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
+		<span class="n">r_pre_start</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
 	<span class="k">else</span>
-		<span class="n">r_pre_start</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="n">r_pre_start</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>This core is a bit different from the others above in that it keeps track of
-an <code class="highlighter-rouge">aw_multiple_bursts_remaining</code> flag.  This flag is equivalent to whether
+an <code class="language-plaintext highlighter-rouge">aw_multiple_bursts_remaining</code> flag.  This flag is equivalent to whether
 or not two or more bursts are remaining.  To maintain this equivalence, it is
 set and maintained together with the counter containing the amount of remaining
 data left to transfer.</p>
 
 <p>It’s initialized once the full size of the transfer is available.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">aw_none_remaining</span> <span class="o">=</span> <span class="mi">1</span><span class="o">;</span>
-	<span class="k">initial</span>	<span class="n">aw_requests_remaining</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">aw_none_remaining</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">aw_requests_remaining</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">aw_requests_remaining</span> <span class="o">&lt;=</span> <span class="n">cmd_length_w</span><span class="o">;</span>
-		<span class="n">aw_none_remaining</span>     <span class="o">&lt;=</span> <span class="n">zero_length</span><span class="o">;</span>
-		<span class="n">aw_multiple_bursts_remaining</span> <span class="o">&lt;=</span> <span class="o">|</span><span class="n">cmd_length_w</span><span class="p">[</span><span class="n">LGLENW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span><span class="o">;</span></code></pre></figure>
+		<span class="n">aw_requests_remaining</span> <span class="o">&lt;=</span> <span class="n">cmd_length_w</span><span class="p">;</span>
+		<span class="n">aw_none_remaining</span>     <span class="o">&lt;=</span> <span class="n">zero_length</span><span class="p">;</span>
+		<span class="n">aw_multiple_bursts_remaining</span> <span class="o">&lt;=</span> <span class="o">|</span><span class="n">cmd_length_w</span><span class="p">[</span><span class="n">LGLENW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="mi">1</span><span class="p">];</span></code></pre></figure>
 
 <p>On any abort, as part of the
 <a href="/blog/2020/03/14/axi-reset.html">soft reset</a> logic,
@@ -1454,26 +1454,26 @@ the request lengths are cleared.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">cmd_abort</span> <span class="o">||</span> <span class="n">axi_abort_pending</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">aw_requests_remaining</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
-		<span class="n">aw_none_remaining</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="o">;</span>
-		<span class="n">aw_multiple_bursts_remaining</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="n">aw_requests_remaining</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">aw_none_remaining</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">aw_multiple_bursts_remaining</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>In all other cases this remaining length is updated any time a new burst
 request is issued.  What’s not apparent from <a href="https://github.com/ZipCPU/wb2axip/blob/3fd18664246707f06924fddc5c8a5de4b62517fc/rtl/axis2mm.v#L965-L972">these
 lines</a>
 is that the number of items remaining is <a href="https://github.com/ZipCPU/wb2axip/blob/3fd18664246707f06924fddc5c8a5de4b62517fc/rtl/axis2mm.v#L917-L929">calculated combinatorially from the
 current number of items minus the number in
-<code class="highlighter-rouge">AWLEN</code></a>.
+<code class="language-plaintext highlighter-rouge">AWLEN</code></a>.
 That way I can use one new remaining length signal in three separate
 non-blocking assignments.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">phantom_start</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">aw_requests_remaining</span> <span class="o">&lt;=</span> <span class="n">aw_next_remaining</span><span class="o">;</span>
+		<span class="n">aw_requests_remaining</span> <span class="o">&lt;=</span> <span class="n">aw_next_remaining</span><span class="p">;</span>
 		<span class="n">aw_none_remaining</span><span class="o">&lt;=</span> <span class="o">!</span><span class="n">aw_multiple_bursts_remaining</span>
-			<span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">aw_next_remaining</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span><span class="o">;</span>
+			<span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">aw_next_remaining</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
 		<span class="n">aw_multiple_bursts_remaining</span>
-				<span class="o">&lt;=</span> <span class="o">|</span><span class="n">aw_next_remaining</span><span class="p">[</span><span class="n">LGLENW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="mi">1</span><span class="p">]</span><span class="o">;</span>
+				<span class="o">&lt;=</span> <span class="o">|</span><span class="n">aw_next_remaining</span><span class="p">[</span><span class="n">LGLENW</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">LGMAXBURST</span><span class="o">+</span><span class="mi">1</span><span class="p">];</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>The real key to this algorithm lies in how the length of the first burst is
@@ -1483,14 +1483,14 @@ can keep this burst length calculation short and based on a small number of
 
 <p>The first step is to calculate (combinatorially) the distance to the next
 burst boundary.  This is roughly equivalent to
-<code class="highlighter-rouge">(1&lt;&lt;(LGMAXBURST+ADDRLSB))-cmd_addr)</code>.  I have to separate it out for special
+<code class="language-plaintext highlighter-rouge">(1&lt;&lt;(LGMAXBURST+ADDRLSB))-cmd_addr)</code>.  I have to separate it out for special
 treatment here for two reasons.  First, I want to make certain that the
-operation is limited to <code class="highlighter-rouge">LGMAXBURST</code> bits–not <code class="highlighter-rouge">LGMAXBURST+1</code> bits, so we
+operation is limited to <code class="language-plaintext highlighter-rouge">LGMAXBURST</code> bits–not <code class="language-plaintext highlighter-rouge">LGMAXBURST+1</code> bits, so we
 drop a bit here.  The second reason is that I want to drop the lower sub-word
 address bits from this calculation.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
-		<span class="n">addralign</span> <span class="o">=</span> <span class="mi">1</span><span class="o">+</span><span class="p">(</span><span class="o">~</span><span class="n">cmd_addr</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">])</span><span class="o">;</span></code></pre></figure>
+		<span class="n">addralign</span> <span class="o">=</span> <span class="mi">1</span><span class="o">+</span><span class="p">(</span><span class="o">~</span><span class="n">cmd_addr</span><span class="p">[</span><span class="n">ADDRLSB</span> <span class="o">+:</span> <span class="n">LGMAXBURST</span><span class="p">]);</span></code></pre></figure>
 
 <p>Here’s the key you’ve been waiting for.</p>
 
@@ -1498,7 +1498,7 @@ address bits from this calculation.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span><span class="o">;</span></code></pre></figure>
+		<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">);</span></code></pre></figure>
 
 <p>If we are going to be using FIXED addressing, then we need to limit ourselves
 to a maximum of 16 beats, not 256.  Moreover, if we aren’t doing multiple
@@ -1506,9 +1506,9 @@ bursts, we’ll limit the burst length to one burst only.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_increment</span><span class="p">)</span>
 		<span class="k">begin</span>
-			<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="n">MAX_FIXED_BURST</span><span class="o">;</span>
+			<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="n">MAX_FIXED_BURST</span><span class="p">;</span>
 			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">aw_multiple_fixed_bursts</span><span class="p">)</span>
-				<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">cmd_length_w</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">};</span></code></pre></figure>
+				<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">cmd_length_w</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span></code></pre></figure>
 
 <p>Did you catch how this computation only requires two bits so far?  That’s
 much better than the 32-bit comparisons we started with.</p>
@@ -1520,33 +1520,33 @@ if we don’t need to realign the burst, and if we aren’t issuing multiple ful
 bursts, then we can issue a smaller burst length.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">aw_needs_alignment</span><span class="p">)</span>
-			<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">addralign</span> <span class="o">};</span>
+			<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">addralign</span> <span class="o">}</span><span class="p">;</span>
 		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">aw_multiple_full_bursts</span><span class="p">)</span>
-			<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">cmd_length_w</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">};</span>
+			<span class="n">initial_burstlen</span> <span class="o">=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">cmd_length_w</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <p>So, from four flags and two lengths, we’ve been able to determine our initial
 burst length.  That’s <a href="/blog/2017/06/12/minimizing-luts.html">one LUT per bit of
-<code class="highlighter-rouge">initial_burstlen</code></a>.
+<code class="language-plaintext highlighter-rouge">initial_burstlen</code></a>.
 Not bad.  We might’ve also been able to handle this initial value one
-clock earlier if <code class="highlighter-rouge">r_increment</code> were defined prior to the user’s start command.</p>
+clock earlier if <code class="language-plaintext highlighter-rouge">r_increment</code> were defined prior to the user’s start command.</p>
 
 <p>From here, we get to define the maximum burst length we can process.  This is
 initially set by the clock following the start command to the initial value
 we just calculated above.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">r_max_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">r_max_burst</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span> <span class="o">||</span> <span class="n">r_pre_start</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="c1">// Force us to align ourself early
-</span>		<span class="c1">//   That way we don't need to check for
-</span>		<span class="c1">//   alignment (again) later
-</span>		<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="n">initial_burstlen</span><span class="o">;</span></code></pre></figure>
+		<span class="c1">// Force us to align ourself early</span>
+		<span class="c1">//   That way we don't need to check for</span>
+		<span class="c1">//   alignment (again) later</span>
+		<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="n">initial_burstlen</span><span class="p">;</span></code></pre></figure>
 
-<p>We then update this maximum burst length on every <code class="highlighter-rouge">phantom_start</code> clock cycle.
+<p>We then update this maximum burst length on every <code class="language-plaintext highlighter-rouge">phantom_start</code> clock cycle.
 That also means that we’ll know the maximum size of our burst immediately
-following any <code class="highlighter-rouge">phantom_start</code> cycle.  That would be enough to start a second
+following any <code class="language-plaintext highlighter-rouge">phantom_start</code> cycle.  That would be enough to start a second
 cycle immediately, save only that we still need to check whether this much
 data is in our FIFO–so it will still take the minimum two clocks between burst
 starts as illustrated in Fig. 16 above.</p>
@@ -1557,8 +1557,8 @@ addresses are incrementing throughout the transfer.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">phantom_start</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="c1">// Verilator lint_off WIDTH
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">r_increment</span> <span class="o">||</span> <span class="n">LGMAXBURST</span> <span class="o">&lt;=</span> <span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span>
+		<span class="c1">// Verilator lint_off WIDTH</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">r_increment</span> <span class="o">||</span> <span class="n">LGMAXBURST</span> <span class="o">&lt;=</span> <span class="n">LGMAX_FIXED_BURST</span><span class="p">)</span>
 		<span class="k">begin</span></code></pre></figure>
 
 <p>In this case, if we don’t have multiple bursts remaining, then we need to check
@@ -1567,9 +1567,9 @@ we stick with the maximum burst size.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">aw_multiple_bursts_remaining</span>
 				<span class="o">&amp;&amp;</span> <span class="n">aw_next_remaining</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">))</span>
-				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">aw_next_remaining</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">};</span>
+				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">aw_next_remaining</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span>
 			<span class="k">else</span>
-				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">)</span><span class="o">;</span>
+				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">LGMAXBURST</span><span class="p">);</span>
 		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span></code></pre></figure>
 
 <p>We then repeat the calculation for fixed addressing, with the only difference
@@ -1577,98 +1577,98 @@ being that the maximum burst size (16 beats) is smaller.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">aw_multiple_bursts_remaining</span>
 				<span class="o">&amp;&amp;</span> <span class="n">aw_next_remaining</span><span class="p">[</span><span class="n">LGMAXBURST</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">MAX_FIXED_BURST</span><span class="p">)</span>
-				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="o">,</span> <span class="n">aw_next_remaining</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">};</span>
+				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">aw_next_remaining</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span>
 			<span class="k">else</span>
-				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="n">MAX_FIXED_BURST</span><span class="o">;</span>
+				<span class="n">r_max_burst</span> <span class="o">&lt;=</span> <span class="n">MAX_FIXED_BURST</span><span class="p">;</span>
 		<span class="k">end</span>
-		<span class="c1">// Verilator lint_on WIDTH
-</span>	<span class="k">end</span></code></pre></figure>
+		<span class="c1">// Verilator lint_on WIDTH</span>
+	<span class="k">end</span></code></pre></figure>
 
 <p>At this point, we know the size of our next burst.  That was the hard
 part.</p>
 
 <p>The next piece is knowing when to start the next burst.  In this case, I named
-the <code class="highlighter-rouge">start_transaction</code> combinatorial signal as <code class="highlighter-rouge">w_phantom_start</code>.  As before,
+the <code class="language-plaintext highlighter-rouge">start_transaction</code> combinatorial signal as <code class="language-plaintext highlighter-rouge">w_phantom_start</code>.  As before,
 we start a burst whenever there is sufficient data in the FIFO to complete
 the burst.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
 	<span class="k">begin</span>
-		<span class="c1">// We start again if there's more information to transfer
-</span>		<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="o">!</span><span class="n">aw_none_remaining</span><span class="o">;</span>
+		<span class="c1">// We start again if there's more information to transfer</span>
+		<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="o">!</span><span class="n">aw_none_remaining</span><span class="p">;</span>
 
-		<span class="c1">// But not if the amount of information we need isn't (yet)
-</span>		<span class="c1">// in the FIFO.
-</span>		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">sufficiently_filled</span><span class="p">)</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="c1">// But not if the amount of information we need isn't (yet)</span>
+		<span class="c1">// in the FIFO.</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">sufficiently_filled</span><span class="p">)</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>This is a combinatorial check, depending upon the value of
-<a href="https://github.com/ZipCPU/wb2axip/blob/3fd18664246707f06924fddc5c8a5de4b62517fc/rtl/axis2mm.v#L1255-L1260"><code class="highlighter-rouge">sufficiently_filled</code></a>.
+<a href="https://github.com/ZipCPU/wb2axip/blob/3fd18664246707f06924fddc5c8a5de4b62517fc/rtl/axis2mm.v#L1255-L1260"><code class="language-plaintext highlighter-rouge">sufficiently_filled</code></a>.
 So we’ll need to remember that burden as we work through this logic.</p>
 
 <p>We’re also going to insist on a minimum of one clock between bursts, and an
 extra clock to calculate the burst size initially.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Insist on a minimum of one clock between burst starts,
-</span>		<span class="c1">// since our burst length calculation takes a clock to do
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">phantom_start</span> <span class="o">||</span> <span class="n">r_pre_start</span><span class="p">)</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Insist on a minimum of one clock between burst starts,</span>
+		<span class="c1">// since our burst length calculation takes a clock to do</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">phantom_start</span> <span class="o">||</span> <span class="n">r_pre_start</span><span class="p">)</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>As with our other checks, we can’t start any new bursts if we are still stalled
 waiting for the last burst request to be accepted, or likewise if we are still
 transmitting the data from the last burst.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// We can't start if the last request hasn't yet been accepted
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// We can't start if the last request hasn't yet been accepted</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 
-		<span class="c1">// If we're still writing the last burst, then don't start
-</span>		<span class="c1">// any new ones
-</span>		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_WLAST</span> <span class="o">||</span> <span class="o">!</span><span class="n">M_AXI_WREADY</span><span class="p">))</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span></code></pre></figure>
+		<span class="c1">// If we're still writing the last burst, then don't start</span>
+		<span class="c1">// any new ones</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_WLAST</span> <span class="o">||</span> <span class="o">!</span><span class="n">M_AXI_WREADY</span><span class="p">))</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
 
 <p>Finally, if we aren’t busy doing a copy then we can’t start, neither should
 we start any new bursts following any request for a bus abort.</p>
 
-<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Finally, don't start any new bursts if we aren't already
-</span>		<span class="c1">// busy transmitting, or if we are in the process of aborting
-</span>		<span class="c1">// our transfer
-</span>		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span> <span class="o">||</span> <span class="n">cmd_abort</span> <span class="o">||</span> <span class="n">axi_abort_pending</span><span class="p">)</span>
-			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="o">;</span>
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// Finally, don't start any new bursts if we aren't already</span>
+		<span class="c1">// busy transmitting, or if we are in the process of aborting</span>
+		<span class="c1">// our transfer</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span> <span class="o">||</span> <span class="n">cmd_abort</span> <span class="o">||</span> <span class="n">axi_abort_pending</span><span class="p">)</span>
+			<span class="n">w_phantom_start</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
-<p>That leaves only two pieces of logic left.  First, we’ll need to set <code class="highlighter-rouge">AWLEN</code>
+<p>That leaves only two pieces of logic left.  First, we’ll need to set <code class="language-plaintext highlighter-rouge">AWLEN</code>
 on any new burst request.  Thankfully, this has already been calculated
-above from <code class="highlighter-rouge">r_max_burst</code>, so it’s little more than a register copy here.</p>
+above from <code class="language-plaintext highlighter-rouge">r_max_burst</code>, so it’s little more than a register copy here.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
 	<span class="k">begin</span>
 		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_AWVALID</span> <span class="o">||</span> <span class="n">M_AXI_AWREADY</span><span class="p">)</span>
-			<span class="n">axi_awlen</span>  <span class="o">&lt;=</span> <span class="n">r_max_burst</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">8'd1</span><span class="o">;</span></code></pre></figure>
+			<span class="n">axi_awlen</span>  <span class="o">&lt;=</span> <span class="n">r_max_burst</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">8'd1</span><span class="p">;</span></code></pre></figure>
 
 <p>The outgoing address is updated as soon as any successful burst is completed.
-Note the check for whether or not the <code class="highlighter-rouge">r_increment</code> flag is set–since the core
+Note the check for whether or not the <code class="language-plaintext highlighter-rouge">r_increment</code> flag is set–since the core
 supports both incrementing and fixed addressing.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_AWREADY</span><span class="p">)</span>
 		<span class="k">begin</span>
-			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
-			<span class="c1">// Verilator lint_off WIDTH
-</span>			<span class="k">if</span> <span class="p">(</span><span class="n">r_increment</span><span class="p">)</span>
+			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+			<span class="c1">// Verilator lint_off WIDTH</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">r_increment</span><span class="p">)</span>
 				<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span>
 				    <span class="o">&lt;=</span> <span class="n">axi_awaddr</span><span class="p">[</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">ADDRLSB</span><span class="p">]</span>
-						<span class="o">+</span> <span class="p">(</span><span class="n">M_AXI_AWLEN</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span><span class="o">;</span>
-			<span class="c1">// Verilator lint_on WIDTH
-</span>		<span class="k">end</span></code></pre></figure>
+						<span class="o">+</span> <span class="p">(</span><span class="n">M_AXI_AWLEN</span><span class="o">+</span><span class="mi">1</span><span class="p">);</span>
+			<span class="c1">// Verilator lint_on WIDTH</span>
+		<span class="k">end</span></code></pre></figure>
 
 <p>We’ll also set the write address any time we are not (yet) busy so that it
 is set to the first word of any upcoming transfer.</p>
 
 <figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">r_busy</span><span class="p">)</span>
-			<span class="n">axi_awaddr</span><span class="o">&lt;=</span> <span class="n">cmd_addr</span><span class="o">;</span>
+			<span class="n">axi_awaddr</span><span class="o">&lt;=</span> <span class="n">cmd_addr</span><span class="p">;</span>
 
 		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_UNALIGNED</span><span class="p">)</span>
-			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="o">;</span>
+			<span class="n">axi_awaddr</span><span class="p">[</span><span class="n">ADDRLSB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
 	<span class="k">end</span></code></pre></figure>
 
 <h2 id="conclusion">Conclusion</h2>
