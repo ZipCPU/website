@@ -1,0 +1,1095 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Lessons learned while building an ASIC design</title>
+  <meta name="description" content="Ever since I started working with FPGAs, I’ve always wanted to do anASIC design.  Ifnothing else, I wanted to understand from experience what it was like.">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2021/03/06/asic-lsns.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Lessons learned while building an ASIC design</h1>
+    <p class="post-meta"><time datetime="2021-03-06T00:00:00-05:00" itemprop="datePublished">Mar 6, 2021</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Ever since I started working with FPGAs, I’ve always wanted to do an
+<a href="/blog/2017/10/13/fpga-v-asic.html">ASIC design</a>.  If
+nothing else, I wanted to understand from experience what it was like.</p>
+
+<p>Last year, I got my chance.  I’m now on my second design, and the team I’m
+working with has just sent a piece of this second design to be <a href="https://en.wikipedia.org/wiki/Tape-out">taped
+out</a>.</p>
+
+<p>The process, however, was different in many ways I wasn’t expecting.  Here,
+below, are some of those differences I wasn’t expecting.</p>
+
+<h2 id="late-from-the-beginning">Late from the beginning</h2>
+
+<p>The first thing that surprised me was the schedule pressure.</p>
+
+<table align="center" style="float: right"><caption>Fig 1.  Memory Controller IP</caption><tr><td><img src="/img/asic-lsns/memchip.svg" alt="" width="360" /></td></tr></table>
+
+<p>The design as a whole is a memory controller, as shown in Fig. 1.  It’s a memory
+controller which can be sold independently to customers for placement into
+a larger SoC design.</p>
+
+<p>This first ASIC component of the design I needed to build was actually fairly
+simple.  There’s not a lot of logic in it.  I personally like to think of this
+portion of the design as a glorified serializer and deserializer.  It takes
+8x samples of a signal and serializes them to an output, and then does the same
+in reverse.  Except, there are some subtle differences.</p>
+
+<table align="center" style="float: left; padding: 15px"><caption>Fig 2.  High speed design steps</caption><tr><td><img src="/img/asic-lsns/design-steps.svg" alt="" width="480" /></td></tr></table>
+
+<p>More specifically, the design is the first half of a two stage design process
+to build a memory controller.  The first stage involves building the high speed
+portions of the design, as shown in Fig. 2.  This is the high risk stage.  It
+involves building
+components that cannot be implemented in an FPGA.  In some respects, this is a
+throw-away portion of the design, and so it is important to minimize its
+cost.  The second part will handle the protocol and logic associated with the
+design.  This is the more complicated part.  Its gate count will be much
+higher.  By verifying this portion of the design within an FPGA, cost and time
+to development can be
+optimized.  Even better, if necessary, the protocol can be debugged and
+fixed–something not easily done on an ASIC.  The first stage, therefore, is
+basically a speed translator.  It communicates with slower logic on one side
+of the chip, and faster logic on the other.  Since this is for a memory
+controller, the high speed lines are bidirectional, and they come accompanied
+by a clock whenever data is present.  Shifting this clock by 90 degrees was
+a bit of a challenge, as was delaying the clock in order to sample in the
+middle of a received data bit, but the design was still pretty basic.</p>
+
+<p>I estimated it would take me about 2-4 weeks to build the design.</p>
+
+<p>Much to my surprise, I was late the moment the project started.</p>
+
+<p>Not all of this was my fault.  As I understand things, the engineer who was
+working this project before me had left mid-project.  My job was to pick up
+where he left off.  Unfortunately, that meant there was a bit of management
+confusion between when the last engineer left and when my contract was signed.
+It didn’t help that I wasn’t certain I’d even have the bandwidth for this
+project when I started it, and so I delayed bidding for the project by a
+couple months.</p>
+
+<p>Once the contract was signed, however, the project was late.</p>
+
+<p>The project was also late because after building my portion of the project
+(in 2-4 weeks), I discovered discover that wasn’t nearly enough.  Sure, I
+formally verified (nearly) every portion of the design, but I couldn’t
+simulate the entire  design end to end.  The low-speed logic design simulation
+was handed to me in a non-functional state, and I had just changed the
+interface on top of that.  In whole, this was a non-starter.  How was I to
+know if my new interface was sufficient, if I couldn’t verify the whole?</p>
+
+<p>So, let’s back up a bit to understand how this started.  I was given a design
+consisting of a protocol portion and a physical layer portion, together
+with several simulation components–much like Fig. 3 below.</p>
+
+<table align="center" style="float: center"><caption>Fig 3.  Design as received</caption><tr><td><img src="/img/asic-lsns/asreceived.svg" alt="" width="560" /></td></tr></table>
+
+<p>I was told a lot of things about it.  For example, this was what was left from
+a previous working design that had been delivered to customers.  Since then,
+that design had been adjusted and modified by a previous engineer, but those
+modifications had yet to make it into a delivery.  I was also told that less
+than half of the test scripts were passing.  Further, the 8b internal interface
+was too fast for an FPGA to handle, and so I would need to slow it down by
+parallelizing the data path.  So my initial task was simply to upgrade from
+an 8-bit data path in the digital front end to a 64-bit data path.  That much
+of the task was quite straightforward, and that was the portion that was to go
+into this ASIC design.</p>
+
+<p>Straightforward?  Yes.  However, it did send my crawling all over the original
+design, and I did have to make changes in more places than I was expecting–even
+in the low-speed logic that was destined to be scrapped as part of my upgrades.</p>
+
+<p>For example, the AXI bus width of the design given to me was naturally 32-bits
+wide.  This works nicely with an AXI4-lite controller.  A 64-bit datapath,
+however, meant that either the bus would also need to be made 64-bits wide,
+or that the bus width would become a performance bottleneck.</p>
+
+<p>The next problem was that the simulation I was given didn’t work.  Yes, the
+simulation supported nearly a hundred separate tests, but I was told at the
+outset that most of them didn’t work.</p>
+
+<p>On top of that, the free Verilog simulator I had access to on my desktop,
+<a href="http://iverilog.icarus.com">Icarus Verilog</a>, didn’t support the SystemVerilog
+dot notation when calling tasks.  Getting the simulation, therefore, to even
+build in <a href="http://iverilog.icarus.com">Icarus Verilog</a> took some days.</p>
+
+<p>To make matters worse, once I got to the point where I could try one or two
+of the “verified” tests, that is once I could test the first of the simulations
+that were supposed to “just work”–they didn’t work.  Instead, the “verified”
+tests did the worst thing possible: they hung the simulation.  That left me
+wondering if, or when, I should kill the simulation or if it was actually
+doing something useful while it wasn’t printing anything to the screen.</p>
+
+<p>Needless to say, my 2-4 week task took much longer to accomplish than I was
+anticipating.  It is now five months later, and the design is only now taping
+out.</p>
+
+<p>So much for my time estimates.</p>
+
+<p>Seriously, I’d be a much better engineer, and certainly a much more profitable
+one, if I could estimate the time to complete a project from the beginning
+much better than I can today.</p>
+
+<h2 id="gates-are-cheap-verification-is-not">Gates are cheap, verification is not</h2>
+
+<p>Nothing is static in this world, not even design requirements.</p>
+
+<p>It wasn’t until after I had built my design that I got a chance to read the
+original contract between my client and his customer.  That contract called
+for a built-in self testing (BIST) capability.  Oops.  I hadn’t built that
+in.  No problem, I thought, I could add in a simple BIST capability with just
+a couple extra registers.</p>
+
+<p>First, there was the control wire.  The slave access port(s) need to be
+adjusted so they could turn on the BIST checker.  That part was easy, and I
+know <a href="/blog/2020/12/19/axil-register-checking.html">how to formally verify that a bus register can be properly
+controlled</a>,
+so I was good there.  The second part was to capture the internal state on a
+given signal.  This was almost as simple as,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">reset</span><span class="p">)</span>
+	<span class="n">capture</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">triggered</span><span class="p">)</span>
+	<span class="n">capture</span> <span class="o">&lt;=</span> <span class="n">internal_value</span><span class="p">;</span></code></pre></figure>
+
+<p>Cool!  I was done.</p>
+
+<p>But did it work in simulation?  No.  I hadn’t built a simulation for it.</p>
+
+<p>Building the simulation took another day, since I needed to check all of the
+various bits that could be captured above.  (The capture signal was wider than
+a single bit.)  It then took another day (or two) to get it all to work.</p>
+
+<table align="center" style="float: right"><caption>Fig 4. "Of course" is not a good verification practice</caption><tr><td><img src="/img/asic-lsns/of-course.svg" alt="" width="360" /></td></tr></table>
+
+<p>Was the task done?  No.  Now, every time I change the design, I have to go back
+and re-verify it against this simulation.  Worse, because of the clock games
+taking place within this design, there were all kinds of timing errors generated
+by this logic.  In the end, I split the capture signal into two, each captured
+on a separate clock.  Even that wasn’t enough, because I only later thought
+through the fact that eight of the internal values were captured on their own
+special clocks–but that’s part of the longer story.</p>
+
+<p>That happened to be only part of the BIST story.</p>
+
+<p>For the other half, I suggested monitoring the output of the high speed
+device through the input channel.  The data would just reflect back within the
+high speed portion of the design onto the input, as shown in Fig. 5 below.</p>
+
+<table align="center" style="float: center"><caption>Fig 5. Reflection checking</caption><tr><td><img src="/img/asic-lsns/reflection.svg" alt="" width="560" /></td></tr></table>
+
+<p>This, I reckoned, could be implemented with a simple no-logic change in the
+front end.  That is, it was a no-logic change until I actually took the time
+to simulate it instead of telling everyone it would “just work”.  Only after
+I built a simulation for this check did I realize I had turned reflections
+off to optimize power.  Although I fixed up the design to get this to work,
+there was a second problem to it that I wasn’t expecting.  Because the design
+would receive and return its own transmitted data as it was transmitting it,
+the I/O lines couldn’t be shared between transmit and receive.  This nearly
+doubled the number of I/O pins on the ASIC to the point where the size of the
+I/O pin pads dominated the size of the ASIC and therefore it’s manufacturing
+cost.</p>
+
+<p>Both adjustments required only a minimal amount of design adjustments to our
+high speed ASIC design.  The design changes may have taken only 15 minutes
+each.  Building the simulation necessary to prove these changes may have
+taken closer to a day for each of them.  Running all the various simulations
+now at <a href="https://en.wikipedia.org/wiki/Tape-out">tape out</a> still takes several
+days–assuming everything works.</p>
+
+<p>Even these early simulations weren’t the end of the verification task.  Once
+the design was laid out and the internal timing values from within the design
+were known, it then needed to be verified <em>again</em>, and then again as a second
+portion of the design was laid out, and again as a third portion, etc.  The
+number of times my “working” logic has had to go through a simulator has been
+somewhat of a shock to me.  More on that to come.</p>
+
+<h2 id="design-for-test-dft-signals">Design for Test (DFT) signals</h2>
+
+<p>One of the first things I did with the design I received was to strip out any
+and all unused logic.  This meant both the logic I wasn’t using as well as any
+logic I couldn’t explain.  As a result, I quickly removed the <code class="language-plaintext highlighter-rouge">TEST_MODE</code>
+input, as well as the several <code class="language-plaintext highlighter-rouge">SCAN_*</code> inputs associated with it, such as the
+<code class="language-plaintext highlighter-rouge">SCAN_CLK</code>.</p>
+
+<p>That worked great until I sent my design to the layout engineer.  He told me
+I had to put these values back into the design to support
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a> scan chain insertion.</p>
+
+<p>Our <a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a> implementation
+worked off of a basic scan chain.  That meant that every flip-flop in the
+design needed to be connected to a massive shift register running through
+the whole design.  This allows you to test the internal circuitry of the
+design after it has been manufactured, to verify that it was manufactured
+correctly.</p>
+
+<p>Getting this support working also required some changes to the design itself.</p>
+
+<ol>
+  <li>
+    <p>The digital design module needed the
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+inputs listed as part of its portlist</p>
+
+    <p>That meant I had to go back and put this logic back into the design in
+spite of having removed it.</p>
+
+    <p>This felt a bit strange to do.  The
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+signals weren’t connected to anything within the RTL, and they generated
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+lint errors, but they were apparently still necessary.</p>
+  </li>
+  <li>
+    <p>Every incoming clock must be multiplexed with the <code class="language-plaintext highlighter-rouge">SCAN_CLK</code></p>
+
+    <p>This was the biggest change.  I needed to add a clock switch to every
+incoming clock within my design.  If <code class="language-plaintext highlighter-rouge">TEST_MODE</code> was high, then the design
+required the use of the <code class="language-plaintext highlighter-rouge">SCAN_CLK</code>.  If <code class="language-plaintext highlighter-rouge">TEST_MODE</code> was low, then the design
+clock would be used.</p>
+
+    <p>Unlike the <a href="/formal/2018/05/31/clkswitch.html">clock
+switch</a>
+we studied earlier on the blog, however, this switch was nothing more than
+a simple multiplexer selecting which of two clocks would be produced at the
+output.</p>
+  </li>
+  <li>
+    <p>Every internal clock needed to be multiplexed with the <code class="language-plaintext highlighter-rouge">SCAN_CLK</code>.  This
+was in addition to the incoming clocks mentioned above.</p>
+
+    <p>Basically, if you are going to create a logic generated clock, anything
+that will subsequently become the edge of a flip-flop, then the
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a> logic
+needs to be able to toggle that downstream logic with the <code class="language-plaintext highlighter-rouge">SCAN_CLK</code>.
+Every clock within the design therefore, and not just those one coming from
+the PLL, needed a multiplexer on it before it could be used.</p>
+
+    <p>This also means that there will only ever be a single clock throughout the
+design when in the
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+test mode.  This will naturally limit the things the
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+test mode can actually test.  In other words, any further testing and
+verification that might need to be done in silicon was my responsibility.</p>
+  </li>
+  <li>
+    <p>The rule for clocks applies to asynchronous resets as well</p>
+
+    <p>This one also surprised me.  Because my design logic might toggle on
+an asynchronous reset, it also needed a multiplexer to bypass
+the <a href="/formal/2018/04/12/areset.html">reset synchronizer</a>
+when the test mode was active.</p>
+  </li>
+</ol>
+
+<p>In many ways, this <a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+logic looked and acted very much like
+<a href="https://en.wikipedia.org/wiki/JTAG">JTAG</a> logic might–but without the
+<a href="https://en.wikipedia.org/wiki/JTAG">JTAG</a> state machine.
+There was a long shift register, or even series of shift registers–i.e. the
+scan chain, within the design that were controlled by this
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+circuitry.  I just didn’t realize that I, as the digital designer prior to
+layout, had a role to play in the process.</p>
+
+<p>In other words, the next time I’m given a design like this, I’m not going to
+immediately rip out the <a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+logic as my first step.</p>
+
+<h2 id="cost-is-not-always-measured-in-gate-counts">Cost is not always measured in gate counts</h2>
+
+<p>Manufacturing cost for ASIC production is generally proportional to the area
+used by the design.  More specifically, the cost is dominated by the cost to
+produce the masks necessary to manufacture a wafer.  It’s also possible to
+place multiple dissimilar chips on a given wafer in order to help spread the
+cost of manufacturing a wafer across multiple users.  That still leaves wafer
+area as the dominant measure of cost.</p>
+
+<p>Prior to this design, I had always thought that meant that the logic area of
+the design, as measured in gate counts, would then be roughly proportional to
+the overall area and would therefore dominate the overall manufacturing cost.</p>
+
+<p>Much to my surprise, I discovered that each I/O pad connecting the design to
+the outside world required a minimum amount of area.  In my case, the design
+required so many I/O pads that the size of these pads proved to dominate the
+size of the design.  The actual gate area was much smaller.</p>
+
+<p>Even apart from the I/O pad sizes, there was a very large analog section to
+this high-speed chip.  This included things like the PLL and several DLLs,
+in addition to the circuitry necessary to handle unwanted electrostatic
+discharge (ESD) or the circuitry required to “clean” (i.e. filter) the power
+for the analog logic.  I had never thought of a design as
+needing these components before, and to my surprise the digital logic was
+very small in size in comparison to them.</p>
+
+<h2 id="x-propagation-matters">X Propagation Matters</h2>
+
+<p>Ok, I’ll be honest here, I’ve never used ‘x propagation in any of my designs
+prior to these ASIC projects.  My favorite simulator,
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>,
+doesn’t support them as a design decision.
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>, the
+formal verification tool I use, always assigns a ‘1 or a ‘0 to every value in
+a broken trace, and checks all possible values for something that isn’t given
+a initial value–so I haven’t needed ‘x support.</p>
+
+<p>Then a customer complained that my first ASIC design didn’t work in their
+simulation.  I traced the complaint down to one of two problems.</p>
+
+<ol>
+  <li>
+    <p>The <code class="language-plaintext highlighter-rouge">always @(*)</code> block.</p>
+
+    <p>I’ve enjoyed using <code class="language-plaintext highlighter-rouge">always @(*)</code> blocks for any combinational logic.  In
+particular, I’ve enjoyed using this block when dealing with generate
+blocks like the one below</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="kt">reg</span>	<span class="p">[</span><span class="n">N</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">VAL</span><span class="p">;</span>
+
+<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_DESIGN_OPTION</span><span class="p">)</span>
+<span class="k">begin</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Some complex block setting VAL</span>
+	<span class="k">end</span>
+
+<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">VAL</span> <span class="o">=</span> <span class="n">CONSTANT</span><span class="p">;</span>
+
+<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>I like this approach because I don’t need to create second wire to
+   hold the value in <code class="language-plaintext highlighter-rouge">VAL</code>.</p>
+
+<p>The problem with this approach is that nothing triggers the <code class="language-plaintext highlighter-rouge">always @(*)</code>
+   block.  It’s not a problem in hardware, <code class="language-plaintext highlighter-rouge">VAL</code> is given the <code class="language-plaintext highlighter-rouge">CONSTANT</code> as its
+   definition.  It’s only a problem in simulation.  In simulation, <code class="language-plaintext highlighter-rouge">VAL</code> is not
+   given an initial value and the <code class="language-plaintext highlighter-rouge">always @(*)</code> block is never triggered because
+   nothing within it ever changes.  As a result, <code class="language-plaintext highlighter-rouge">VAL</code> remains <code class="language-plaintext highlighter-rouge">x</code> (undefined)
+   in the simulation.</p>
+
+<p>The SystemVerilog specification fixes this issue somewhat in its
+   definition of <code class="language-plaintext highlighter-rouge">always_comb</code>.  However, other than <code class="language-plaintext highlighter-rouge">localparam</code>s, I’ve tried
+   to avoid SystemVerilog features so that I can maintain compatibility with
+   the older parsers that are out there.</p>
+
+<p>Fixing this forced me to adjust my personal design standards so that <code class="language-plaintext highlighter-rouge">VAL</code>
+   would be defined as a wire (a.k.a. a net) in these constructs.  This
+   also meant that I would now need to define a separate register, let’s
+   call it <code class="language-plaintext highlighter-rouge">r_VAL</code>, which the former logic sets.  In the end, the wire is then
+   assigned the resulting value either way.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="kt">wire</span>	<span class="p">[</span><span class="n">N</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">VAL</span><span class="p">;</span>
+
+<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_DESIGN_OPTION</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="kt">reg</span>	<span class="p">[</span><span class="n">N</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">r_VAL</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Some complex block setting r_VAL</span>
+	<span class="k">end</span>
+
+	<span class="k">assign</span>	<span class="n">VAL</span> <span class="o">=</span> <span class="n">r_VAL</span><span class="p">;</span>
+
+<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+
+	<span class="k">assign</span>	<span class="n">VAL</span> <span class="o">=</span> <span class="n">CONSTANT</span><span class="p">;</span>
+
+<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>Personally I find this cumbersome.  However, it’s now going to become part of
+   my personal coding standard lest I come across this bug again.  Indeed,
+   there’s now <a href="https://github.com/ZipCPU/blob/zipcore/rtl/core/zipcore.v">a
+   version</a> of the
+   <a href="/about/zipcpu.html">ZipCPU</a>
+   following this new coding guideline as well.</p>
+
+<ol start="2">
+  <li>
+    <p>Recursive definitions</p>
+
+    <p>This one burns me up.  Imagine you have a clock divider, such as</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">div_clk</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">div_clk</span><span class="p">;</span></code></pre></figure>
+
+<p>In this example, <code class="language-plaintext highlighter-rouge">div_clk</code> isn’t given an initial value because, well,
+   initial values aren’t allowed in ASICs.  As long as the hardware can fix
+   the value at either <code class="language-plaintext highlighter-rouge">0</code> or <code class="language-plaintext highlighter-rouge">1</code>, this clock divider will do the right thing.
+   Even better, I can use formal tools to verify that this simple circuit will
+   do the right thing either way it’s set.  The problem is not that the hardware
+   won’t work, the problem is that the simulator won’t work with something like
+   this.  <code class="language-plaintext highlighter-rouge">div_clk</code> will be given an initial assignment of ‘x, and anything
+   that depends upon it will then get an ‘x value.</p>
+
+<p>The result of all of this is that I’ve found myself forcing signals to be
+   reset that don’t really need to be reset at all.</p>
+
+<ol start="3">
+  <li>
+    <p>The asynchronous reset applies to everything</p>
+
+    <p>Up until now, I’ve used <code class="language-plaintext highlighter-rouge">initial</code> statements in my designs quite heavily.
+They work great in FPGA designs.  They just don’t work at all in ASIC
+designs.</p>
+
+    <p>Worse, because of ‘x propagation issues, any bit that isn’t set by the
+asynchronous reset gets flagged as an ‘x and shows up like a sore thumb on
+any simulation trace.</p>
+
+    <p>I’ve also avoided asynchronous resets in the past, based upon a comment
+in some Xilinx documentation suggesting that RF interference might trigger
+an accidental asynchronous reset.  (I’ve since been asked by a Xilinx
+designer to find the document, and … I can’t remember where I found it
+initially.  They claim asynchronous resets should work just fine.)</p>
+
+    <p>Not so with this design.  In this case, every flop was initialized with an
+asynchronous reset.  In some cases, the asynchronous reset would be active
+long before the clock ever was.</p>
+
+    <p>This also affected my formal proofs.  My first attempt at proofs without
+initial statements involved  just not evaluating any assertions on the
+first clock cycle of the proof.  Now I’m starting to get into the habit
+of gating all of my formal assertions with a reset check, to make sure that
+the logic works once the reset is accomplished.</p>
+
+    <p>This also means that my <a href="https://github.com/ZipCPU/wb2axip/tree/master/bench/formal">AXI bus property
+sets</a> now
+have options for asynchronous reset checking.  If this option is turned on,
+the AXI property sets will now insist all VALID flags go to zero on the
+same clock as the reset, in addition to the clock following.</p>
+  </li>
+</ol>
+
+<p>Perhaps I shouldn’t complain.  As I mentioned above, logic is cheap.  Once I
+knew what was going on, these fixes only took minutes to make.  It’s not the
+logic that costs so much, it’s the verification part that’s much harder.</p>
+
+<h2 id="asic-clocks-are--different">ASIC Clocks are … different</h2>
+
+<p>In FPGAs, there are <a href="/blog/2017/08/21/rules-for-newbies.html">rules for
+clocks</a>.  One of
+those rules is that logic generated clocks are bad.  In general, FPGA tools
+can’t handle the timing analysis of any logic generated clocks,
+the logic generated clock doesn’t have the same timing relationship as the
+clock it came from, and it isn’t placed automatically on the clock routing
+network.  These are all reasons why logic generated clocks are generally bad.</p>
+
+<p><a href="/blog/2017/08/21/rules-for-newbies.html">These rules</a> don’t
+necessarily apply to ASIC designs.</p>
+
+<ol>
+  <li>
+    <p>ASICs use logic generated clocks</p>
+
+    <p>ASIC designs are different.  Indeed, once you dig into the weeds of an ASIC,
+you might start to believe that all clocks are logic generated.  You would
+be right to some extent, because even the PLLs have some amount of logic
+within them.</p>
+
+    <p>Unlike FPGAs, ASICs don’t come with a set of dedicated clock routing
+networks.  Instead, the clock trees used within ASIC designs have to be
+engineered and inserted into the design for each clock that uses them.</p>
+  </li>
+  <li>
+    <p>ASIC designs are known for gating their clocks</p>
+
+    <p>This technique is primarily used for reducing power within a design.</p>
+
+    <p>I grew up in Minnesota, not far from <a href="https://www.nps.gov/miss/planyourvisit/lockdam1.htm">Lock and Dam number one on the
+Mississippi river</a>.
+<a href="https://www.nps.gov/miss/planyourvisit/lockdam1.htm">That lock and Dam</a>
+has since become imagery for me to understand power usage within an
+electronic circuit.  Imagine, if you will, that every wire within an
+electronic design is a lock on a river that can either hold water (i.e.
+charge) or not.  Energy is used every time the lock is filled, and it is
+measured by the amount of  water necessary to fill the lock.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: center"><caption>Fig 6. A Lock and Dam analogy to electrical power usage</caption><tr><td><img src="/img/asic-lsns/lock-analogy.svg" alt="" width="560" /></td></tr></table>
+
+<p>The higher the water level is, that is the higher the core voltage is
+   within a design, the more water that will be necessary to fill the lock.
+   Similarly, the longer the lock is whose water level (a.k.a
+   voltage) needs to be adjusted, the more water it will take to adjust it.</p>
+
+<p>Clock trees are equivalent to very long lock chambers throughout the
+   design that all need to be filled.  It takes a lot of current to switch
+   the tree from one voltage level to another, and the more times the clock
+   toggles the more power is used by the clock tree.</p>
+
+<p>This leads to three ways of reducing power in a design.  You can lower the
+   core voltage.  This is equivalent to lowering the height of the water in
+   the lock.  You can also lower the frequency.  This is equivalent to raising
+   and lowering the lock fewer times, and so you use less water over time.  You
+   could also limit the number of flip-flops that toggle based upon the clock,
+   although that doesn’t fit our analogy nearly as will.  Finally, it doesn’t
+   make sense to adjust the water level in a lock that nothing depends upon.</p>
+
+<p>This is how gating a clock can reduce the power usage of a design.  Because
+   clock trees tend to have a large amount of circuitry dependent upon them,
+   and because they use a lot of area within the chip, toggling the clock costs
+   a lot of energy.</p>
+
+<p>Although you can do this within an FPGA, the technique itself isn’t
+   commonly used.  FPGAs offer alternatives to clock gating instead, things
+   like clock-enables in flip-flops.</p>
+
+<p>One of the things I learned in this design, which I really should have
+   already known, is that gating a clock with a simple AND gate is insufficient
+   when working with digital logic.  While it might be appropriate when
+   implementing a <a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a> scan
+   chain, it’s highly inappropriate in general.  A clock gate requires a
+   proper gating circuit lest the clock and everything dependent upon it
+   become ‘x in simulation, or fail setup and hold timing requirements in
+   actual hardware leading to a mismatch between simulation and implementation.</p>
+
+<p>This fact came into play due to the fact that we were running simulations at
+   multiple clock rates.  The simulations would start out with a slower clock,
+   and then gradually increase the clock frequency to the maximum frequency
+   required by the device.  Further, while the clock frequency was changing in
+   the PLL, the PLL would gate the downstream clocks with an AND gate.  Sure
+   enough, in one particular run, this AND gate clipped the clock at something
+   less than a full pulse width.  One flip flop dependent upon this clock
+   switch, a flip flop used to generate a logic clock for downstream processing,
+   then turned into an ‘x.  The entire simulation failed from that point
+   forward.</p>
+
+<ol start="3">
+  <li>
+    <p>Clocks can be switched</p>
+
+    <p>One of the tasks required of this design was to subtly adjust the timing
+of particular signals within a clocks width.  Indeed, we were shooting for
+an <code class="language-plaintext highlighter-rouge">80ps</code> time delay adjustment capability similar to Xilinx’s ODELAY
+or IDELAY hardware blocks.  We achieved some of what we were looking
+for by moving data signals from one phase of the primary clock to another.</p>
+
+    <p>A giant clock multiplexer was used for selecting from among the many
+clock phases necessary for this operation.</p>
+  </li>
+</ol>
+
+<p>All of these operations were fairly easy to design and implement in Verilog.
+For several months the design with these wonderful blocks in them was awesome.</p>
+
+<p>Then the design was implemented, placed and routed.  All of a sudden the
+consequences of these various clock choices started to make themselves clear.
+The balanced clock multiplexer took nearly a fifth of a clock cycle to select
+the right clock.  The <a href="/blog/2020/08/22/oddr.html">output DDR
+element</a> had one path delay on
+one leg and another path delay on another.  Indeed, uncontrolled layout timing
+delays on the order of 256ps made it very difficult to finally control
+output delays with a better than 80ps accuracy.  These realities forced some
+level of last minute redesign that I wasn’t expecting.</p>
+
+<h2 id="specify-blocks">Specify Blocks</h2>
+<p>I remember being in a design meeting with the engineers who built
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>
+at one time discussing specify blocks.  One of their customers had requested
+that <a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a> support them,
+and the discussion centered on whether or not
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>
+should support them, and how they should be supported if at all.  At the
+time, I had no idea what a specify block was.  As a result, it was no skin
+off of any project I was working with if we didn’t support them.</p>
+
+<p>Then I started working on this project.</p>
+
+<p>The model I was given for the device we were to interact with had multiple
+specify blocks within it.  These specified such things as the setup and hold
+time prior to a clock tick, the time a value needed to hold constant following
+a clock edge, or even the minimum skew between particular items.  Much to my
+pleasant surprise, these timing specifications read like a formalization of
+many data sheets I’d read before.  Indeed, all of the specification requirements
+within the design could be read and translated directly from the specification
+we were working with.</p>
+
+<p>This was awesome!  I’d never used this capability before.  I liked it!</p>
+
+<p>Then I started running into trouble.</p>
+
+<p>My first problem was that <a href="http://iverilog.icarus.com">Icarus Verilog</a> didn’t
+support them.  I didn’t realize this at first.  Then I switched from
+<a href="http://iverilog.icarus.com">Icarus Verilog</a> to a commercial simulator.  I first
+tried <a href="https://community.cadence.com/cadence_technology_forums/f/functional-verification/39923/nc-verilog-user-manual">ncverilog</a>.  When
+<a href="https://community.cadence.com/cadence_technology_forums/f/functional-verification/39923/nc-verilog-user-manual">ncverilog</a>
+didn’t support <code class="language-plaintext highlighter-rouge">localparam</code> statements I then switched again to
+<a href="https://www.cadence.com/en_US/home/tools/system-design-and-verification/simulation-and-testbench-verification/xcelium-simulator.html">XCellium</a>.
+Then, <a href="https://www.cadence.com/en_US/home/tools/system-design-and-verification/simulation-and-testbench-verification/xcelium-simulator.html">XCellium</a>
+started generating errors when my design wasn’t holding to the various timing
+requirements found within the protocol.</p>
+
+<p>After wrestling with the Verilog simulation for some time, I now wish in
+hindsight that I had been more supportive of specify block support within
+<a href="https://symbiyosys.readthedocs.io/en/latest/">SymbiYosys</a>.
+Now that I’ve read through the SystemVerilog specification discussing
+specify block, I’m also convinced that such support wouldn’t be that hard
+to build.  The hardest part would be the parsing, but in general that’s already
+a solved problem.</p>
+
+<h2 id="its-not-over-when-the-digital-design-is-done">It’s not over when the digital design is done</h2>
+
+<p>One of the things I’ve already alluded to above is that the project was far
+from over once the digital design was complete.  While I wasn’t a part of many
+of the steps that followed, I was part of enough of them.</p>
+
+<ol>
+  <li>
+    <p>I’ve already mentioned
+<a href="https://en.wikipedia.org/wiki/Design_for_testing">DFT</a>
+scan chain insertion</p>
+  </li>
+  <li>
+    <p>The design needed to pass a lint check.  The default linter wanted to
+complain about a bunch of highly irrelevant “problems”.  I convinced the team
+we could use 
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+for linting instead.  As a result, I was able to produce a “clean” design
+with no lint errors.</p>
+  </li>
+  <li>
+    <p>I was asked to run an automated coverage analysis check on the design.
+Basically, I re-ran all of my simulations and recorded which lines were
+getting executed, which bits were toggled and so on.  Signals that didn’t
+toggle, or logic that didn’t get exercised were both flagged for discussion
+and possible adjustment to the simulations.</p>
+  </li>
+  <li>
+    <p>Another team member ran a clock domain crossing analysis made on my design.
+This analysis looked at every clock domain crossing, and caused us to look
+real hard at them–did they need proper proper constraints or
+false path insertion?</p>
+  </li>
+  <li>
+    <p>Power and ground pins needed to be assigned to the design, and the I/O
+pins needed to be apportioned to different locations on the chip
+interspersed with a sufficient number of power and ground pins to support
+them.</p>
+  </li>
+  <li>
+    <p>I then needed to build an “I/O ring” for the design.  This was new for me,
+as I’d never done one of these before.  Basically, I needed to build a
+Verilog design that connected all of the external pins, whether inputs or
+outputs, to the rest of my Verilog design.  In a Xilinx world, this would
+be like connecting all of your I/O pins to an IBUF, OBUF, or an IOBUF rather
+than relying on the synthesis tool to do this for you.  It was a touch
+different, however, in that I also needed to place multiple power and ground
+pins for the design.</p>
+
+    <p>During this process, the analog engineer I was working with laughed at me
+for doing this.  Why, he asked?  Why do you need to model this in Verilog
+at all?  As it is, the design needs to be turned into gates and components
+laid out in a three dimensional grid.  Verilog is only an intermediate step.
+Once you have the three dimensional layout, why do you need the Verilog
+describing it anymore?</p>
+
+    <p>At the same time, even though this I/O ring was quite simple to build, I
+still messed it up.  A coworker noticed late in the design process that
+one signal had bypassed the I/O pads to go straight into the design.</p>
+
+    <p>Sadly, we didn’t have any good verification tools to support this portion of
+the design.  Sure, I verified that the design worked as desired with the
+I/O pads in place, but what would happen if I connected a particular I/O to
+the wrong pin?  It would still work in simulation.  What if I used a signal
+that bypassed the I/O ring?  That would also still work in simulation.</p>
+  </li>
+  <li>
+    <p>Since the design consisted of both digital and analog components, I was
+given a Verilog model of the analog components to simulate with.  I initially
+ignored this model, something that turned out to be quite a mistake.  Why?
+Because I already “knew” my design worked against the analog model I’d been
+working with, so why did I need this updated model?  As long as the analog
+designer had built his design according to the specification we had agreed
+upon, what difference would it make if I used my model or his?</p>
+
+    <p>Unlike mine, however, his model was based upon the hardware “as-built”,
+not on my ideas of how it was going to be built.</p>
+
+    <p>Unfortunately again, once I finally replaced my own model with this
+“as-built” model the design no longer passed simulation.  In one case, the
+problem had to do with the fidelity of the analog model.  The analog
+designer hadn’t truly modeled one of the circuits.  In another case, however,
+the analog designer had misunderstood my specification and built the wrong
+component.  Had I not done simulations with the analog model, I would not
+have found this mistake.</p>
+
+    <p>I found this mistake late in our design cycle–right as we were finalizing
+the design for <a href="https://en.wikipedia.org/wiki/Tape-out">tape out</a>.
+Although we managed to fix the problem and update the design, a lot of work
+needed to be re-done due to where it fell in the timeline.</p>
+  </li>
+  <li>
+    <p>I was also given a model of the digital design with post <a href="https://en.wikipedia.org/wiki/Tape-out">place and
+route</a> timing annotations within
+it, and asked to re-run the simulations again.</p>
+
+    <p>Subtle bugs in the device simulation model made this task take much longer
+than I expected.  Indeed, this process took nearly two weeks to debug both
+the simulation and any design problems.  This, of course, is two weeks in
+what I thought was a 2-4 week problem in the first place.</p>
+  </li>
+  <li>
+    <p>Other things were taking place as well that I was only peripherally aware
+of.  There were ESD simulations being run,
+<a href="https://en.wikipedia.org/wiki/Design_rule_checking">DRC</a> checks applied
+to the design, packaging options were examined and chosen, as well as solder
+balls designed for the pins.</p>
+  </li>
+</ol>
+
+<p>All put together, this 2-4 week RTL design took many more months to accomplish.
+Worse, much to my surprise and dismay, RTL issues were still being discovered
+late in the design process.  These were things I was responsible for.  They’re
+also things I’ll be considering as lessons to learn for the future, so that
+I might learn from them to keep them from happening again later.</p>
+
+<h2 id="is-simulation-verilog-software-or-is-it-hardware">Is Simulation Verilog Software or is it Hardware?</h2>
+
+<p>I have a deep software background.  Indeed, I’ve been building software since
+grade school.</p>
+
+<p>My first experience with digital design was in college, back in 1992-1993.
+Other than two courses, my college work was focused on either my Computer
+Science or Mathematics degrees.</p>
+
+<p>Since that time, most of my work from 1993-2009 was in digital signal
+processing (DSP).  From my standpoint, DSP was nothing but software applied
+to mathematical constructs.  It was often accomplished in embedded platforms,
+although not always.  Sure, I have a Ph.D. in EE, but the focus was more on
+how to process radio frequency signals than circuit design or simulation.</p>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 7. PI should never be a magic number!</caption><tr><td><img src="/img/asic-lsns/mpi.svg" alt="" width="360" /></td></tr></table>
+
+<p>My point is simply this: there are rules to good software design.  One rule,
+for example, is that all constants should be declared in a common area
+separate from your algorithm’s implementation.  Failing to follow this rule
+often leads to what are known as
+“<a href="https://en.wikipedia.org/wiki/Magic_number_(programming)">magic numbers</a>”.
+Another rule is that <a href="https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)">you should never write the same algorithm multiple
+times</a>.
+You should instead create functions and function calls to implement algorithms
+such algorithms once, and then to reference those implementations.
+This will keep you from copying a broken algorithm and then needing
+to find and fix all the places where it is broken.</p>
+
+<table align="center" style="float: right"><caption>Fig 8. The problem with magic numbers</caption><tr><td><img src="/img/asic-lsns/ionosphere.svg" alt="" width="360" /></td></tr></table>
+
+<p>One of the problems I struggled with throughout the project was that the
+device simulation model violated the <a href="https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)">rule of
+three</a>
+extensively.  There were three implementations of every operation that the
+model understood–one for each of the three protocol sections.  Each
+implementation had its own means of reading from the interface.
+For example, there was one implementation for reading from the normal
+memory, and another implementation for reading from a special area of the
+memory.  These two (there were more) implementations didn’t reuse any logic
+between them in spite of the fact that the interface protocol was the same
+between both.  As a result, when I went to debug the read-ID feature,
+whereby the simulated device could be queried for its ID, I was forced to fix
+(again) the nearly identical read logic for reading from the memory only this
+time with a different read result.  This left me debugging the design again and
+again and again for what were often the same bugs.  It didn’t help that the
+simulation took hours to either complete or halt on a bug, nor that I would
+often run the design first without generating a trace just to know if or when
+the trace would need to be generated.</p>
+
+<p>That was one problem where good software engineering practices would help.
+The simulation model really needed to be rewritten from scratch to fix these
+problems throughout.  The problem only compounded due to the fact that the
+project as a whole was late from the start.  We therefore committed to patching,
+and re-patching, and re-patching the simulation model again and again only
+to promise ourselves that we would rebuild it once the fast portion of the
+design <a href="https://en.wikipedia.org/wiki/Tape-out">tape out</a> was complete.</p>
+
+<p>The second place this design looked like software was on the CPU side of the
+design.</p>
+
+<table align="center" style="float: center"><caption>Fig 9. Is test bench Verilog "Software"?</caption><tr><td><img src="/img/asic-lsns/tbsoftware.svg" alt="" width="560" /></td></tr></table>
+
+<p>As shown in Fig. 9, the
+entire design I was working with had two interfaces.  One one end, it
+interfaced with the memory device we were working with.  On the other end of
+the design it interacted with an AXI3 bus that would likely be controlled by
+a CPU.  A large section of the test bench consisted of the definitions of
+114 software functions that would call tasks within an AXI3 Verification IP
+model in order to communicate with the design.  The test bench script
+itself consisted primarily of a series of Verilog references to these tasks,
+what I would call function calls in software, to interact with the design.
+This portion of the test bench read and operated just like software.</p>
+
+<p>So, why wasn’t it software?</p>
+
+<p>If the goal was to interact with the design as a CPU might, then why not use
+a CPU to control the interaction?  Even better, if you do so, you can then
+deliver to your eventual customer an example of a software device driver that
+is known to work with your design.</p>
+
+<p>I didn’t place a CPU into our test bench for several reasons, most of the
+dominated by time.  Remember, the goal was to do this quickly and I was late
+the moment the design process began.  On the other hand, if I were to place a
+<a href="/about/zipcpu.html">ZipCPU</a>
+in place of the external test bench, then it should be possible to do exactly
+that: run software instead of Verilog to exercise the design by issuing
+appropriate bus commands.  Even better, the
+<a href="/about/zipcpu.html">ZipCPU</a>
+might issue commands more aggressively than the AXI VIP I was using might.</p>
+
+<p>This is now my goal for the second phase of this project.  In order to make
+this happen, the
+<a href="/about/zipcpu.html">ZipCPU</a> has <a href="https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/zipcore.v">now been re-made to be
+bus-independent</a>.  The <a href="https://github.com/ZipCPU/zipcpu/tree/zipcore">new version</a>
+now has an <a href="https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/axilfetch.v">AXI-lite
+prefetch</a>,
+and an <a href="https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/axilops.v">AXI-lite memory
+module</a>.
+There’s even an <a href="https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/axiicache.v">AXI4 (not lite) instruction
+cache</a>.
+These interfaces should all handle bus widths of 32-bits or greater–they’re
+nicely configurable in that fashion.  Moreover, the debugging register
+interface is being redesigned, and the <a href="https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/zipaxil.v">ZipCPU
+wrapper</a>
+is getting formally verified for the first time.</p>
+
+<p>What about the bus?  I normally work with
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>, although
+I’ve done a lot of <a href="https://github.com/ZipCPU/wb2axip">recent work with AXI4</a>.
+Better yet, I now have a <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axi32axi.v">converter from AXI3 to
+AXI4</a>.  This
+particular design will require an AXI bus that’s at least 64-bits wide to
+avoid slowing the interface down.  That means my <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging
+bus</a> will need to be
+converted from 32-bits wide to 64-bits.  <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilupsz.v">That converter is now
+complete</a>.
+(It’s not the high-speed AXI4 converter I wanted to build and even started
+working on, but rather a basic AXI4-<em>lite</em> bus width converter.)
+Indeed, the <a href="https://github.com/ZipCPU/dbgbus">debugging bus
+itself</a> now has an AXI4 back end as well.
+(I used that for my last project.) I actually have two such back ends, one
+that supports burst interactions and <a href="https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexecaxi.v">another that supports AXI4-lite
+alone</a>,
+but that’s a bit off topic.</p>
+
+<p>On top of all of that, <a href="https://github.com/ZipCPU/autofpga">AutoFPGA</a>
+was more than happy to build and connect an AXI4 bus model for me.  I can
+easily connect one (or more) <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axidma.v">AXI4
+DMA</a>’s to this bus
+for simulation purposes–which will likely come in very handy soon enough.
+I can also cheaply connect an arbitrarily sized
+<a href="/blog/2019/05/29/demoaxi.html">AXI4 based memory</a> for the
+CPU to run off of as well.  That makes that portion of the design easy.</p>
+
+<p>There’s still work to be done, however.  In particular, I’m missing two critical
+components.  The first is an AXI4 downsizer that will take a request from AXI4
+and convert it to an AXI4-lite request at a smaller bus width.  This component
+has now been drafted, although it’s not yet passing a formal check.  (i.e.
+there are known, serious, and significant bugs still within it–hence why I
+haven’t yet posted my draft of the logic.) The second big item to handle is the <a href="/blog/2020/01/13/reuse.html">big endian versus little endian
+issue</a>.
+As you may recall, the <a href="/doc/axi-spec.pdf">AXI4 bus</a> is by
+nature little endian, whereas the <a href="/about/zipcpu.html">ZipCPU</a>
+is naturally a big-endian machine.  I haven’t (yet)
+decided how exactly I’m going to handle the difference.  The new AXI4 bus
+interfaces do have a byte-swapping hack that might be sufficient.
+Alternatively, I might just create a little endian version of the tools: GCC
+and binutils.  Time will tell what solution I eventually come up with.</p>
+
+<h2 id="conclusions">Conclusions</h2>
+
+<p>When moving from FPGA to ASIC design, a lot of things changed.  Sure, a lot
+of things stayed the same: I was still designing with Verilog, I was still
+using formal methods and simulations, it’s just that, well, it was quite
+different.  This was one of the things I was hoping to experience.</p>
+
+<p>One of the reasons why I was so interested in learning ASIC design was to see
+what kind of impact formal methods might have on the ASIC design process.  Those
+who know me know that I am a strong proponent of formal methods.  I have been
+ever since I started finding bugs in my designs that weren’t getting found
+in simulation.  So when I started this project, I wanted to know if formal
+methods would help or not, or to what extent they might help.</p>
+
+<p>Now that I’ve gotten this far into the project, I can safely say that none of
+my formally verified logic contributed to any of the faults discovered late
+in the design process.  Well, that’s not quite true, the change log indicates
+two late changes in pieces that had been formally verified.  One one case, I
+had a timeout counter to check for the presence of a clock and then never
+wrote any properties to make sure that counter worked.  That rest of that
+module was formally verified, even though that register wasn’t.  In another
+example, I had built a calibration logic controller to the wrong specification.
+Yes, it was verified, but it was verified that it would do the wrong thing.
+As for the other faults, let’s see … one was caused by an “obvious” 34-line
+design that was made in haste to alleviate a timing problem with my original
+implementation.  This had a consequence that wasn’t quite thought through.
+In particular, it required a clock from a discontinuous ….  Another fault
+was caused by incorrectly setting a reset value–that fault caused a startup
+glitch, but was otherwise innocuous.</p>
+
+<p>Another place the formal tools really helped me was within the slow logic side
+of the design.  There, I used formal tools extensively as I first studied
+and then rewrote several critical design components.  Indeed, I found it very
+valuable to know, for example, that I would only ever request the number of
+bytes to be transferred that were appropriate, or that various subtle timing
+delays were implemented as desired.</p>
+
+<table align="center" style="float: right"><tr><td><img src="/img/asic-lsns/my-own-hurt.svg" alt="" width="560" /></td></tr></table>
+
+<p>I can also safely say that I vastly underestimated the cost for this work.
+This has left me considering Psalm 15, and the man who “sweareth to his own
+hurt and changeth not.”  Having agreed to one price for the project, I have
+not adjusted it–even though the project has taken far longer than I was
+expecting.  Perhaps I’ll do a better job estimating the number of hours
+the next time as a result of completing this project today.  In the mean time,
+let’s just say that I’ve covered the cost of this cost overrun with an internal
+research and development (IRAD) fund.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>For my thoughts are not your thoughts, neither are your ways my ways, saith the LORD.  For as the heavens are higher than the earth, so are my ways higher than your ways, and my thoughts than your thoughts.  (Is 55:8-9)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
