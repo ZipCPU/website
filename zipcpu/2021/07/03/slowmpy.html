@@ -1,0 +1,1247 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Building a Better Verilog Multiply for the ZipCPU</title>
+  <meta name="description" content="One of the basic purposes of FPGAs is to run algorithms, and to run them fast.You know, those serious number crunching applications.  While it’s not the only...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/zipcpu/2021/07/03/slowmpy.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Building a Better Verilog Multiply for the ZipCPU</h1>
+    <p class="post-meta"><time datetime="2021-07-03T00:00:00-04:00" itemprop="datePublished">Jul 3, 2021</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>One of the basic purposes of FPGAs is to run algorithms, and to run them fast.
+You know, those serious number crunching applications.  While it’s not the only
+purpose, number crunching is certainly one of the basic ones.  Many modern
+mathematical algorithms, such as my favorite DSP filtering algorithms, all
+require multiplies.  Indeed, I might argue that all of the good signal
+processing algorithms require multiplies:
+<a href="/dsp/2018/01/16/interpolation-is-convolution.html">interpolators</a>,
+<a href="/dsp/2017/12/30/slowfil.html">filters</a>, <a href="/dsp/2018/10/02/fft.html">Fourier
+transforms</a>, Gain control,
+control systems, and more.  All of these FPGA algorithms require multiplies.</p>
+
+<p>Want to build your own CPU?  If you build anything more than a basic CPU,
+you’ll want to implement a multiply.</p>
+
+<p>Here’s the bad news: Multiplies are hard to do in hardware.</p>
+
+<p>The good news?  Several FPGAs, such as many of the Xilinx and Intel FPGAs, all
+contain a limited number of multiply units, often called DSPs for short,
+internal to their fabric.  For these FPGAs, performing a multiply is as
+simple as</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">ce</span><span class="p">)</span>
+		<span class="n">result</span> <span class="o">&lt;=</span> <span class="n">in_one</span> <span class="o">*</span> <span class="n">in_two</span><span class="p">;</span></code></pre></figure>
+
+<p>If you have enough of these multiplies on your FPGA, you need not read any
+further.</p>
+
+<p>If you don’t have enough of these multiplies, then you can often multiplex
+two or more multiplies together to use only one DSP.  If this works for you,
+life is good.  You need not read any further.</p>
+
+<p>However, what if you are building a design for an FPGA that doesn’t have any
+hardware accelerated multiplies within it?  Perhaps you are building for
+an ICO board or a <a href="https://tinyfpga.com">TinyFPGA BX</a>.  If this is the case,
+you’ll need to know how to build a multiply that not only uses a minimum of
+logic, but also one that doesn’t seriously <a href="/blog/2017/09/18/clocks-for-sw-engineers.html">slow down your clock
+frequency</a>.</p>
+
+<p>Let’s examine how we might do this.</p>
+
+<h2 id="long-multiplication">Long Multiplication</h2>
+
+<p>If you look up how to perform a <a href="https://en.wikipedia.org/wiki/Binary_multiplier">binary multiply on
+wikipedia</a>, you’ll find
+some very fascinating references to
+<a href="https://en.wikipedia.org/wiki/Wallace_tree">Wallace trees</a>, <a href="https://en.wikipedia.org/wiki/Kochanski_multiplication">Kochanski
+multiplication</a> and
+<a href="https://en.wikipedia.org/wiki/Booth's_multiplication_algorithm">Booth multipliers</a>.
+With a little more digging, you can find <a href="https://en.wikipedia.org/wiki/Multiplication">Wikipedia’s article on
+Multiplication</a>, <a href="https://en.wikipedia.org/wiki/Multiplication_algorithm">Multiplication
+algorithms</a>, long
+multiplication, <a href="https://en.wikipedia.org/wiki/Lattice_multiplication">Lattice
+multiplication</a>, <a href="https://en.wikipedia.org/wiki/Ancient_Egyptian_multiplication">Peasant
+multiplication</a>, 
+<a href="https://en.wikipedia.org/wiki/Karatsuba_algorithm">Karatsuba’s algorithm</a>
+and even Fourier transform methods of doing multiplication!
+For our purpose today, let’s start with a simple shift-and-add multiplier,
+and then we’ll decrease its cost by a factor of two.</p>
+
+<p>If you’ve never heard the term “shift-and-add multiplier”, then relax.  It’s
+the same basic long division algorithm that you learned in grade school,
+only this time we are going to accomplish it using <a href="https://en.wikipedia.org/wiki/Binary_number">binary
+numbers</a>.  The algorithm itself
+is straight forward.  Imagine you had two six-bit numbers, <code class="language-plaintext highlighter-rouge">a</code> and <code class="language-plaintext highlighter-rouge">b</code>, that
+you wanted to multiply together.  You’d start by walking through all of the
+digits (i.e. bits) in <code class="language-plaintext highlighter-rouge">b</code>, from the least to the greatest.  If the digit is a
+<code class="language-plaintext highlighter-rouge">1</code>, you’ll copy <code class="language-plaintext highlighter-rouge">a</code> to a table, only shifting it by the position within b.</p>
+
+<p>Perhaps this sounds harder than it is.  Here’s a figure showing what I’m
+talking about.</p>
+
+<table align="center" style="float: right"><caption>Fig 1: A Basic 6x6-bit Multiply</caption><tr><td><img src="/img/slowmpy/slowmpy-tableau.svg" alt="" width="360" />&lt;/A&gt;</td></tr></table>
+
+<p>In this figure, the six <code class="language-plaintext highlighter-rouge">p0*</code> digits represent the multiplication of
+<code class="language-plaintext highlighter-rouge">a</code> by <code class="language-plaintext highlighter-rouge">b0</code>.  If <code class="language-plaintext highlighter-rouge">b0</code> is <code class="language-plaintext highlighter-rouge">1</code>, <code class="language-plaintext highlighter-rouge">p0*</code> will be equal to <code class="language-plaintext highlighter-rouge">a</code> otherwise zero.
+The six <code class="language-plaintext highlighter-rouge">p1*</code> digits represent multiplication of <code class="language-plaintext highlighter-rouge">a</code> by <code class="language-plaintext highlighter-rouge">b1</code>.  If <code class="language-plaintext highlighter-rouge">b1</code> is
+<code class="language-plaintext highlighter-rouge">1</code>, <code class="language-plaintext highlighter-rouge">p1*</code> will be equal to <code class="language-plaintext highlighter-rouge">a</code>.  Notice from the figure, though, that the
+<code class="language-plaintext highlighter-rouge">p1*</code> row is shifted left from the <code class="language-plaintext highlighter-rouge">p0*</code> row.  <code class="language-plaintext highlighter-rouge">p2*</code> is calculated the
+same way, only it gets shifted over one more column and so forth.</p>
+
+<p>Again, this should look very much like the long-multiplication algorithm
+you are already familiar with, with the only difference being that we’re
+now looking at binary digits instead of decimal ones.</p>
+
+<p>Once all the partial product rows, that is the <code class="language-plaintext highlighter-rouge">pnm</code> rows, where <code class="language-plaintext highlighter-rouge">n</code> is the
+row number and <code class="language-plaintext highlighter-rouge">m</code> is the position within the row, have been generated they
+are all then added together to yield a result.</p>
+
+<p>This is a basic “shift-and-add” multiplication algorithm.  We’ve taken <code class="language-plaintext highlighter-rouge">a</code>,
+and shifted it to the left one bit (digit) at a time, and added it to our
+result accumulator any time the respective bit in <code class="language-plaintext highlighter-rouge">b</code> was a <code class="language-plaintext highlighter-rouge">1</code>.</p>
+
+<p>If this still sounds confusing, let me try explaining this idea one more time.
+In C++ code, this multiply might look like:</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="kt">unsigned</span> <span class="nf">multiply</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">a</span><span class="p">,</span> <span class="kt">unsigned</span> <span class="n">b</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">unsigned</span> <span class="n">acc</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+	<span class="k">for</span><span class="p">(</span><span class="kt">unsigned</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">NBITS</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">acc</span> <span class="o">+=</span> <span class="p">(</span><span class="n">b</span><span class="o">&amp;</span><span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">k</span><span class="p">))</span> <span class="o">?</span> <span class="n">a</span><span class="o">&lt;&lt;</span><span class="n">k</span> <span class="o">:</span> <span class="mi">0</span><span class="p">;</span>
+
+	<span class="k">return</span> <span class="n">acc</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>Signed multiplication will take a bit more work, so let’s just focus on
+unsigned multiplication for now.</p>
+
+<p>This form of multiplication makes sense.  It’s nearly the same as the
+multiplication we all learned in grade school, modified only for binary
+arithmetic.  Indeed, it’s easy to implement in Verilog, where the core of
+the basic algorithm will look something like:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_busy</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">count</span>   <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">result</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">p_a</span>     <span class="o">&lt;=</span> <span class="n">i_a</span><span class="p">;</span>
+		<span class="n">p_b</span>     <span class="o">&lt;=</span> <span class="n">i_b</span><span class="p">;</span>
+		<span class="n">o_busy</span>  <span class="o">&lt;=</span> <span class="n">i_stb</span><span class="p">;</span> <span class="c1">// A multiply request</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">p_b</span><span class="p">[</span><span class="n">count</span><span class="p">])</span>
+			<span class="n">result</span>  <span class="o">&lt;=</span> <span class="n">result</span>  <span class="o">+</span> <span class="p">(</span><span class="n">p_a</span> <span class="o">&lt;&lt;</span> <span class="n">count</span><span class="p">);</span>
+		<span class="n">count</span> <span class="o">&lt;=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">o_busy</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">count</span> <span class="o">&lt;</span> <span class="mi">31</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Sadly, this is a really inefficient implementation.  If you count the LUT4s
+used on an iCE40, you’ll get 307 LUT4s required to implement a 32x32 bit
+multiply.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">   Number of cells:                507
+     SB_CARRY                       66
+     SB_DFF                          1
+     SB_DFFE                        64
+     SB_DFFESR                      65
+     SB_DFFSR                        4
+     SB_LUT4                       307</code></pre></figure>
+
+<p>Part of the reason why this multiplication implementation is so expensive
+can be seen by evaluating the logic for each bit in <code class="language-plaintext highlighter-rouge">result</code>.</p>
+
+<ol>
+  <li>The bit must be reset on <code class="language-plaintext highlighter-rouge">!o_busy</code>.</li>
+  <li>The next step depends upon <code class="language-plaintext highlighter-rouge">p_b[count]</code>.  Calculating this value requires
+a multiplexer.  For 32-bits, thats a 32-bit mux–costing many LUT4s to
+accomplish.</li>
+  <li>If the result of this multiplexer is one, we’ll then add to this bit the
+result of another multiplexer applied to <code class="language-plaintext highlighter-rouge">p_b</code> plus a carry bit.</li>
+</ol>
+
+<p>That’s a lot of 32-bit multiplexers, especially since this logic needs to be
+repeated all 64-bits in the accumulator.</p>
+
+<p>How much does a 32-bit multiplexer cost?  Let’s find out.  Let’s take this
+<a href="examples/mux32.v">little snippet of code</a>,</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span> <span class="n">mux32</span><span class="p">(</span><span class="n">i_bit</span><span class="p">,</span> <span class="n">i_val</span><span class="p">,</span> <span class="n">o_r</span><span class="p">);</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="mi">4</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_bit</span><span class="p">;</span>
+	<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="mi">31</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_val</span><span class="p">;</span>
+	<span class="kt">output</span>	<span class="kt">wire</span>		<span class="n">o_r</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="n">o_r</span> <span class="o">=</span> <span class="n">i_val</span><span class="p">[</span><span class="n">i_bit</span><span class="p">];</span>
+<span class="k">endmodule</span></code></pre></figure>
+
+<p>and run Yosys on it.  With just the three commands, <code class="language-plaintext highlighter-rouge">read_verilog mux32.v</code>,
+<code class="language-plaintext highlighter-rouge">synth_ice40</code>, and then <code class="language-plaintext highlighter-rouge">stat</code>, yosys reveals that this design costs us
+25 LUT4s.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">   <span class="n">Number</span> <span class="n">of</span> <span class="n">cells</span><span class="o">:</span>                 <span class="mi">25</span>
+     <span class="n">SB_LUT4</span>                        <span class="mi">25</span></code></pre></figure>
+
+<p>Now consider that we are applying this 32-mux to not only <code class="language-plaintext highlighter-rouge">p_b[count]</code>,
+but also to <a href="/examples/shift32.v"><em>every single bit of <code class="language-plaintext highlighter-rouge">p_a</code></em> by evaluating
+<code class="language-plaintext highlighter-rouge">p_a &lt;&lt; count</code></a>.  A quick run of Yosys
+reveals the shift alone will cost us 209 LUT4s in total.  That’s expensive.</p>
+
+<p>Suppose we removed these LUT4s.  For example, we could shift <code class="language-plaintext highlighter-rouge">p_a</code> and <code class="language-plaintext highlighter-rouge">p_b</code>
+on each round so that <code class="language-plaintext highlighter-rouge">p_a</code> was always the upshifted verion of <code class="language-plaintext highlighter-rouge">a</code> and
+<code class="language-plaintext highlighter-rouge">p_b[0]</code> always contained the <code class="language-plaintext highlighter-rouge">count</code> bit from our input <code class="language-plaintext highlighter-rouge">b</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_busy</span><span class="p">)</span>
+		<span class="c1">// No changes here</span>
+	<span class="k">else</span> <span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">p_b</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+			<span class="n">result</span>  <span class="o">&lt;=</span> <span class="n">result</span>  <span class="o">+</span> <span class="n">p_a</span><span class="p">;</span>
+		<span class="n">p_a</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">p_a</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">);</span>
+		<span class="n">p_b</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">p_b</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">);</span>
+		<span class="n">count</span> <span class="o">&lt;=</span> <span class="n">count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">o_busy</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">count</span> <span class="o">&lt;</span> <span class="mi">31</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This gets us from <code class="language-plaintext highlighter-rouge">307</code> LUT4s down to <code class="language-plaintext highlighter-rouge">141</code> LUT4s.  This is a nice 54%
+improvement.</p>
+
+<p>We can do even better.</p>
+
+<h2 id="a-better-multiplication">A Better Multiplication</h2>
+
+<p>What keeps us from simplifying this initial shift-add-multiply algorithm
+is the 64-bit addition (assuming we are multiplying two 32x32 bit numbers).
+This addition is something of a waste, since if you look at Fig 1., you’ll
+notice we are never adding more than 32-bits at a time.  Every line in our
+long multiplication accumulation table includes some fixed number of
+least-significant bits that aren’t changing, as well as some number of more
+significant bits that remain at zero.  Sure, the 32-bits we are adding slowly
+move across our accumulator, but it’s never using any more than 32-bits of
+that 64-bit accumulator.</p>
+
+<p>Why should we be paying for all the logic it takes to add nothing?</p>
+
+<p>What if we instead shifted our accumulator register to the right, so that
+we were always adding to the same physical 32-bits?  Then, after
+every add, we’d shift one accumulator bit off to the right.  So, instead of
+shifting <code class="language-plaintext highlighter-rouge">p_b</code> left on every step as we did above, we’ll <em>shift the <code class="language-plaintext highlighter-rouge">result</code>
+accumulator to the right on every step</em>.</p>
+
+<p>Let’s work though what this might look like.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_busy</span><span class="p">)</span>
+		<span class="c1">// Skip this for now</span>
+	<span class="k">else</span> <span class="k">begin</span>
+		<span class="n">p_b</span> <span class="o">&lt;=</span> <span class="n">p_b</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="c1">// Shift our last result to the right</span>
+		<span class="c1">//   NB is the number of bits in either p_a or p_b</span>
+		<span class="n">result</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">1</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span>
+		<span class="c1">// Now add in the high bits only</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">p_b</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+			<span class="n">result</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="p">]</span><span class="o">}</span> <span class="o">+</span> <span class="n">p_a</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Let’s walk through this slowly.</p>
+
+<ol>
+  <li>
+    <p>First, we are shifting <code class="language-plaintext highlighter-rouge">p_b</code> to the right on every clock tick.  This gives
+us access to the next bit of <code class="language-plaintext highlighter-rouge">p_b</code> at every clock tick.  Unlike our first
+approach, we don’t need a multiplexer to find the correct bit within
+<code class="language-plaintext highlighter-rouge">p_b</code>–it’s always going to be bit zero.</p>
+
+    <p>This is essentially what we did in our “better” algorithm above.</p>
+  </li>
+  <li>
+    <p>Next, we shift our partial sum to the right.  By itself, this is essentially
+a no-cost operation.  Sure, it costs us some flip-flops, 64 to be
+exact–but we had to use those anyway.  What’s different is that once these
+bits are shifted, there’s no more logic used to generate them: no 32-bit
+multiplexers, no adds, nothing–just a basic shift.</p>
+  </li>
+  <li>
+    <p>We then add <code class="language-plaintext highlighter-rouge">p_a</code> to the upper <code class="language-plaintext highlighter-rouge">32</code> bits, the <em>active</em> bits, of our
+result accumulator.</p>
+  </li>
+</ol>
+
+<p>That’s it.  All we’ve done is move the bits we are accumulating to the right
+as we do our summation.  Now, consider this from the perspective of the
+bits in the result:</p>
+
+<ol>
+  <li>
+    <p>For the lower 32-bits, we only need a single LUT4: on <code class="language-plaintext highlighter-rouge">!o_busy</code> we set
+them to zero, otherwise they are set based upon the bit to the left of them.</p>
+
+    <p>That’s simple.</p>
+  </li>
+  <li>
+    <p>For the upper 32-bits, we perform an addition.  In every case, the
+addition is from the bit to the left plus a corresponding bit from
+<code class="language-plaintext highlighter-rouge">p_a</code>, plus a carry.  Let’s <a href="/blog/2017/06/12/minimizing-luts.html">count those
+inputs</a>: 1) the
+carry, 2) the previous bit, 3) a bit from <code class="language-plaintext highlighter-rouge">p_a</code>, and 4) <code class="language-plaintext highlighter-rouge">p_b[0]</code> which
+determines whether we’ll add or not.</p>
+
+    <p>At this alone, it looks like it fits within a single LUT4.</p>
+
+    <p>It doesn’t.  Don’t forget that we need to set our value to zero if
+<code class="language-plaintext highlighter-rouge">!o_busy</code>, and we also need to calculate a carry bit, but it at least comes
+close.</p>
+  </li>
+</ol>
+
+<p>How much does this logic require per bit to calculate?  Let’s find out.
+In this case, we can use another very simple Verilog file and run Yosys again
+using essentially the same two commands.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="n">module</span> <span class="nf">add2</span><span class="p">(</span><span class="n">i_busy</span><span class="p">,</span> <span class="n">i_a</span><span class="p">,</span> <span class="n">i_b</span><span class="p">,</span> <span class="n">i_c</span><span class="p">,</span> <span class="n">i_s</span><span class="p">,</span> <span class="n">o_r</span><span class="p">,</span> <span class="n">o_c</span><span class="p">);</span>
+	<span class="n">input</span>	<span class="n">wire</span>	<span class="n">i_busy</span><span class="p">,</span> <span class="n">i_a</span><span class="p">,</span> <span class="n">i_b</span><span class="p">,</span> <span class="n">i_c</span><span class="p">,</span> <span class="n">i_s</span><span class="p">;</span>
+	<span class="n">output</span>	<span class="n">reg</span>	<span class="n">o_r</span><span class="p">,</span> <span class="n">o_c</span><span class="p">;</span>
+
+	<span class="n">always</span> <span class="err">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_busy</span><span class="p">)</span>
+		<span class="p">{</span> <span class="n">o_c</span><span class="p">,</span> <span class="n">o_r</span> <span class="p">}</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="nf">if</span> <span class="p">(</span><span class="n">i_s</span><span class="p">)</span>
+		<span class="p">{</span> <span class="n">o_c</span><span class="p">,</span> <span class="n">o_r</span> <span class="p">}</span> <span class="o">=</span> <span class="n">i_a</span> <span class="o">+</span> <span class="n">i_b</span> <span class="o">+</span> <span class="n">i_c</span><span class="p">;</span>
+	<span class="k">else</span>
+		<span class="p">{</span> <span class="n">o_c</span><span class="p">,</span> <span class="n">o_r</span> <span class="p">}</span> <span class="o">=</span> <span class="n">i_a</span> <span class="o">+</span> <span class="n">i_c</span><span class="p">;</span>
+<span class="n">endmodule</span></code></pre></figure>
+
+<p>In this case, we use only 4 LUT4s per-bit.</p>
+
+<p>Has our algorithm really changed?  Not really.  In many ways this is the same
+identical algorithm we had before.  We’re still doing a shift-and-add multiply.
+The big difference now is that we are shifting our result register, rather
+than our input multiplicand.</p>
+
+<p>Even better, since we are no longer using the entire 64-bit accumulator
+in this modified 32x32-bit multiply, our carry chain just got shorter by
+a factor of two.  Perhaps this multiplier is faster?</p>
+
+<p>Let’s take a look at the cost of this algorithm.  Remember how the algorithm
+cost <code class="language-plaintext highlighter-rouge">141</code> LUTs before?  We’re now are down to <code class="language-plaintext highlighter-rouge">112</code> LUT4s.</p>
+
+<p>Not bad.</p>
+
+<h2 id="twos-complement">Twos Complement</h2>
+
+<p>When I built my first soft-multiply in Verilog, I didn’t know how to handle
+twos complement numbers.  My approach was instead to take the absolute
+magnitude of both inputs, record the incoming signs, multiply the two
+unsigned numbers, and then negate the result if necessary.  This is painful.
+A basic NxN shift-add multiply requires <code class="language-plaintext highlighter-rouge">N</code> clocks, whereas this signed
+multiply cost <code class="language-plaintext highlighter-rouge">N+2</code> clocks.</p>
+
+<p>Then I found this <a href="https://en.wikipedia.org/wiki/Binary_multiplier">wikipedia
+page</a>.  According to the
+page, I can adjust my original algorithm with some simple adjustments
+and get twos complement multiplication.  Here’s what the adjustments look
+like:</p>
+
+<table align="center" style="float: right"><caption>Fig 1: Two's complement multiplication</caption><tr><td><img src="/img/slowmpy/slowmpy-tableau-twos.svg" alt="" width="360" />&lt;/A&gt;</td></tr></table>
+
+<p>Wow, that’s easy, I can do that!  Even better, since it (almost) follows
+from the same long-multiply structure as before, I don’t need to change
+my algorithm (much).</p>
+
+<p>Ok, it’s not quite as straightforward as it looks.  I had a bit of a
+misunderstanding implementing it at first.  Specifically, if <code class="language-plaintext highlighter-rouge">p_b[0]</code> is
+zero, the corresponding row is no longer zero.  Even if you include
+the <code class="language-plaintext highlighter-rouge">1</code> in the first row, if <code class="language-plaintext highlighter-rouge">p_b[0]==0</code> then <code class="language-plaintext highlighter-rouge">p05</code> is zero and <code class="language-plaintext highlighter-rouge">!p05</code>
+is <em>ONE</em>.</p>
+
+<p>This was my first “discovery” while attempting to implement this algorithm.
+My next discovery really dampened my thoughts on this.</p>
+
+<p>See, what <a href="https://en.wikipedia.org/wiki/Binary_multiplier">the wikipedia page</a>
+doesn’t tell you is that the algorithm <em>only works on an NxN multiplier</em>.
+It doesn’t work on an <code class="language-plaintext highlighter-rouge">NxM</code> multiplier where <code class="language-plaintext highlighter-rouge">N != M</code>.  When I first
+discovered this, I felt so burned I actually edited the 
+<a href="https://en.wikipedia.org/wiki/Binary_multiplier">Wikipedia page</a> to note
+this fact.</p>
+
+<p>Someone removed my edits later.  Who knows why.  Maybe it’s been edited again
+since, I haven’t looked in a while.</p>
+
+<p>I’ve since tried to rederive the result shown in Fig 2.  After all my work,
+all I can tell you now is that I know it works.  I had been hoping to
+rederive it in order to know how to modify it so that it applies to a
+generic <code class="language-plaintext highlighter-rouge">NxM</code> multiply.</p>
+
+<p>I have yet to be successful, and not for a lack of trying.</p>
+
+<p>Sorry, this part of the story doesn’t (yet) have a happy ending (yet–I’m still
+hoping).  I may need to come back and discuss this again later, but for now
+I’m simply accepting this <a href="https://en.wikipedia.org/wiki/Binary_multiplier">two’s complement
+multiplication</a>
+approach as something that “just works”.  I’ve also had to file it under the
+“I’m not really sure why this works” file.</p>
+
+<p>Feel free to verify it with me, and double-check my own work on this.</p>
+
+<p>For now, let’s just add an <code class="language-plaintext highlighter-rouge">OPT_SIGNED</code> parameter to our multiply,
+and adjust our algorithm for both signed and unsigned.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="c1">// Just to keep the notation easier, let's do our one-bit</span>
+	<span class="c1">// multiply outside of our always block</span>
+	<span class="k">assign</span>	<span class="n">pwire</span> <span class="o">=</span> <span class="n">p_b</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">?</span> <span class="n">p_a</span> <span class="o">:</span> <span class="mi">0</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_busy</span><span class="p">)</span>
+		<span class="c1">// We'll come back to this</span>
+	<span class="k">else</span> <span class="k">begin</span>
+		<span class="c1">// This should look familiar: shift b to the right to get</span>
+		<span class="c1">// the bit to multiply by</span>
+		<span class="n">p_b</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">p_b</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">);</span>
+
+		<span class="c1">// Here's the right shift</span>
+		<span class="n">partial</span><span class="p">[</span><span class="n">NB</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">partial</span><span class="p">[</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">1</span><span class="p">];</span>
+
+		<span class="c1">// On the last add, we need to negate all the bits</span>
+		<span class="c1">// This is shown by the last row in Fig. 2 above.</span>
+		<span class="c1">//</span>
+		<span class="c1">//   Notice the right-shift is still within here</span>
+		<span class="k">if</span> <span class="p">((</span><span class="n">OPT_SIGNED</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">pre_done</span><span class="p">))</span>
+			<span class="n">partial</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">partial</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="p">]</span><span class="o">}</span> <span class="o">+</span>
+				<span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">pwire</span><span class="p">[</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="o">~</span><span class="n">pwire</span><span class="p">[</span><span class="n">NB</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span>
+
+		<span class="c1">// Otherwise in general we flip the top bit of our</span>
+		<span class="c1">// multiply result</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SIGNED</span><span class="p">)</span>
+			<span class="n">partial</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="mb">1'b0</span><span class="p">,</span><span class="n">partial</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="p">]</span><span class="o">}</span> <span class="o">+</span>
+				<span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="o">!</span><span class="n">pwire</span><span class="p">[</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">pwire</span><span class="p">[</span><span class="n">NA</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span>
+		<span class="c1">//</span>
+		<span class="c1">// If OPT_SIGNED isn't true, then this is just an ordinary</span>
+		<span class="c1">// add, as we've discussed above</span>
+		<span class="k">else</span>
+			<span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="mb">1'b0</span><span class="p">,</span> <span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="p">]</span><span class="o">}</span>
+				<span class="o">+</span> <span class="p">((</span><span class="n">p_b</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">?</span> <span class="o">{</span><span class="mb">1'b0</span><span class="p">,</span><span class="n">p_a</span><span class="o">}</span> <span class="o">:</span> <span class="mi">0</span><span class="p">);</span>
+		<span class="c1">// ...</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>A second block then adds the two <code class="language-plaintext highlighter-rouge">1</code>s to our partial product in order to
+create the result.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">almost_done</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Create our output product</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">OPT_SIGNED</span><span class="p">)</span>
+			<span class="n">o_p</span>   <span class="o">&lt;=</span> <span class="n">partial</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>
+				<span class="o">+</span> <span class="o">{</span><span class="mb">1'b1</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span><span class="p">,</span><span class="mb">1'b1</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NB</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}}</span><span class="p">;</span>
+		<span class="k">else</span>
+			<span class="n">o_p</span>   <span class="o">&lt;=</span> <span class="n">partial</span><span class="p">[</span><span class="mi">2</span><span class="o">*</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">];</span>
+		<span class="c1">// ...</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This is now the algorithm that we’ll implement below.  At <code class="language-plaintext highlighter-rouge">243</code> LUT4s it’s not
+nearly as good as the <code class="language-plaintext highlighter-rouge">112</code> LUT4 option from the last section, so I may yet
+need to come back and “optimize” this
+<a href="https://en.wikipedia.org/wiki/Twos_complement">twos complement</a>
+implementation again.  Indeed, it’s worse than that since it feels like I just
+slapped a twos-complement band-aid onto an awesome algorithm.</p>
+
+<p>Yes, I will need to come back and optimize this signed option.  For now,
+the algorithm has an awesome LUT usage count for <em>unsigned</em> multiplication.</p>
+
+<h2 id="source-code">Source code</h2>
+
+<p>Now that you know the algorithm, it’s time to start taking a look at
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/slowmpy.v">the source
+code</a>
+we’ll be using to implement in.</p>
+
+<p>In many ways, the ports are much like what you’d expect, there’s a clock and
+a reset line, an <code class="language-plaintext highlighter-rouge">i_stb</code> line to request that a multiply be accomplished,
+and an <code class="language-plaintext highlighter-rouge">o_busy</code> to say the process is on going.  I’ve also added <code class="language-plaintext highlighter-rouge">o_done</code>,
+a signal which will be high on the first clock the output is available.
+The basic multiply operands themselves involve inputs <code class="language-plaintext highlighter-rouge">i_a</code> and <code class="language-plaintext highlighter-rouge">i_b</code>, with
+the output <code class="language-plaintext highlighter-rouge">o_p</code> (product).  <code class="language-plaintext highlighter-rouge">i_aux</code> is just an auxiliary bit that will be
+kept with the data, and returned (unchanged) with the product.  This will
+make a <a href="/blog/2017/08/14/strategies-for-pipelining.html">traveling valid pipeline
+signal</a>
+possible if desired.</p>
+
+<p>Ideally, I’d like <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/slowmpy.v">this
+multiply</a>
+to work on <code class="language-plaintext highlighter-rouge">NA</code> bits from <code class="language-plaintext highlighter-rouge">i_a</code> times <code class="language-plaintext highlighter-rouge">NB</code> bits from <code class="language-plaintext highlighter-rouge">i_b</code>, but like I’ve
+said before, I have yet to figure out how to extend this generic approach
+to dissimilar bit widths.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span>	<span class="n">slowmpy</span> <span class="p">#(</span>
+		<span class="k">parameter</span>			<span class="n">LGNA</span> <span class="o">=</span> <span class="mi">6</span><span class="p">,</span>
+		<span class="k">parameter</span>	<span class="p">[</span><span class="n">LGNA</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">NA</span> <span class="o">=</span> <span class="mi">33</span><span class="p">,</span>
+		<span class="k">parameter</span>	<span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>		<span class="n">OPT_SIGNED</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="p">,</span>
+		<span class="k">localparam</span>	<span class="n">NB</span> <span class="o">=</span> <span class="n">NA</span> <span class="c1">// Must be = NA for OPT_SIGNED to work</span>
+	<span class="p">)</span> <span class="p">(</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>				<span class="n">i_clk</span><span class="p">,</span> <span class="n">i_reset</span><span class="p">,</span>
+		<span class="c1">//</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>				<span class="n">i_stb</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>	<span class="kt">signed</span>	<span class="p">[(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_a</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>	<span class="kt">signed</span>	<span class="p">[(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_b</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>				<span class="n">i_aux</span><span class="p">,</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>				<span class="n">o_busy</span><span class="p">,</span> <span class="n">o_done</span><span class="p">,</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>	<span class="kt">signed</span>	<span class="p">[(</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">o_p</span><span class="p">,</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>				<span class="n">o_aux</span>
+	<span class="p">);</span></code></pre></figure>
+
+<p>As you may remember, I dislike reasoning about multiple bits at a time within
+the cascaded if structure of a control loop.  <code class="language-plaintext highlighter-rouge">almost_done</code> helps me avoid this,
+by capturing whether we need to set the <code class="language-plaintext highlighter-rouge">o_done</code> bit on the <em>next</em> cycle.
+Hence, when <code class="language-plaintext highlighter-rouge">almost_done</code> is true, we’ll be on the last cycle of our logic.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">pre_done</span> <span class="o">=</span> <span class="p">(</span><span class="n">count</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="k">initial</span>	<span class="n">almost_done</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">almost_done</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">o_busy</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">pre_done</span><span class="p">);</span></code></pre></figure>
+
+<p>The state machine control variables themselves are <code class="language-plaintext highlighter-rouge">o_done</code> and <code class="language-plaintext highlighter-rouge">o_busy</code>, and
+the logic is shown below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">aux</span>    <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">o_done</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">o_busy</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">aux</span>    <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">o_done</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">o_busy</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_busy</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_done</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="c1">// Start a multiply on i_stb</span>
+		<span class="n">o_busy</span> <span class="o">&lt;=</span> <span class="n">i_stb</span><span class="p">;</span>
+		<span class="n">aux</span>    <span class="o">&lt;=</span> <span class="n">i_aux</span><span class="p">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">o_busy</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">almost_done</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="c1">// Mark the result as complete</span>
+		<span class="n">o_done</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">o_busy</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">end</span> <span class="k">else</span>
+		<span class="c1">// Always clear the done flag on the next cycle</span>
+		<span class="n">o_done</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Fig. 3 below shows how these signals play out in practice.</p>
+
+<table align="center" style="float: none"><caption>Fig 3: The Slow Multiply Handshake</caption><tr><td><a href="/img/slowmpy/handshake.svg"><img src="/img/slowmpy/handshake.svg" alt="" width="480" /></a></td></tr></table>
+
+<p>Here you can see the multiply being requested by <code class="language-plaintext highlighter-rouge">i_stb</code>.  Once the multiply
+unit receives the <code class="language-plaintext highlighter-rouge">i_stb</code> request, it then sets <code class="language-plaintext highlighter-rouge">o_busy</code> high and starts
+counting down it’s cycle from <code class="language-plaintext highlighter-rouge">NA-1</code>.  Once the <code class="language-plaintext highlighter-rouge">count==0</code>, <code class="language-plaintext highlighter-rouge">pre_done</code> becomes
+true, causing the <code class="language-plaintext highlighter-rouge">almost_done</code> signal on the next cycle and <code class="language-plaintext highlighter-rouge">o_done</code> on the
+final cycle.  This clock cycle, with <code class="language-plaintext highlighter-rouge">o_done</code> true and <code class="language-plaintext highlighter-rouge">o_busy</code> false, is the
+first clock cycle when the next request can be made of the core.</p>
+
+<p>The handshaking logic above is separated from the main multiply calculation,
+below, simply because these are the only registers in this algorithm that
+require a reset.  Why generate reset logic if you don’t need it?</p>
+
+<p>The next item of interest is the current partial product. This is the product
+of one of the digits of <code class="language-plaintext highlighter-rouge">i_b</code> with all of <code class="language-plaintext highlighter-rouge">i_a</code>, and should be familiar from
+long division.  We could even write this as <code class="language-plaintext highlighter-rouge">pwire = p_a * p_b[0]</code>.  I want
+to separate this from the logic below, however, because the algorithm above
+requires toggling particular bits in this word.  Separating this into two
+steps seems to make more sense to me.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">pwire</span> <span class="o">=</span> <span class="p">(</span><span class="n">p_b</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">?</span> <span class="n">p_a</span> <span class="o">:</span> <span class="mi">0</span><span class="p">);</span></code></pre></figure>
+
+<p>With all that behind us, it’s now time to <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/slowmpy.v">code up the
+multiply</a>
+proper.</p>
+
+<p>The first step in the multiply is to copy the multiplicands from the input.
+This not only gives us scratch values to work with, but it also allows the
+module feeding us to change these values while we are in the middle of our
+calculation.  All any external logic needs to know, therefore, is that when
+<code class="language-plaintext highlighter-rouge">i_stb &amp;&amp; !o_busy</code> a request is accepted.  New data may then be placed on
+the input ports.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_busy</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">count</span> <span class="o">&lt;=</span> <span class="n">NA</span><span class="p">[</span><span class="n">LGNA</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+		<span class="n">partial</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">p_a</span> <span class="o">&lt;=</span> <span class="n">i_a</span><span class="p">;</span>
+		<span class="n">p_b</span> <span class="o">&lt;=</span> <span class="n">i_b</span><span class="p">;</span></code></pre></figure>
+
+<p>When I first started coding handshakes like this, I’d use the condition of
+<code class="language-plaintext highlighter-rouge">i_stb &amp;&amp; !o_busy</code>.  In many of my designs, such as this one, I’ve dropped the
+check for <code class="language-plaintext highlighter-rouge">i_stb</code>.  If <code class="language-plaintext highlighter-rouge">!i_stb &amp;&amp; !o_busy</code>, the values above are don’t care
+values.  They could be anything.  By dropping the check for <code class="language-plaintext highlighter-rouge">i_stb</code>, the total
+logic for each of these elements simplifies.</p>
+
+<p>However, there’s a power cost every time a flip-flop changes.  By skipping
+the check for <code class="language-plaintext highlighter-rouge">i_stb</code>, we’ve not only lowered our logic but also increased
+our power.  A quick check for <code class="language-plaintext highlighter-rouge">i_stb</code>, but only if we are implementing a low
+power design, and we can keep these extra flip-flops from toggling.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">OPT_LOWPOWER</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_stb</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">count</span> <span class="o">&lt;=</span> <span class="n">NA</span><span class="p">[</span><span class="n">LGNA</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span><span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+			<span class="n">partial</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+			<span class="n">p_a</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+			<span class="n">p_b</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>Now comes the real work, as we cycle through each step of this algorithm.</p>
+
+<p>Now that we are busy, our first task will be to shift <code class="language-plaintext highlighter-rouge">p_b</code>, our copy of the
+second multiplicand, to the right.  That way we can multiply by the next bit
+on the next cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+		<span class="n">p_b</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">p_b</span> <span class="o">&gt;&gt;</span> <span class="mi">1</span><span class="p">);</span></code></pre></figure>
+
+<p>We’re keeping our copy of the partial product in <code class="language-plaintext highlighter-rouge">partial</code>.  Much like the
+pseudo code above, we first shift all of the bits right by one.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">partial</span><span class="p">[</span><span class="n">NB</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">partial</span><span class="p">[</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">1</span><span class="p">];</span></code></pre></figure>
+
+<p>The next action depends upon whether this is a signed multiply or not.</p>
+
+<p>If this is a signed multiply, and if we are on the last row, then we need
+to treat it special, as shown in Fig. 2 above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">((</span><span class="n">OPT_SIGNED</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">pre_done</span><span class="p">))</span>
+			<span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="p">]</span><span class="o">}</span> <span class="o">+</span>
+				<span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="n">pwire</span><span class="p">[</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="o">~</span><span class="n">pwire</span><span class="p">[</span><span class="n">NA</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span></code></pre></figure>
+
+<p>Otherwise, if this is just a normal row for the signed multiply, we add
+<code class="language-plaintext highlighter-rouge">p_b[0]*p_a</code> to our accumulator while negating the high order bit.  Again,
+this follows from Fig. 2 above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SIGNED</span><span class="p">)</span>
+			<span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="mb">1'b0</span><span class="p">,</span><span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="p">]</span><span class="o">}</span> <span class="o">+</span>
+				<span class="o">{</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="o">!</span><span class="n">pwire</span><span class="p">[</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">pwire</span><span class="p">[</span><span class="n">NA</span><span class="o">-</span><span class="mi">2</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span><span class="p">;</span></code></pre></figure>
+
+<p>Finally, we have our example partial product for the case where our operands
+were unsigned.  This is the lowest logic path through the code.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">else</span>
+			<span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="mb">1'b0</span><span class="p">,</span> <span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NB</span><span class="p">]</span><span class="o">}</span>
+				<span class="o">+</span> <span class="n">pwire</span><span class="p">;</span></code></pre></figure>
+
+<p>At each step through this algorithm, we’ll also drop our state machine counter,
+here called <code class="language-plaintext highlighter-rouge">count</code>, by one.  This is the same count used in our state machine
+logic to know when we are done.  This count starts at <code class="language-plaintext highlighter-rouge">NA-1</code> and counts down
+to zero, essentially counting each of the <code class="language-plaintext highlighter-rouge">NA</code> bits of our operands–once
+for each bit in the multiply.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">count</span> <span class="o">&lt;=</span> <span class="n">count</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Right after the clock cycle where <code class="language-plaintext highlighter-rouge">count == 0</code>, we’ll want to copy our data
+to the output.  We’ll also add all of those extra <code class="language-plaintext highlighter-rouge">1</code> bits here in the case
+of the signed product.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">almost_done</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">OPT_SIGNED</span><span class="p">)</span>
+			<span class="n">o_p</span>   <span class="o">&lt;=</span> <span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>
+				<span class="o">+</span> <span class="o">{</span><span class="mb">1'b1</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span><span class="p">,</span><span class="mb">1'b1</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NB</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}}</span><span class="p">;</span>
+		<span class="k">else</span>
+			<span class="n">o_p</span>   <span class="o">&lt;=</span> <span class="n">partial</span><span class="p">[</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">];</span></code></pre></figure>
+
+<p><code class="language-plaintext highlighter-rouge">o_aux</code> is just a copy of what <code class="language-plaintext highlighter-rouge">i_aux</code> was initially.  Here we just complete
+that copy.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">o_aux</span> <span class="o">&lt;=</span> <span class="n">aux</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>While I suppose these output registers could’ve been controlled in the logic
+block before this one, placing them in their own block helps convince me that
+their outputs will only change when the product is complete.</p>
+
+<h2 id="test-bench">Test bench</h2>
+
+<p>If you’ve read this blog much, you’ll know that I love
+<a href="/blog/2017/10/19/formal-intro.html">formal verification</a>,
+and for the last year I’ve tried to formally verify every core I’ve presented
+here.</p>
+
+<p>Not this time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">FORMAL</span>
+	<span class="c1">// We'll skip these</span>
+<span class="cp">`endif</span>
+<span class="k">endmodule</span></code></pre></figure>
+
+<p>Why not?</p>
+
+<p>Because formal verification struggles to handle multiplies.  That’s just one
+of the (current) weaknesses of formal methods.</p>
+
+<p>What does that mean?  “Formal Verification struggles to handle multiplies”?
+It doesn’t mean that you cannot formally describe a multiplication algorithm.
+It doesn’t mean that you cannot create appropriate formal properties.</p>
+
+<p>Perhaps I can explain what I mean best by an example.  I once built a 12x12
+<a href="https://github.com/ZipCPU/fwmpy">multiplication algorithm</a>, and a set of
+formal properties to capture it.  I started the formal proof on a Monday
+morning.  On Tuesday, <a href="http://www.clifford.at">Clifford</a> (who now calls himself
+Claire) warned me that the proof might not finish successfully.  On Thursday,
+I got frustrated and built an exhaustive
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a> test.
+When the exhaustive
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a> test
+finished in less than 15-minutes, I then killed the formal proof that I had
+started three days earlier.</p>
+
+<p>This is what I mean by “Formal Verification struggles to handle multiplies.”
+The solvers just don’t know how to handle them (yet).</p>
+
+<p>Therefore, we’ll build a quick
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+script to verify that our multiply works and properly produces the right
+answer.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="cp">#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;assert.h&gt;
+</span>
+<span class="cp">#include "verilated.h"
+#include "verilated_vcd_c.h"
+</span>
+<span class="cp">#include "Vslowmpy.h"</span></code></pre></figure>
+
+<p>Unlike <a href="/dsp/2018/10/02/fft.html">my FFT</a> code, <a href="https://github.com/ZipCPU/fwmpy/blob/master/bench/cpp/slowmpy_tb.cpp">this
+script</a>
+includes hardwired values for the parameters the Verilog code was built with.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="k">const</span>	<span class="kt">bool</span>	<span class="n">trace</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+<span class="k">const</span>	<span class="kt">int</span>	<span class="n">NA</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span> <span class="n">NB</span> <span class="o">=</span> <span class="n">NA</span><span class="p">;</span>
+<span class="k">const</span>	<span class="kt">bool</span>	<span class="n">OPT_SIGNED</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span></code></pre></figure>
+
+<p>I’d much rather self-discover these parameters from the code itself, but at the
+time I wrote this I hadn’t yet found a way to do this that I liked.  Often,
+when I create something like this from a core generator, I’ll have the core
+generator will create a header file defining the choices for the parameters.
+More recently, I’ve started setting output values from the core based upon the
+parameters within the design.  This test bench does neither, meaning that I’ll
+need to change both Verilog and C++ code any time I want to change the
+parameters within the core.</p>
+
+<p><a href="https://github.com/ZipCPU/zbasic/blob/master/sim/verilated/twoc.cpp">Two C++ snippets of
+code</a>
+have served me well for some time when working with
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>.
+They convert from a limited bit representation to an integer representation
+more appropriate for working with word-sized integers in software.  The first
+is <code class="language-plaintext highlighter-rouge">sbits</code>, the next <code class="language-plaintext highlighter-rouge">ubits</code>, for work with signed and unsigned numbers
+respectively.</p>
+
+<p><code class="language-plaintext highlighter-rouge">sbits</code> takes a value of <code class="language-plaintext highlighter-rouge">bits</code> width, and sign extends it to the full <code class="language-plaintext highlighter-rouge">long</code>
+width of the local architecture.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="kt">long</span>	<span class="nf">sbits</span><span class="p">(</span><span class="k">const</span> <span class="kt">long</span> <span class="n">val</span><span class="p">,</span> <span class="k">const</span> <span class="kt">int</span> <span class="n">bits</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">long</span>	<span class="n">r</span><span class="p">;</span>
+
+	<span class="c1">// Limit the input to bits wide</span>
+	<span class="n">r</span> <span class="o">=</span> <span class="n">val</span> <span class="o">&amp;</span> <span class="p">((</span><span class="mi">1l</span><span class="o">&lt;&lt;</span><span class="n">bits</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+
+	<span class="c1">// If the sign bits is set, extend to the full word width</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">r</span> <span class="o">&amp;</span> <span class="p">(</span><span class="mi">1l</span> <span class="o">&lt;&lt;</span> <span class="p">(</span><span class="n">bits</span><span class="o">-</span><span class="mi">1</span><span class="p">)))</span>
+		<span class="n">r</span> <span class="o">|=</span> <span class="p">(</span><span class="o">-</span><span class="mi">1l</span> <span class="o">&lt;&lt;</span> <span class="n">bits</span><span class="p">);</span>
+	<span class="k">return</span> <span class="n">r</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p><code class="language-plaintext highlighter-rouge">ubits</code> is a similar function, but instead of sign extending it just drops
+the top several bits.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="kt">unsigned</span> <span class="kt">long</span>	<span class="nf">ubits</span><span class="p">(</span><span class="k">const</span> <span class="kt">long</span> <span class="n">val</span><span class="p">,</span> <span class="k">const</span> <span class="kt">int</span> <span class="n">bits</span><span class="p">)</span> <span class="p">{</span>
+	<span class="kt">unsigned</span> <span class="kt">long</span> <span class="n">r</span> <span class="o">=</span> <span class="n">val</span> <span class="o">&amp;</span> <span class="p">((</span><span class="mi">1l</span><span class="o">&lt;&lt;</span><span class="n">bits</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+	<span class="k">return</span> <span class="n">r</span><span class="p">;</span>
+<span class="p">}</span></code></pre></figure>
+
+<p>I also like to capture the test device in a class of its own when working with
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>.
+In this case, we’ll call it <code class="language-plaintext highlighter-rouge">SLOWMPYTB</code>.  The actual Verilated
+core is given by <code class="language-plaintext highlighter-rouge">m_slow</code> within this class.  This also helps me handle
+the <a href="/blog/2017/06/21/looking-at-verilator.html">boiler plate associated with running
+Verilator</a>
+and capturing <a href="/blog/2017/07/31/vcd.html">traces</a>
+from within it.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="k">class</span>	<span class="nc">SLOWMPYTB</span> <span class="p">{</span>
+<span class="nl">public:</span>
+	<span class="n">Vslowmpy</span>	<span class="o">*</span><span class="n">m_slow</span><span class="p">;</span>
+	<span class="kt">long</span>		<span class="n">svals</span><span class="p">[</span><span class="mi">32</span><span class="p">];</span>
+	<span class="kt">int</span>		<span class="n">m_addr</span><span class="p">;</span>
+	<span class="n">VerilatedVcdC</span>	<span class="o">*</span><span class="n">m_strace</span><span class="p">;</span>
+	<span class="kt">long</span>		<span class="n">m_tickcount</span><span class="p">;</span>
+
+	<span class="n">SLOWMPYTB</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_slow</span> <span class="o">=</span> <span class="k">new</span> <span class="n">Vslowmpy</span><span class="p">;</span>
+
+		<span class="n">Verilated</span><span class="o">::</span><span class="n">traceEverOn</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+
+		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="mi">32</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+			<span class="n">svals</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_addr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="n">m_strace</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+		<span class="n">m_tickcount</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Just to make sure, we’ll double check that the number of bits in each incoming
+value, summed together, will fit in the result.  That is, for <code class="language-plaintext highlighter-rouge">NA</code>
+incoming bits, we’ll have <code class="language-plaintext highlighter-rouge">2*NA</code> output bits–make sure these will fit within
+whatever our word size is.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="n">assert</span><span class="p">(</span><span class="n">NA</span><span class="o">+</span><span class="n">NB</span> <span class="o">&lt;</span> <span class="mi">8</span><span class="o">*</span><span class="nf">sizeof</span><span class="p">(</span><span class="kt">long</span><span class="p">));</span>
+	<span class="err">}</span></code></pre></figure>
+
+<p>We’ve <a href="/blog/2017/06/21/looking-at-verilator.html">discussed the basics of my <code class="language-plaintext highlighter-rouge">tick()</code> method
+before</a>.
+Basically, it just advances the clock, but does so in a way that our
+interaction with <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/slowmpy.v">the
+core</a> as well
+as the <a href="/blog/2017/07/31/vcd.html">VCD file</a>
+generated by it will remain consistent.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="kt">void</span>	<span class="nf">tick</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_tickcount</span><span class="o">++</span><span class="p">;</span>
+
+		<span class="c1">// First, resolve any combinatorial logic</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">eval</span><span class="p">();</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_strace</span><span class="p">)</span> <span class="n">m_strace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">((</span><span class="kt">uint64_t</span><span class="p">)(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="o">-</span><span class="mi">2</span><span class="p">));</span>
+
+		<span class="c1">// Then raise the clock and issue a positive clock edge to</span>
+		<span class="c1">// the core</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">eval</span><span class="p">();</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_strace</span><span class="p">)</span> <span class="n">m_strace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">((</span><span class="kt">uint64_t</span><span class="p">)(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="p">));</span>
+
+		<span class="c1">// Finally, drop the clock</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">eval</span><span class="p">();</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">m_strace</span><span class="p">)</span> <span class="p">{</span></code></pre></figure>
+
+<p>Don’t forget to flush the
+<a href="/blog/2017/07/31/vcd.html">VCD file</a>
+before returning from our <code class="language-plaintext highlighter-rouge">tick()</code> routine!</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">			<span class="n">m_strace</span><span class="o">-&gt;</span><span class="n">dump</span><span class="p">((</span><span class="kt">uint64_t</span><span class="p">)(</span><span class="mi">10</span><span class="o">*</span><span class="n">m_tickcount</span><span class="o">+</span><span class="mi">5</span><span class="p">));</span>
+			<span class="n">m_strace</span><span class="o">-&gt;</span><span class="n">flush</span><span class="p">();</span>
+		<span class="err">}</span>
+	<span class="err">}</span></code></pre></figure>
+
+<p>There’s been more than one time when I’ve caught bugs within my design using
+C++ <code class="language-plaintext highlighter-rouge">assert()</code> statements in my test script, but where I then struggled to
+figure out what was going on simply because the key information never got
+written into <a href="/blog/2017/07/31/vcd.html">the trace
+file</a>.  The
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>
+<code class="language-plaintext highlighter-rouge">flush()</code> function above helps to prevent that from happening.</p>
+
+<p>Our reset routine is fairly basic as well.  I’ve used <code class="language-plaintext highlighter-rouge">rand()</code> numbers to
+try to compensate for the fact that I’m not using formal methods, but as you’ll
+see going forward it’s just a token effort that doesn’t really help that much.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="kt">void</span>	<span class="nf">reset</span><span class="p">(</span><span class="kt">void</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_clk</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_stb</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_a</span> <span class="o">=</span> <span class="n">rand</span><span class="p">();</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_b</span> <span class="o">=</span> <span class="n">rand</span><span class="p">();</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_aux</span> <span class="o">=</span> <span class="n">rand</span><span class="p">();</span>
+
+		<span class="c1">// Reset the design</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_reset</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">tick</span><span class="p">();</span>
+
+		<span class="c1">// Clear the reset</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_aux</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_reset</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="n">m_addr</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>The actual key to <a href="https://github.com/ZipCPU/fwmpy/blob/master/bench/cpp/slowmpy_tb.cpp">this C++ test bench
+code</a>
+is the <code class="language-plaintext highlighter-rouge">test(ia, ib)</code> function.  I use this function to send values <code class="language-plaintext highlighter-rouge">ia</code> and
+<code class="language-plaintext highlighter-rouge">ib</code> to <a href="https://github.com/ZipCPU/fwmpy/blob/master/rtl/slowmpy.v">the core</a>
+to be multiplied.  That way the test script can just call <code class="language-plaintext highlighter-rouge">test(ia,ib)</code> over
+and over to test various multiplication products and be sure we did them right.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="kt">bool</span>	<span class="nf">test</span><span class="p">(</span><span class="k">const</span> <span class="kt">int</span> <span class="n">ia</span><span class="p">,</span> <span class="k">const</span> <span class="kt">int</span> <span class="n">ib</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">bool</span>		<span class="n">success</span> <span class="o">=</span> <span class="nb">true</span><span class="p">;</span>
+		<span class="kt">int</span>		<span class="n">aux</span><span class="p">;</span>
+		<span class="kt">long</span>		<span class="n">sout</span><span class="p">;</span></code></pre></figure>
+
+<p>The first step of any test is to set the input values and the <code class="language-plaintext highlighter-rouge">i_stb</code> value.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_stb</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_a</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">ia</span><span class="p">,</span> <span class="n">NA</span><span class="p">);</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_b</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">ib</span><span class="p">,</span> <span class="n">NB</span><span class="p">);</span>
+		<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_aux</span> <span class="o">=</span> <span class="n">rand</span><span class="p">();</span></code></pre></figure>
+
+<p>Of course, this entry point only works if the core is not busy.  While the
+test bench should ensure this, I still throw an assertion in here–just because
+I don’t necessarily trust anything that’s “under test”.  Well, that and bugs
+can be really difficult to find when you aren’t using formal.  The assertion
+helps walk the bug back in time to where I can find it.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="n">assert</span><span class="p">(</span><span class="o">!</span><span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_busy</span><span class="p">);</span></code></pre></figure>
+
+<p>We’ve now requested the multiply, so let’s wait for it to be complete.  That
+should take <code class="language-plaintext highlighter-rouge">NA+1</code> clock cycles.  During this time, <code class="language-plaintext highlighter-rouge">i_stb</code> must be kept low,
+although we can randomize <code class="language-plaintext highlighter-rouge">i_a</code> and <code class="language-plaintext highlighter-rouge">i_b</code> to try to verify that the design
+will ignore such changes mid-multiply.  Finally, we also check that the output
+signals are <em>exactly</em> what they need to be here.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">i</span><span class="o">&lt;</span><span class="n">NA</span><span class="o">+</span><span class="mi">1</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">tick</span><span class="p">();</span>
+
+			<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_stb</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+			<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_a</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">rand</span><span class="p">(),</span> <span class="n">NA</span><span class="p">);</span>
+			<span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">i_b</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">rand</span><span class="p">(),</span> <span class="n">NB</span><span class="p">);</span>
+			<span class="n">assert</span><span class="p">(</span> <span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_busy</span><span class="p">);</span>
+			<span class="n">assert</span><span class="p">(</span><span class="o">!</span><span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_done</span><span class="p">);</span>
+		<span class="p">}</span> <span class="n">tick</span><span class="p">();</span></code></pre></figure>
+
+<p>Once done, busy should be low and the done bit should be high.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="n">assert</span><span class="p">(</span><span class="o">!</span><span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_busy</span><span class="p">);</span>
+		<span class="n">assert</span><span class="p">(</span> <span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_done</span><span class="p">);</span></code></pre></figure>
+
+<p>We can now print out the two values used to create this product, together with
+their results to the terminal.  This kind of output is really great early on,
+although it gets kind of verbose the closer you get to a working routine.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="k">if</span> <span class="p">(</span><span class="n">trace</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"k=%3d: A =%06x, B =%06x, AUX=%d -&gt; S(O) = %9lx, SAUX=%d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span>
+			<span class="n">m_addr</span><span class="p">,</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">ubits</span><span class="p">(</span><span class="n">ia</span><span class="p">,</span> <span class="n">NA</span><span class="p">),</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">ubits</span><span class="p">(</span><span class="n">ib</span><span class="p">,</span><span class="n">NB</span><span class="p">),</span> <span class="n">aux</span><span class="p">,</span>
+			<span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="p">)</span><span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_p</span><span class="p">,</span> <span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_aux</span><span class="p">);</span>
+		<span class="p">}</span></code></pre></figure>
+
+<p>The next step is to verify that we received the right answer.  For that purpose,
+we’ll sign extend the result.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="k">if</span> <span class="p">(</span><span class="n">OPT_SIGNED</span><span class="p">)</span>
+			<span class="n">sout</span> <span class="o">=</span> <span class="n">sbits</span><span class="p">(</span><span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_p</span><span class="p">,</span> <span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="p">);</span>
+		<span class="k">else</span>
+			<span class="n">sout</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">m_slow</span><span class="o">-&gt;</span><span class="n">o_p</span><span class="p">,</span> <span class="n">NA</span><span class="o">+</span><span class="n">NB</span><span class="p">);</span></code></pre></figure>
+
+<p>Did we get the right answer?  For this, we’ll use a second method of
+multiplying two numbers together and compare the results.  In this case, we
+can (now) use the C multiplication operator.  We’ll first sign extend our
+values, then calculate what the result should’ve been.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="k">if</span> <span class="p">(</span><span class="n">success</span><span class="p">)</span> <span class="p">{</span>
+			<span class="kt">long</span>	<span class="n">sval</span><span class="p">;</span>
+		       
+			<span class="k">if</span> <span class="p">(</span><span class="n">OPT_SIGNED</span><span class="p">)</span>
+				<span class="n">sval</span> <span class="o">=</span> <span class="n">sbits</span><span class="p">(</span><span class="n">ia</span><span class="p">,</span> <span class="n">NA</span><span class="p">)</span> <span class="o">*</span> <span class="n">sbits</span><span class="p">(</span><span class="n">ib</span><span class="p">,</span> <span class="n">NB</span><span class="p">);</span>
+			<span class="k">else</span>
+				<span class="n">sval</span> <span class="o">=</span> <span class="n">ubits</span><span class="p">(</span><span class="n">ia</span><span class="p">,</span> <span class="n">NA</span><span class="p">)</span> <span class="o">*</span> <span class="n">ubits</span><span class="p">(</span><span class="n">ib</span><span class="p">,</span> <span class="n">NB</span><span class="p">);</span></code></pre></figure>
+
+<p>The test will succeed if the design’s output, <code class="language-plaintext highlighter-rouge">sout</code>, matches the predicted
+output, <code class="language-plaintext highlighter-rouge">sval</code>, exactly.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">			<span class="n">success</span> <span class="o">=</span> <span class="n">success</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">sout</span><span class="o">==</span> <span class="n">sval</span><span class="p">);</span>
+			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">success</span><span class="p">)</span> <span class="p">{</span>
+				<span class="n">printf</span><span class="p">(</span><span class="s">"WRONG SGN-ANSWER: %8lx (expected) != %8lx (actual)</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">sval</span><span class="p">,</span> <span class="n">sout</span><span class="p">);</span>
+				<span class="n">exit</span><span class="p">(</span><span class="n">EXIT_FAILURE</span><span class="p">);</span>
+			<span class="p">}</span>
+		<span class="err">}</span></code></pre></figure>
+
+<p>By stopping and exiting on any failure as soon as a failure is encountered, we
+can help limit how far we have to search the trace for a bug–should a bug be
+encountered.</p>
+
+<p>We can then close our test case by returning if we have been successfull.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">		<span class="k">return</span> <span class="n">success</span><span class="p">;</span>
+	<span class="err">}</span>
+<span class="err">}</span><span class="p">;</span></code></pre></figure>
+
+<p>That’s really all the heavy lifting.  The rest of our test bench is the easy
+stuff.  We’ll start out by constructing an test bench object and (optionally)
+starting a VCD file to trace everything.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp"><span class="k">const</span>	<span class="kt">bool</span>	<span class="n">trace</span> <span class="o">=</span> <span class="nb">false</span><span class="p">;</span>
+
+<span class="kt">int</span>	<span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">envp</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">Verilated</span><span class="o">::</span><span class="n">commandArgs</span><span class="p">(</span><span class="n">argc</span><span class="p">,</span> <span class="n">argv</span><span class="p">);</span>
+	<span class="n">SLOWMPYTB</span>		<span class="o">*</span><span class="n">tb</span> <span class="o">=</span> <span class="k">new</span> <span class="n">SLOWMPYTB</span><span class="p">;</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="n">trace</span><span class="p">)</span>
+		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">opentrace</span><span class="p">(</span><span class="s">"slowtrace.vcd"</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">reset</span><span class="p">();</span></code></pre></figure>
+
+<p>The next step is to work our way through some basic test cases.  I chose to
+start with some very basic tests, before trying to get complicated.  Why?
+Because basic tests, like <code class="language-plaintext highlighter-rouge">0 * 0</code> or <code class="language-plaintext highlighter-rouge">1 * 0</code>, are a whole lot easier to debug
+than more complex tests like <code class="language-plaintext highlighter-rouge">425,682 * 934,255,346</code>.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">);</span></code></pre></figure>
+
+<p>I now repeat the same basic tests, but this time for signed numbers.  Again,
+I’m starting the test bench tests out nice and easy–just to make debugging
+simpler if there’s a bug here.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span>  <span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span>  <span class="mi">2</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span>  <span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span>  <span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">4</span><span class="p">,</span>  <span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="o">-</span><span class="mi">4</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span> <span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span> <span class="mi">4</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">);</span></code></pre></figure>
+
+<p>Now let’s try some corner cases, where the inputs are near their maximum values.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">)),</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">2</span><span class="p">)),</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">)));</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">)),</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">2</span><span class="p">)));</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">)),</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">)));</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">)));</span>
+
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>  <span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">)));</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">)));</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span>
+	<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">((</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>  <span class="p">,</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span></code></pre></figure>
+
+<p>That’s the corners, so let’s now try multiplying <code class="language-plaintext highlighter-rouge">2^n</code> times one.  This should
+test every bit in <code class="language-plaintext highlighter-rouge">a</code>, to make sure it is properly multiplied.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="p">(</span><span class="n">NA</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">int</span>	<span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">;</span>
+
+		<span class="n">a</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">k</span><span class="p">);</span>
+		<span class="n">b</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>We can repeat this with <code class="language-plaintext highlighter-rouge">b</code>, this time multiplying by <code class="language-plaintext highlighter-rouge">2^15</code> in <code class="language-plaintext highlighter-rouge">a</code>.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="p">(</span><span class="n">NB</span><span class="o">-</span><span class="mi">1</span><span class="p">);</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="kt">int</span>	<span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">;</span>
+
+		<span class="n">a</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="mi">15</span><span class="p">);</span>
+		<span class="n">b</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">k</span><span class="p">);</span>
+		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">);</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Again, these checks are a bit ad-hoc, but they are designed to capture all of
+the corner cases where 1) I might expect a bug, and 2) where bugs are easy to
+catch.</p>
+
+<p>Having gotten all the corner cases I expect, I then turn my attention to some
+random tests.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="mi">1024</span><span class="p">;</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span>
+		<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="n">rand</span><span class="p">(),</span> <span class="n">rand</span><span class="p">());</span></code></pre></figure>
+
+<p>Now, let me ask, was that good enough?  I don’t know.  This isn’t a formal
+proof, so it’s hard to tell.  However, if our multiply is small enough, we
+might be able to check all possible inputs.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">NA</span><span class="p">);</span> <span class="n">k</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">for</span><span class="p">(</span><span class="kt">int</span> <span class="n">j</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">j</span><span class="o">&lt;</span><span class="p">(</span><span class="mi">1</span><span class="o">&lt;&lt;</span><span class="n">NB</span><span class="p">);</span> <span class="n">j</span><span class="o">++</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">tb</span><span class="o">-&gt;</span><span class="n">test</span><span class="p">(</span><span class="n">k</span><span class="p">,</span> <span class="n">j</span><span class="p">);</span>
+		<span class="p">}</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>On the other hand, if you are trying to multiply two 32-bit numbers together,
+you might never see the end of that loop.</p>
+
+<p>Still, if we’ve gotten this far, the algorithm works.  All that’s left is to
+close up the test case and declare success.</p>
+
+<figure class="highlight"><pre><code class="language-cpp" data-lang="cpp">	<span class="k">delete</span>	<span class="n">tb</span><span class="p">;</span>
+
+	<span class="n">printf</span><span class="p">(</span><span class="s">"SUCCESS!</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+	<span class="n">exit</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="err">}</span></code></pre></figure>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>This article presents the best slow-multiplication algorithm I have yet come
+across.  It’s not fast–nor is it intended to be.  However, it can be used
+cheaply in an FPGA that either doesn’t have any DSPs left, or one that is
+currently using all of its DSP infrastructure.  Indeed, this is the multiply
+that the <a href="/about/zipcpu.html">ZipCPU</a> uses in these cases.</p>
+
+<p>Without this algorithm, the
+<a href="/about/zipcpu.html">ZipCPU</a>
+would’ve never passed muster on an iCE40 HX8K FPGA.</p>
+
+<p>I should also point out that the key to this algorithm, shifting the accumulator
+so that only the relevant 32-bits of the 64 are added on each cycle, can be
+used in a divide algorithm as well.  So, I tried it.  It worked, and it helped,
+it just … didn’t help as much as it did the multiply.  It’s been a while
+since I did it, but I recall the improvement was 20% or less.  It was good
+enough to keep, but not nearly enough to write home about.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>And God blessed them, saying, Be fruitful, and multiply, and fill the waters in the seas, and let fowl multiply in the earth. (Gen 1:22)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
