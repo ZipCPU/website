@@ -6,14 +6,592 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Wed, 14 Jul 2021 23:22:36 -0400</pubDate>
-    <lastBuildDate>Wed, 14 Jul 2021 23:22:36 -0400</lastBuildDate>
+    <pubDate>Fri, 23 Jul 2021 10:46:51 -0400</pubDate>
+    <lastBuildDate>Fri, 23 Jul 2021 10:46:51 -0400</lastBuildDate>
     <generator>Jekyll v4.2.0</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>CPU based simulation, first thoughts</title>
+        <description>&lt;p&gt;I’m currently working on a building a basic memory controller.  It’s a big
+project, and a fairly fun one.  The controller handles multiple hardware data
+channels, has a scatter-gather DMA, and will (eventually) have full ECC
+support.  The device type involved is rather complex, and so the specification
+requires complicated instruction sequences to access it.&lt;/p&gt;
+
+&lt;p&gt;At issue is, how shall such a design be tested?&lt;/p&gt;
+
+&lt;p&gt;Those who have been reading this blog know that I am a strong supporter of
+formal verification.  I’ve been known to try to formally verify everything
+I can get my hands on, and again I’ve had fun doing this.  The obvious problem
+with this approach is that the design as a whole is far too complicated
+to fit into a formal solver.  So, instead, I’ve only formally verified
+the parts and pieces.  The design as a whole still requires some amount
+of verification that cannot be done formally.&lt;/p&gt;
+
+&lt;p&gt;So, I had a crazy thought: Why not verify the design by using a CPU within the
+test environment?&lt;/p&gt;
+
+&lt;h2 id=&quot;background&quot;&gt;Background&lt;/h2&gt;
+
+&lt;p&gt;To understand what I’m proposing, let me share a bit of the project’s
+background.  The first point is that I didn’t create it.  The project was given
+to me to both maintain and upgrade.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. Traditional test bench structure&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cpusim/verilogtb.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;As the design was given to me, the test bench had a fairly
+traditional structure.  It had a Verilog test script that drove an AXI &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_functional_model&quot;&gt;Bus
+Functional Model (BFM)&lt;/a&gt;
+sometimes called a Verification IP.  There were also models for the external
+peripheral(s) the module under test needed to interact with, as well as a
+separate AXI slave &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_functional_model&quot;&gt;BFM&lt;/a&gt;
+for the design to interact with as it might with a memory.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;The original test script contained about 1.2k lines of a Verilog test
+script that referenced another file containing 7.5k Verilog lines of
+non-synthesizable, test-bench tasks.
+These tasks are essentially Verilog subroutines.  Unlike traditional Verilog
+design, these tasks are written as sequential logic:  wait until this happens,
+set these wires, wait two clock ticks, etc.  Because these tasks
+are sequential in nature, they act more like software than they do hardware.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The original test script depended upon a client-provided AXI VIP
+module–shown as the AXI
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_functional_model&quot;&gt;BFM&lt;/a&gt;
+in Fig. 1 above.  This module contained a set of Verilog tasks which could
+be called to issue AXI requests to anywhere on the bus.&lt;/p&gt;
+
+    &lt;p&gt;We’ve already discussed on the problems with this kind of VIP module on the
+blog.  Basically, the module can be used to create a form of scripted
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+test.  (Read this address, write that address, etc.)  Most
+modules of this type set RREADY and BREADY to 1, so they’ll never test for
+back pressure.  Further, because of the sequential nature of their design,
+they’ll never issue concurrent read and write requests, or even multiple
+subsequent burst requests.  This VIP was no different.  A full check can’t
+really be done via
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+at all–but that really leads to another discussion for another day.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;So, my thought was, why should I build my updated test bench in Verilog, only
+to rebuild it later in C?  Why not build it in C in the first place?  I mean,
+if I have to deliver a working software test bench to the customer, to include
+sample C software demonstrating how well the design works, then wouldn’t it
+make sense to do the job once and then only deliver the C code?&lt;/p&gt;
+
+&lt;h2 id=&quot;preparation&quot;&gt;Preparation&lt;/h2&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 2. The alternative: Using software to drive the test bench&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cpusim/softwaretb.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;My first thought was that the obvious reason why you wouldn’t use a CPU, and
+thus why you wouldn’t write your test bench in C, would be that you didn’t
+have a CPU available to you.  However, in this case I came to this project
+with a &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;, an
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;AXI crossbar&lt;/a&gt;, a
+&lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v&quot;&gt;demonstration AXI (full)
+design&lt;/a&gt;
+which could be &lt;a href=&quot;https://github.com/ZipCPU/axidmacheck/blob/4e7923db87edee141b9f8164b9ab5d84c25d7abf/rtl/main.v#L1414-L1486&quot;&gt;used to implement a AXI based block-RAM type
+device&lt;/a&gt;, and &lt;a href=&quot;/blog/2020/06/16/axiaddr-limits.html&quot;&gt;an
+AXI DMA&lt;/a&gt;.  All of these
+together would make for a very comprehensive test bench environment.  Even
+better, I reasoned, I could then port the entire test bench (sans external
+peripheral models) to an FPGA to prove the design at a later time.&lt;/p&gt;
+
+&lt;p&gt;The only problem was that the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; didn’t (originally)
+support &lt;a href=&quot;/formal/2019/05/13/axifull.html&quot;&gt;AXI&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;So, the first step was to get the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; to support
+&lt;a href=&quot;/formal/2019/05/13/axifull.html&quot;&gt;AXI&lt;/a&gt;.  As mentioned in
+the &lt;a href=&quot;/blog/2021/06/28/master-examples.html&quot;&gt;example AXI4 master
+article&lt;/a&gt;, I now have
+several versions of instruction and data interfaces.  The debug interface has
+also gotten a significant upgrade in the process.  Once done, however,
+&lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; did a nice job of connecting
+everything together.&lt;/p&gt;
+
+&lt;p&gt;Perhaps some of you can guess what happened next.  None of what followed
+should really come as a surprise to anyone.  However, I still found the
+entire exercise very instructive.&lt;/p&gt;
+
+&lt;h2 id=&quot;observations&quot;&gt;Observations&lt;/h2&gt;
+
+&lt;p&gt;Yes, I decided to try this approach.  Why not?  I had all the pieces I needed,
+and it seemed like the right thing to do.&lt;/p&gt;
+
+&lt;p&gt;Here are some of the things I learned along the way.  We’ll call these some
+of the &lt;em&gt;observations&lt;/em&gt; that I made.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;First and foremost, you’ve never wanted to optimize a piece of code
+more than when running it from within a
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+environment.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;printf()&lt;/code&gt; is a very convenient way of outputting characters.  Actual
+output can be done via the Verilog &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$write()&lt;/code&gt; command or a UART, but
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;printf()&lt;/code&gt; can handle a lot of formatting requirements.  (So, too, can
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$display()&lt;/code&gt; …)&lt;/p&gt;
+
+    &lt;p&gt;However, what you may not expect is that you are paying for
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+time while simulating the standard library call to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;printf()&lt;/code&gt;, and
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+is not necessarily cheap.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Did I mention that the design spends a lot of
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+time in the C library?&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;At one point, I tried using the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rand()&lt;/code&gt; function to generate random test
+data, and I generated a new random data set for each test.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;length&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;buf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rand&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;At 3ms of simulated time, I quickly discovered that was a non-starter.&lt;/p&gt;
+
+&lt;p&gt;So, I rewrote the routine to use the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s shift and carry facility.
+Specifically, when the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
+executes a shift instruction, like the logical shift right (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;LSR&lt;/code&gt;) instruction
+below, the last bit shifted is placed into the carry flag.  This means that
+a second, conditional, &lt;a href=&quot;https://en.wikipedia.org/wiki/Exclusive_or&quot;&gt;exclusive OR (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;XOR&lt;/code&gt;)
+instruction&lt;/a&gt; can make a nicely
+implemented &lt;a href=&quot;/dsp/2017/10/27/lfsr.html&quot;&gt;Galois linear feedback shift
+register&lt;/a&gt;: shift right, and
+if the bit shifted out is a one then &lt;a href=&quot;https://en.wikipedia.org/wiki/Exclusive_or&quot;&gt;exclusive
+OR&lt;/a&gt; the result with the new
+shift register value–called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;fill&lt;/code&gt; below.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;span class=&quot;cp&quot;&gt;#define	STEP(F, T)	asm(&quot;LSR 1,%0\n\tXOR.C %1,%0&quot; : &quot;+r&quot;(F) : &quot;r&quot;(T))
+&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;fill&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;TAPS&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x485b5&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// char * buf;&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;length&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;STEP&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fill&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;TAPS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;buf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;fill&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Even this was too slow.&lt;/p&gt;
+
+&lt;p&gt;However, when I unrolled the loop so that it filled up two words at a time,
+instead of eight separate bus writes, then things dropped down to 1.6ms.&lt;/p&gt;
+
+&lt;p&gt;Still too long.&lt;/p&gt;
+
+&lt;p&gt;Then I reasoned I could just re-use this data set for each of my tests–and
+that seemed to speed things up enough to be bearable.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3. Pond scum is known for moving faster than simulated serial ports&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cpusim/pond-scum-sm.jpg&quot; alt=&quot;&quot; width=&quot;384&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Simulated UARTs are slower than molasses in the winter time.  I think I’ve
+even seen faster moving pond scum.  My original UART speed was 1MBaud.  In
+the end I bumped that up to 10MBaud and the UART interface still felt slow.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Increasing the serial port buffer size from 16-bytes to 256 bytes helped as
+well.  This kept the CPU from spending its time polling for a space to be
+available in the serial port’s buffer.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Buffering UART requests means there’s a huge lag between the request to write
+to the UART and the actual UART output.  The design can fail or even complete
+during this time–before the UART output is completed.  As a result, the
+last line from my
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+often read &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;haltSimulation complete&lt;/code&gt;, instead of the two lines starting
+with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;halting&lt;/code&gt; from the CPU and then &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Simulation complete&lt;/code&gt; from the simulator.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;When I first started with this design setup, the CPU was spending a lot of
+timing fetching instructions from the bus.  Increasing the cache size to
+something ridiculously large, such as 256kB for the instruction cache and
+another 256kB for the data cache, helped.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; is big
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Endianness&quot;&gt;endian&lt;/a&gt;.  The
+AXI4 bus (and everything on it) is little
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Endianness&quot;&gt;endian&lt;/a&gt;.  Swapping
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Endianness&quot;&gt;endianness&lt;/a&gt; in
+seems like a waste of precious time.
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;
+&lt;span class=&quot;nf&quot;&gt;byteswapln&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint8_t&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;uint32_t&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ln&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;while&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ln&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;register&lt;/span&gt;	&lt;span class=&quot;kt&quot;&gt;uint8_t&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;a&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;c&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;a&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;b&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;c&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;d&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;d&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;c&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;b&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;a&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;src&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;dst&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;ln&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;--&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Rewriting this function in assembly helped, since GCC doesn’t (yet) do a good
+job of exploiting the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
+pipelined memory features.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
+variables associated with the external C++ device model aren’t
+automatically captured in the trace.  This made it a challenge, at times,
+to debug why the model didn’t do what you wanted.  There was a &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD trace
+file&lt;/a&gt; and two debug-by-printf
+dumps: one from the simulated &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
+and another from the host.  It took work to synchronize those three traces
+to discover what was going on.&lt;/p&gt;
+
+    &lt;p&gt;On other designs I’ve created design inputs and filled them with the state
+from the external model.  I could’ve done that here, and might’ve, if this
+had turned out to be any harder than it was.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The larger the CPU stack size becomes, the slower the CPU gets.&lt;/p&gt;
+
+    &lt;p&gt;This was not one I was expecting, although perhaps I should’ve expected
+this–since I was the one who wrote the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s GCC back end and I seem
+to recall implementing this “feature”.&lt;/p&gt;
+
+    &lt;p&gt;The root of the problem stemmed from placing a large 8kB page buffer on
+the stack.  This plus a couple other registers forced the stack size to be
+larger than the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
+maximum load register offset of fourteen signed bits, or -8192, … 8191.
+GCC then turned commands to move data from the stack to a register into the
+instruction sequence:&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;	LDI	#Offset, R0
+	ADD	R12,R0
+	LW	(R0),Rx&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;instead of the desired&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;	LW	#Offset+R12,Rx&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Moving the data buffer off the stack and into global memory helped–since
+all accesses were then based upon shorter offsets from a buffer pointer
+rather than large offsets of the frame pointer.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;The Bible can make a useful (and fun) data source.  If you are staring at
+data coming across your screen, it’s more enjoyable to stare at a Bible
+passage than raw hex or anything else for that matter.  Of course, this does
+have the draw back that a Bible passage isn’t necessary a full and complete
+test suite, since it tends not to test bit 7–but the separate random data
+check discussed above and below helped to mitigate this issue.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Generating a &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD file&lt;/a&gt; can
+really slow down the
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;.
+A &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilgpio.v&quot;&gt;simple GPIO
+peripheral&lt;/a&gt;,
+however, can be useful for intelligently controlling (based upon circumstances
+within the design) whether or not trace recording is enabled in
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;.
+With only a minor change to the C++ test script, turning on the
+trace can then become as simple as the C statement:&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;	&lt;span class=&quot;n&quot;&gt;_axilgpio&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;g_set&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SET_TRACE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Eventually, I got in the habit of something like:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c&quot; data-lang=&quot;c&quot;&gt;	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;error_condition&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Something bad happened.&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// If the trace hasn't (yet) been turned on, turn it on now.&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_axilgpio&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;g_set&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SET_TRACE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;==&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;_axilgpio&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;g_set&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SET_TRACE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// Otherwise this has been captured in a trace, so we&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// can exit the simulation now with a failure.&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;fail_simulation&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;fail_simulation&lt;/code&gt; variable above isn’t really anything special–it’s
+just a C integer that’s then used to skip further testing.  Were this a
+C++ test bench, it would’ve been implemented as a boolean.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;A &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axidma.v&quot;&gt;basic AXI DMA&lt;/a&gt;
+is vastly superior to
+&lt;a href=&quot;https://www.cplusplus.com/reference/cstring/memcpy/&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;memcpy()&lt;/code&gt;&lt;/a&gt;
+when it comes to high speed data transfer.  Even better, the
+&lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axidma.v&quot;&gt;AXI DMA&lt;/a&gt; helps
+to test more of the designs AXI capabilities.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Truly testing random data moving across an interface requires a bit of work
+on both ends of the interface.  On one end, you’ll need a source of
+pseudo-random data to push through the interface.  On the other end, you’ll
+want to be able to compare the received results with the sent data.  In
+whole, the test requirement looks something like Fig. 4 below.&lt;/p&gt;
+
+    &lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. Many tests require some form of memory comparison&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cpusim/memcmp.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+    &lt;p&gt;I’m not sure I have a good solution (yet) for this requirement.&lt;/p&gt;
+
+    &lt;p&gt;The requirement is easy enough to accomplish using
+&lt;a href=&quot;https://www.cplusplus.com/reference/cstring/memcmp/&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;memcmp()&lt;/code&gt;&lt;/a&gt;, but as I
+noted above the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;mem*()&lt;/code&gt; functions can be notoriously slow and slow
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;s
+are painful.  Something similar to an &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axidma.v&quot;&gt;AXI
+DMA&lt;/a&gt; that
+implements a &lt;a href=&quot;https://www.cplusplus.com/reference/cstring/memcmp/&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;memcmp()&lt;/code&gt;&lt;/a&gt;
+might be really useful here.  Perhaps a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/aximm2s.v&quot;&gt;memory to stream (MM2S)
+DMA&lt;/a&gt;
+could make this easier?&lt;/p&gt;
+
+    &lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5. Here's what a hardware memory comparison might look like&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cpusim/hwmemcmp.svg&quot; alt=&quot;&quot; width=&quot;560&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+    &lt;p&gt;For now, just keep your eyes peeled to the
+&lt;a href=&quot;https://github.com/ZipCPU/wb2axip&quot;&gt;wb2axip&lt;/a&gt; repo.  If I build such a hardware
+&lt;a href=&quot;https://www.cplusplus.com/reference/cstring/memcmp/&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;memcmp()&lt;/code&gt;&lt;/a&gt;, that’s
+where I’d put it.  The basic design would likely follow Fig. 5 above, and
+so it would be built around one (or two)
+&lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/aximm2s.v&quot;&gt;MM2S DMA&lt;/a&gt;’s
+followed by a stream comparison.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;A &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
+test bench script can quickly move from one bus request to the
+next with no
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+time taken between the two requests.  The CPU, on
+the other hand, needs to process instructions between bus requests.  This
+will necessarily slow down any CPU based test when compared to its
+Verilog counterpart.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I guess that’s the big bottom line here: although the CPU software based test
+script leads to a more realistic test, it will always require more
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+cycles to accomplish.&lt;/p&gt;
+
+&lt;h2 id=&quot;simple-changes&quot;&gt;Simple changes:&lt;/h2&gt;
+
+&lt;p&gt;With some simple changes, many of these drawbacks became quite bearable.
+Here are some more of the changes I made to get things working better.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Boost the cache size.  I mentioned this above.  Basically, while you might
+not be able to afford a 16kB cache in any real life FPGA, you can certainly
+afford a 1MB cache in
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+land.  Once the design ends up in actual hardware running at true hardware
+speeds, then no one will notice that you went back to the smaller cache size.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Rather than checking whether or not a byte can be output on every clock
+CPU cycle, a quick fix to the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
+newlib back end made it so that the device write command would first
+check the serial port’s buffer availability, and then send that many
+bytes to the serial port before going back to check on availability again.
+I would’ve never noticed the impact of such a change had I not been running
+the design in
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+in the first place.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Clock gating can speed up
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;s
+… I think.  While clock gating is difficult to implement in an FPGA, it
+is more common in ASIC designs.  Along the way, after a measurement or
+two, I convinced myself that clock gating can speed up
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;s.&lt;/p&gt;
+
+    &lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 6. Does clock gating speed up sim time?&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/cpusim/ckgate-comparison.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+    &lt;p&gt;I was so excited about this technique that I started drafting an article
+about how clock gating could be used to speed up
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+time.  To complete this article, and make my point about how awesome clock
+gating was, I spent some time and made some measurements.  The
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+then ran five minutes slower with clock gating enabled.  Oops.&lt;/p&gt;
+
+    &lt;p&gt;What happened?  Well, I had upgraded
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
+between the two tests.  Might this have affected things?&lt;/p&gt;
+
+    &lt;p&gt;Looking over
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;’s
+documentation, I’ve since found some optimizations that might possibly speed
+up designs when gated, so stay tuned.  I’m not convinced this is the end of
+the story yet.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;A simple nonce at both the beginning and end of a test sequence can help make
+it easier to verify, from a
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt;,
+that the first and last bytes were accurately communicated as desired.  In my
+case, I replaced the first character of what would otherwise be a string of
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;=&lt;/code&gt; with a “0”, and the last character with a “Z”.  This left me with a test
+set that started out reading:&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-text&quot; data-lang=&quot;text&quot;&gt;0==========================================================================+
+|                                                                          |
+|  Psalm 1                                                                 |
+|                                                                          |
+|  Blessed is the man that walketh not in the counsel of the ungodly, nor  |
+|    standeth in the way of sinners, nor sitteth in the seat of the        |
+|    scornful.                                                             |
+|  But his delight is in the law of the LORD; and in his law doth he       |
+|    meditate day and night.                                               |
+|  And he shall be like a tree planted by the rivers of water, that        |
+|    bringeth forth his fruit in his season; his leaf also shall not       |
+|    wither; and whatsoever he doeth shall prosper.                        |
+|  The ungodly are not so: but are like the chaff which the wind driveth   |
+|    away.                                                                 |
+|  Therefore the ungodly shall not stand in the judgment, nor sinners in   |
+|    the congregation of the righteous.                                    |
+|  For the LORD knoweth the way of the righteous: but the way of the       |
+|   ungodly shall perish.                                                  |
+|                                                                          |
+============================================================================&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Unfortunately, the block size was longer than the Psalm, so you don’t get to
+see the “Z” in the output–even though it’s present in the &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD
+file&lt;/a&gt;.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;When verifying whether bytes in a message have been gained or lost, it helps
+to force every line to have the same length and end with the same character.
+Missing or extra characters then stand out loudly.  Check out the
+test sequence above, and ask what would happen if a space were skipped or
+some other character inserted.  The lines at the edges of the message wouldn’t
+line up.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;I was worried initially about how I might transition a design that requires
+my &lt;a href=&quot;/blog/2017/06/17/why-network-debugging.html&quot;&gt;normal TCP/IP based serial
+port&lt;/a&gt;
+to an all-Verilog simulation model that I might use with
+&lt;a href=&quot;http://iverilog.icarus.com&quot;&gt;Icarus&lt;/a&gt;,
+&lt;a href=&quot;https://www.cadence.com/en_US/home/tools/system-design-and-verification/simulation-and-testbench-verification/xcelium-simulator.html&quot;&gt;XCellium&lt;/a&gt;,
+or some other commercial simulation tool.  An all-verilog
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+model was something my customer wanted, but not something I normally build
+or use.  I eventually found out that I can incorporate Verilog’s &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$write()&lt;/code&gt;
+command into my serial port controller to achieve a result that’s close
+enough.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Realistically, the biggest changes came as a result of just staring at the
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;traces&lt;/a&gt; showing the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; running software.  The more I
+did so, the more obvious any slow software became, and therefore the more
+I wanted to dig into the slow parts to speed them up.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;In hind sight, this entire approach arguably violates a fundamental principle
+of engineering: Tests should be accomplished by dividing the design into
+components that are known to work and components that aren’t (necessarily)
+known to work.  From there, you should only test one component at a time.&lt;/p&gt;
+
+&lt;p&gt;I say &lt;em&gt;arguably&lt;/em&gt; because any test requires both trusted components and not
+so trusted components.  The most obvious trusted component is the
+simulator itself–in my case
+&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt; (so
+far).  Likewise the most obvious untrusted component is the design or module
+under test.  Other untrusted components tend to include the external device
+module and the test script itself–whether written in C or Verilog.
+This distinction is important, because it helps to reveal that the &lt;em&gt;module
+under test&lt;/em&gt; is never the only untrusted component in any design.  As a
+result, we might argue to what extent the basic engineering principle applies
+here.&lt;/p&gt;
+
+&lt;p&gt;This particular design approach treated certain pieces of the design, the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;,
+&lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axidma.v&quot;&gt;AXI DMA&lt;/a&gt;, &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v&quot;&gt;RAM
+model&lt;/a&gt;, and
+interconnect as &lt;em&gt;working&lt;/em&gt; infrastructure pieces.  Indeed, in general, they did
+“just work”, although the exercise began with a hiccup or two.  Remember, this
+was only the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s second AXI
+implementation (&lt;a href=&quot;https://github.com/ZipCPU/axidmacheck/tree/zipcpu&quot;&gt;here’s the
+first&lt;/a&gt;), and this was the
+first design where the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
+ran from a 64-bit bus.  This design, therefore, also tested some new bus width
+adjustment components
+&lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilupsz.v&quot;&gt;[1]&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axi2axilsub.v&quot;&gt;[2]&lt;/a&gt;.
+Not only that, but the design also tested the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s (new) clock gating
+capability.  Much as one might expect, the first couple of tests weren’t
+pretty.  For example, &lt;a href=&quot;https://github.com/ZipCPU/autofpga&quot;&gt;AutoFPGA&lt;/a&gt; initially
+got its &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/0115687b43bcbdb5e88e4d1e458b69c992868c9b/rtl/core/iscachable.v#L54-L63&quot;&gt;cachable address
+markers&lt;/a&gt;
+off by 3-bits, and so even though the RAM was entirely cachable, very
+few of the transactions were actually ending up in the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/0115687b43bcbdb5e88e4d1e458b69c992868c9b/rtl/core/axidcache.v#L323-L333&quot;&gt;data
+cache&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The really big question of this whole exercise is, now that I’ve been through
+it, whether or not I would do so again.  The answer to that question is: I’m
+not sure.  Indeed, I’m now faced with a second, very similar project, and the
+question before me today is whether or not I should write a Verilog test
+script for it or just write the script in software as I did for this project.&lt;/p&gt;
+
+&lt;p&gt;We’ll see.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Confess your faults one to another, and pray one for another, that ye may be healed. The effectual fervent prayer of a righteous man availeth much. (James 5:16)&lt;/em&gt;</description>
+        <pubDate>Fri, 23 Jul 2021 00:00:00 -0400</pubDate>
+        <link>https://zipcpu.com/zipcpu/2021/07/23/cpusim.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/zipcpu/2021/07/23/cpusim.html</guid>
+        
+        
+        <category>zipcpu</category>
+        
+      </item>
     
       <item>
         <title>Quiz #16: Immediate assertions in the presence of asynchronous resets</title>
@@ -4207,1136 +4785,6 @@ same time?  That’ll be something to think about.&lt;/p&gt;
         
         
         <category>zipcpu</category>
-        
-      </item>
-    
-      <item>
-        <title>Common AXI Themes on Xilinx's Forum</title>
-        <description>&lt;p&gt;Xilinx has committed their infrastructure to AXI.  Zynq’s are built around AXI3,
-while most of the Vivado generated infrastructure within their FPGA
-environment is now AXI4.  As we’ve examined on this forum, their training
-materials will lead you to either a &lt;a href=&quot;/formal/2018/12/28/axilite.html&quot;&gt;broken demonstration
-AXI-lite slave design&lt;/a&gt;,
-or a &lt;a href=&quot;/formal/2019/05/13/axifull.html&quot;&gt;broken AXI (full) slave
-design&lt;/a&gt;.  Both of these
-designs will hang your bus if the bugs within them are ever triggered.
-As of Vivado 2020.2, these bugs have yet to be fixed.  (You can find better,
-working examples of an &lt;a href=&quot;/blog/2020/03/08/easyaxil.html&quot;&gt;AXI4-lite slave design
-here&lt;/a&gt;, or a &lt;a href=&quot;/blog/2019/05/29/demoaxi.html&quot;&gt;working AXI4 full
-slave design here&lt;/a&gt;).&lt;/p&gt;
-
-&lt;p&gt;AXI is also ARM’s published bus standard.   The popularity of placing a ARM
-CPUs within custom SoCs has helped to make this standard ubiquitous.&lt;/p&gt;
-
-&lt;p&gt;While I have filed bug reports in 2017 and 2018 on Xiling’s forums regarding
-these broken demonstration designs, Xilinx has yet to fix their designs as of
-Vivado 2020.2.
-&lt;a href=&quot;https://forums.xilinx.com/t5/Simulation-and-Verification/Formally-verifying-the-functionality-of-an-AXI-lite-peripheral/m-p/924562&quot;&gt;[1]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/AXI-Infrastructure/AXI-demonstration-slave-core-has-multiple-bugs-within-it/m-p/973670&quot;&gt;[2]&lt;/a&gt;
-Indeed, at this point, it’s not clear if Xilinx will ever fix their
-demonstration designs.  Perhaps I shouldn’t complain–their broken designs
-simply make the services I offer and sell that much more valuable.&lt;/p&gt;
-
-&lt;p&gt;In the meantime, however, I have been browsing &lt;a href=&quot;https://forums.xilinx.com&quot;&gt;Xilinx’s
-forums&lt;/a&gt; to see if I can help individuals working
-struggling to get their designs to work with AXI.  My one claim to fame?  I
-have now formally verified &lt;a href=&quot;https://github.com/ZipCPU/wb2axip&quot;&gt;several AXI and AXI-lite
-designs&lt;/a&gt;.  From this claim alone, I hoped to
-demonstrate myself qualified to comment on problems Xilinx users might have.&lt;/p&gt;
-
-&lt;p&gt;Along the way, I’ve had mixed success.  I’ve formally verified several user
-designs, and I’ve tried formally verifying several of Xilinx’s IP designs.
-Sometimes I’ve been successful, and so I’ve found bugs in &lt;a href=&quot;/blog/2020/01/01/2019-in-review.html&quot;&gt;their AXI
-Ethernet-lite core&lt;/a&gt;
-and verified that there were no bugs in either their &lt;a href=&quot;/blog/2020/03/23/wbm2axisp.html&quot;&gt;AXI
-GPIO or their AXI Block RAM
-Controller&lt;/a&gt; (limited bounded
-model checks only).
-Neither was I able to find any bugs in their demonstration AXI or AXI-lite
-masters.  (Their AXI stream master, on the other hand …)  Other designs,
-however, such as their datamover, their
-&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;interconnect&lt;/a&gt;,
-their Avalon to AXI bridge, their AXI
-&lt;a href=&quot;/formal2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt;, or even their
-AXI timer all
-depend on encrypted IP components, and so I have been unable to verify them
-or comment on their internal operations and details.&lt;/p&gt;
-
-&lt;p&gt;Still, I thought it might be worth taking some time to look at a sample of the
-Xilinx forum threads I’ve contributed to which have discussed AXI.  Yes, this
-sample set is biased: it’s a subset of only those posts I’ve contributed to.
-Still, I’ve tried to be active in as many AXI issues as I could have, and so I
-have at least convinced myself that this is a representative sampling of AXI
-problems Xilinx users have come across.&lt;/p&gt;
-
-&lt;h2 id=&quot;getting-started&quot;&gt;Getting started&lt;/h2&gt;
-
-&lt;p&gt;The first problem beginning AXI users tend to come across is finding an easy
-how-to discussion or example.
-This user, for example, was &lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/How-to-design-a-custom-ip-axi-compatible-to-read-and-write-from/m-p/924333&quot;&gt;looking for instructions on how to design a custom
-AXI master&lt;/a&gt;.
-Here, &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Hello-world-equivalent/m-p/1090446&quot;&gt;another user is asking for an AXI Hello world
-equivalent?&lt;/a&gt;
-The best answer I have to these questions is to offer &lt;a href=&quot;/blog/2020/03/08/easyaxil.html&quot;&gt;my EasyAxil
-design&lt;/a&gt; as a starting point
-for learning how to build an AXI-lite slave design.&lt;/p&gt;
-
-&lt;p&gt;In general, however, Xilinx’s answer to the getting started problem is to offer
-one of three basic approaches of relatively increasing complexity:&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. Learning Waypoints for learning AXI&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/baby-steps.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Use &lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/axi_gpio/v2_0/pg144-axi-gpio.pdf&quot;&gt;Xilinx’s AXI GPIO controller&lt;/a&gt;.
-This provides an easy on-ramp for an
-engineer to control digital logic by controlling wires within the design.
-This approach is quite easy, and it sounds great.  It sounds great, that is,
-until you start reading the various user experiences among those who have
-used this approach.  &lt;a href=&quot;https://forums.xilinx.com/t5/Xilinx-Evaluation-Boards/AXI-GPIO-too-slow/td-p/725431&quot;&gt;This user, for example, measured his
-GPIO toggling perfromance at 3.8MHz&lt;/a&gt;.
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Improve-IO-Performance-for-Microblaze-to-IO-register-using-AXI/m-p/1168976&quot;&gt;Another user measured a cycle time of 120ns per instruction when accessing
-his AXI-lite peripheral from a 100MHz clock&lt;/a&gt;.
-These are both kind of slow, given that the &lt;a href=&quot;/zipcpu/2019/02/09/cpu-blinky.html&quot;&gt;ZipCPU can toggle a GPIO at
-47MHz when starting from a 100MHz clock, but that’s really another
-story&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;The bottom line here, however, is that while the approach works–it’s really
-not the way to achieve high speed communication between your CPU and the
-rest of your design.  CPUs just aren’t designed to toggle GPIO registers at
-high speeds.  (We’ll ignore the fact that &lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/axi_gpio/v2_0/pg144-axi-gpio.pdf&quot;&gt;Xilinx’s AXI GPIO
-device&lt;/a&gt;
-requires a minimum of four clocks per access, together with the inherent
-latency in their interconnect–or even any interconnect for that matter,
-and …)&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Their second recommendation is that you start with &lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/axi_bram_ctrl/v4_0/pg078-axi-bram-ctrl.pdf&quot;&gt;Xilinx’s AXI block RAM
-controller&lt;/a&gt;,
-and then connect both this controller and your design to a shared block RAM.
-This will get you closer to an ability to adjust registers within a design,
-but it only offers the ability to read and write a shared RAM–not to read
-and write control registers within a design, which is a common usage model.
-I mean, how do you tell your programming logic (PL) that new data is in the
-block RAM, or that it should start processing that data?  A second problem
-with this approach is that there’s no way to stall something until your
-design is ready or a previous task has completed.  This could easily reduce
-a CPU to polling for results that might otherwise be accomplished in a clock
-or two.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The third approach is often the recommended one: &lt;a href=&quot;/formal/2019/05/13/axifull.html&quot;&gt;request Vivado create a
-demonstration AXI design for
-you&lt;/a&gt;, and then modify
-that design to meet your needs.  This is certainly Xilinx’s recommended
-approach. &lt;a href=&quot;https://forums.xilinx.com/t5/Vitis-Acceleration-SDAccel-SDSoC/Access-Custom-RAM-module-from-Zynq/m-p/1200037&quot;&gt;[1]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/IP-Core-Axi4-Axi-Lite/m-p/930618&quot;&gt;[2]&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;The problem with this third approach is that &lt;a href=&quot;/formal/2019/09/06/axi-story.html&quot;&gt;Xilinx’s demonstration designs
-are quite broken&lt;/a&gt;.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;Here’s a list of links to forum posts regarding user designs that have been
-broken by using (what appears to be) Xilinx’s AXI-lite slave demonstration
-design:&lt;/p&gt;
-
-    &lt;p&gt;– Reads hang: &lt;a href=&quot;https://forums.xilinx.com/t5/High-Level-Synthesis-HLS/Unable-to-access-write-read-custom-slave-AXI-peripheral-register/m-p/1014382&quot;&gt;1&lt;/a&gt;,
-   &lt;a href=&quot;https://forums.xilinx.com/t5/PCIe-and-CPM/XDMA-AXI-Lite-write-works-but-read-causes-Ubuntu-16-04-to-crash/m-p/1130550&quot;&gt;2&lt;/a&gt;&lt;/p&gt;
-
-    &lt;p&gt;– Writes hang: &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI4-lite-Write-Channel-starts-the-next-transaction-before-the/m-p/1083247&quot;&gt;1&lt;/a&gt;,
-   &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Writing-bytes-on-AXI-error/m-p/1069895&quot;&gt;2&lt;/a&gt;,
-   &lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/What-are-the-possible-reasons-of-AXI-Lite-wrintings-hang/m-p/1072286&quot;&gt;3&lt;/a&gt;&lt;/p&gt;
-
-    &lt;p&gt;– Other unspecified: &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Multidriven-AXI-Lite-registers-in-packaged-IP-Core/m-p/1151467&quot;&gt;1&lt;/a&gt;,
-   &lt;a href=&quot;https://forums.xilinx.com/t5/Design-Entry/Custom-AXI-Lite-Slave-IP-causing-Microblaze-to-stall/m-p/1132152&quot;&gt;2&lt;/a&gt;&lt;/p&gt;
-
-    &lt;p&gt;Even with these bugs, many Xilinx user’s would much rather &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Testing-AXI4-Lite-Slave/m-p/1085153&quot;&gt;just blindly
-trusting Xilinx’s broken designs&lt;/a&gt; based upon a
-&lt;a href=&quot;https://www.logicallyfallacious.com/logicalfallacies/Appeal-to-Authority&quot;&gt;faulty appeal to authority&lt;/a&gt;.
- Much to my surprise, some individuals have even found &lt;a href=&quot;/blog/2020/03/08/easyaxil.html&quot;&gt;my easy
- example&lt;/a&gt; to be &lt;a href=&quot;https://forums.xilinx.com/t5/Xilinx-IP-Catalog/Rading-BRAM-from-custom-IP-Verilog/m-p/993133&quot;&gt;too
- complicated&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Here’s a similar list to posts about Xilinx’s demonstration AXI full slave:
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-SLAVE-WREADY/m-p/1137871&quot;&gt;1&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Using-AXI-FULL-accessing-ZYNQ-MPSoc-DDR-on-ZCU106-board/m-p/1174700&quot;&gt;2&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/BID-and-AWID-are-not-matched-in-AXI-interface/m-p/996443&quot;&gt;3&lt;/a&gt;&lt;/p&gt;
-
-    &lt;p&gt;These actually follow a common pattern, where a user will complain of one
-problem yet subsequent analysis then reveals another problem within.&lt;/p&gt;
-
-    &lt;p&gt;Sadly, while I can often find bugs in user designs when they are posted,
-a common theme is that of someone with &lt;a href=&quot;https://forums.xilinx.com/t5/Design-Methodologies-and/PL-to-AXI-reg/m-p/1079951&quot;&gt;a design bug, but where they cannot
-share their AXI slave component&lt;/a&gt;.
-Without any RTL to work off of, these bugs can be hard to find.&lt;/p&gt;
-
-    &lt;p&gt;Another recent complaint was that &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI4-full-slave-read-burst-RVALID-50/m-p/1205683&quot;&gt;Xilinx’s demo design only gets 50% read
-throughput&lt;/a&gt;.
-Yes, this was also one of the problems I discovered with &lt;a href=&quot;/formal/2019/05/13/axifull.html&quot;&gt;a formal
-examination  of their AXI full design&lt;/a&gt;.
-It’s a bit of a shame too, since AXI was supposed to be designed as a &lt;em&gt;high
-performance&lt;/em&gt; bus, to find so many example designs that can’t achieve high
-performance.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;As always, be careful who you trust.  Not every demonstration design someone
-will recommend to you works.  One poster,
-&lt;a href=&quot;https://forums.xilinx.com/t5/user/viewprofilepage/user-id/128087&quot;&gt;[larshb]&lt;/a&gt;
-had a design he’d used successfully for years.  When &lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/Unable-to-perform-AXI-handshake-with-custom-AXIS-IP/m-p/1069905&quot;&gt;he recommended it to
-another&lt;/a&gt;,
-I was able to run a formal proof of it and discover many of the same bugs
-within it that others had complained of above.  I wouldn’t hold it against him
-now, though.  My bet is the next time he makes such a recommendation he’ll
-have fixed his bugs.  My worry is more about those who are still unaware that
-Xilinx’s demo designs are buggy–just like
-&lt;a href=&quot;https://forums.xilinx.com/t5/user/viewprofilepage/user-id/128087&quot;&gt;[larshb]&lt;/a&gt;
-used to be.&lt;/p&gt;
-
-&lt;p&gt;If you want a better design to start from, you should consider &lt;a href=&quot;/blog/2020/03/08/easyaxil.html&quot;&gt;this Easy
-AXI-lite design&lt;/a&gt;, and even
-the associated &lt;a href=&quot;/blog/2020/12/19/axil-register-checking.html&quot;&gt;register handling
-check&lt;/a&gt;.
-Alternatively, &lt;a href=&quot;https://github.com/analogdevicesinc/hdl/blob/master/library/common/up_axi.v&quot;&gt;Analog Devices posts a nice AXI-lite design&lt;/a&gt;
-that I’ve seen a couple designs built from as well.  While that one works
-nicely, it’s not setup within for a formal proof.  How then will you know if
-any changes you make to the design break it?  (You won’t.)&lt;/p&gt;
-
-&lt;p&gt;Either example, however, should help you get started.&lt;/p&gt;
-
-&lt;h2 id=&quot;debugging-axi-components&quot;&gt;Debugging AXI components&lt;/h2&gt;
-
-&lt;p&gt;A second reoccurring theme centers around how should one go about debugging
-AXI components.  Of all things, debugging AXI components &lt;em&gt;should&lt;/em&gt; be easy.
-There are three basic steps involved.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 2. Steps to Verifying an AXI design&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/debug-methods.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Formally verify your AXI component.&lt;/p&gt;
-
-    &lt;p&gt;If you haven’t tried verifying an AXI4 design before, then you should know
-that &lt;a href=&quot;/formal/2018/12/28/axilite.html&quot;&gt;it is really easy to do for an AXI-lite
-component&lt;/a&gt;: Just
-instantiate &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_slave.v&quot;&gt;these AXI-lite slave
-properties&lt;/a&gt;,
-and then &lt;a href=&quot;/formal/2018/12/28/axilite.html&quot;&gt;apply SymbiYosys to your
-design&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;AXI (full) designs are a bit more complicated, but I provide AXI4 properties,
-examples and a bit of instruction to &lt;a href=&quot;https://patreon.com/ZipCPU&quot;&gt;my Patreon
-supporters&lt;/a&gt;, so those are still quite doable as
-well.&lt;/p&gt;
-
-    &lt;p&gt;I should also point out that, of all the logic that can be formally verified,
-bus logic tends to be some of the easiest to verify.  It’s also some of the
-most critical logic within a design.  Consider, for example, what would
-happen if a single component failed to follow the rules of the bus: the
-entire design will likely lock up.  On the other hand, if that component
-follows the rules of the bus but just failed to do what it was designed
-to do, you might still manage to recover the rest of the design–at
-least enough to use your design to debug what’s going on.  The point here is,
-&lt;em&gt;getting your bus logic right is critical to debugging the application you
-are really interested in&lt;/em&gt;.&lt;/p&gt;
-
-    &lt;p&gt;While many individuals would recommend building a simulation test bench to
-stimulate your brand new component in a
-&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
-environment, you should be aware that the &lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado/verification-ip.html&quot;&gt;AXI Verification IP offered by
-Xilinx&lt;/a&gt;
-isn’t known for triggering the bugs within their own designs–or surely they
-would’ve never published them in the first place.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Once you’ve formally verified your design, the next step is to place your
-component into an &lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;integrated design
-simulation&lt;/a&gt;,
-and verify that it works together with the other components of your design.&lt;/p&gt;
-
-    &lt;p&gt;As I mentioned above, be careful with &lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado/verification-ip.html&quot;&gt;Xilinx’s AXI Verification
-IP&lt;/a&gt;.
-It won’t necessarily trigger any of the bugs within their designs.  To my
-knowledge, this isn’t unique to Xilinx either.  On one contract I’m working
-on, with a custom AXI Verification IP, the AXI VIP has &lt;em&gt;the exact same
-problem&lt;/em&gt;.  The problem itself is rooted in the fact that the bugs are often
-triggered by a busy interconnect–something rarely simulated when the
-design is examined in isolation.&lt;/p&gt;
-
-    &lt;p&gt;That leads to the real difficult part of simulation: testing your design
-in a sufficiently complex environment–such as with the Processing System
-(PS) of the Zynq attached.  While I’ll admit that I’m still looking for a
-good way to do this reasonably, I can also share that I rarely have any
-problems with formally verified designs not working when integrated into
-larger environments.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Connect your design to actual hardware and try it out.&lt;/p&gt;
-
-    &lt;p&gt;This should only ever be the &lt;em&gt;third&lt;/em&gt; method you try, not the first.  Sadly,
-this becomes the method many individuals end up using to debug their designs.
-Given that many of the bugs listed in the previous section will hang the
-entire system, and worse that &lt;a href=&quot;https://www.xilinx.com/products/design-tools/vivado/verification-ip.html&quot;&gt;Xilinx’s AXI Verification
-IP&lt;/a&gt;
-isn’t known for triggering these bugs in simulation, users who take this road
-often find themselves struggling to figure out where their design actually
-failed.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;The result is that there are a lot of forum requests for help debugging
-custom IPs.  See for example,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Implementation/AXI4-lite-register-implementation-problems/m-p/923908&quot;&gt;[1]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Counter/m-p/1030089&quot;&gt;[2]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI4-Lite-read-hangs-and-RREADY-is-not-deasserting-after-RVALID/m-p/1035006&quot;&gt;[3]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/Custom-AXI-peripheral-register-0-showing-fixed-data-even-without/m-p/1158158&quot;&gt;[4]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Adding-AXI-Write-wait-states/m-p/1169544&quot;&gt;[5]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Axi4-lite-slave-wrong-AWADDR-transfer/m-p/1176688&quot;&gt;[6]&lt;/a&gt;, or
-&lt;a href=&quot;https://forums.xilinx.com/t5/Design-Entry/why-does-custom-axi4-ip-fail-at-2nd-write-in-simulation/m-p/1190568&quot;&gt;[7]&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Here are some forum posts from users requesting simulation help:
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/How-to-debug-an-AXI4-peripheral/m-p/1202103&quot;&gt;[1]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Simulating-Custom-AXI-Slave-Peripheral/m-p/1105197&quot;&gt;[2]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Testing-AXI4-Lite-Slave/m-p/1079475&quot;&gt;[3]&lt;/a&gt;.
-One person even asked about a technique dear to my heart–&lt;a href=&quot;https://forums.xilinx.com/t5/Vivado-Debug-and-Power/FPGA-Verification/m-p/1077142&quot;&gt;formal
-methods&lt;/a&gt;,
-although these tend to only rarely be discussed on the forum.&lt;/p&gt;
-
-&lt;p&gt;Here’s another crazy one: in &lt;a href=&quot;https://forums.xilinx.com/t5/Simulation-and-Verification/simulating-simple-AXI4-Lite-read-amp-write-with-a-custom-IP/m-p/930345&quot;&gt;this case, the user didn’t want a full fledged
-AXI test.  He believed he could perform a sufficient test in
-hardware&lt;/a&gt;.
-While &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;I’ll admit to having been there
-before&lt;/a&gt;, the cost of
-debugging in hardware is a lot of pain.  Worse, a piece of hardware might
-&lt;em&gt;appear&lt;/em&gt; to work for weeks or months on end, only to have an undetected and
-latent bug lying within it.  (That was my case with &lt;a href=&quot;https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/wbsdram.v&quot;&gt;my own SDRAM
-controller&lt;/a&gt;,
-before I formally verified it.)  Finding and fixing such bugs can be even more
-challenging when they don’t present themselves often.  This is not a path I
-would recommend, therefore, if you can avoid it.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3. Using a firewall to find an AXI4 bug&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/using-an-axi-firewall.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;One piece of advice I often offer to users forced to do their debugging in
-hardware is to connect an &lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;AXI
-firewall&lt;/a&gt; to a design.
-This can be useful when trying to determine whether the fault is your own, or
-Xilinx’s AXI infrastructure.  If the fault occurs with the
-&lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt; in place,
-then the fault must lie somewhere else in your design (or you didn’t wire
-it up right).  Even better, the
-&lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt; will provide a
-fault signal which you can use to trigger an &lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;internal logic
-analyzer&lt;/a&gt; to capture
-what’s going on.  The technique isn’t perfect, however, as the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisafety.v&quot;&gt;AXI
-firewall&lt;/a&gt; I have
-modifies the environment it is observing–so it is possible to pass the
-&lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt; test while still
-having a bug within your design.  (Doh!)&lt;/p&gt;
-
-&lt;h2 id=&quot;custom-axi-masters&quot;&gt;Custom AXI masters&lt;/h2&gt;
-
-&lt;p&gt;The problem isn’t limited to the design of AXI slaves.  Many users have also
-written in with problems debugging their custom AXI masters as well.  Examples
-include: &lt;a href=&quot;https://forums.xilinx.com/t5/Simulation-and-Verification/UART-lite-IP-halts-reading-after-data-is-transmitted/m-p/1170279&quot;&gt;messing up AXI
-handshaking&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/I-want-the-burst-length-to-be-different-in-every-Burst/m-p/1127226&quot;&gt;not knowing how to set up a master to handle arbitrary burst
-lengths&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Other-FPGA-Architecture/Block-RAM-access-with-AXI-Master-Interface/m-p/1100339&quot;&gt;needing help just getting started with building an AXI master&lt;/a&gt;, and
-&lt;a href=&quot;https://forums.xilinx.com/t5/Design-Entry/axi-araddr-lt-16-h0-IN-ADDR-31-24-1-IN-ADDR-15-8-1-is-ok/m-p/1095897&quot;&gt;just not handling AXI outputs per spec&lt;/a&gt;.
-Beware that your problem might not just be the master at fault.  &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Custom-AXI-Master-VIP-failed/m-p/981512&quot;&gt;In this
-example the master was producing a wider ID field than the interconnect was
-expecting&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Some of these  problems we’ve discussed on this blog, although I’ll admit to
-being rather light on how to generate burst-capable AXI masters.  Still, I
-have &lt;a href=&quot;/blog/2020/03/23/wbm2axisp.html&quot;&gt;posted how to build a generic AXI(lite)
-master&lt;/a&gt;, and again on
-&lt;a href=&quot;/blog/2020/06/16/axiaddr-limits.html&quot;&gt;the problems associated with building a burst-capable AXI
-master&lt;/a&gt;.  &lt;a href=&quot;https://www.blueletterbible.org/kjv/jas/4/15&quot;&gt;If the Lord
-wills&lt;/a&gt;, we may even discuss a &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/b0d4944b13ad6b3b447172dd3f9d27dc86388907/rtl/core/axilops.v&quot;&gt;new
-AXI4 memory unit for the
-ZipCPU&lt;/a&gt;
-that I’ve been working on recently.&lt;/p&gt;
-
-&lt;p&gt;Another common AXI problem is specifying the length of an AXI burst in AxLEN,
-rather than one less than the burst’s length.  Although I have &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/BVALID-stays-low-in-custom-ip/m-p/1052704&quot;&gt;only one link
-for this&lt;/a&gt;,
-I’m still going to declare it to be a &lt;em&gt;common&lt;/em&gt; problem if for no other reason
-than it’s one I’ve struggled with myself.  Not only that, this is one of the
-first things I look for when attempting to debug someone else’s design: do
-the number of requests match the number of responses?  For this, it helps
-to have the computer help count, and so either a good AXI VIP or an
-&lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;AXI firewall&lt;/a&gt; can also be
-useful here.&lt;/p&gt;
-
-&lt;h2 id=&quot;out-of-protocol-designs&quot;&gt;Out-of-protocol designs&lt;/h2&gt;
-
-&lt;p&gt;Sadly, there’s only so much you can do for the user who hasn’t done their
-reading on how AXI is supposed to work.  Often these individuals can get their
-design to work with the AXI VIP suite, or perhaps with one or two peripherals,
-or one implementation of the AXI interconnect.  The moment their environment
-changes, however, their design then breaks.  Some of these users will then
-even go so far as to blame every one nearby when the failure was actually to be
-found within their non-protocol compliant implementation in the first
-place.&lt;/p&gt;
-
-&lt;p&gt;As one example, the AXI4 specification is very clear that &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AWVALID&lt;/code&gt; is not
-allowed to wait on &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;WREADY&lt;/code&gt; and vice versa, and yet users will still create
-designs where they expect one transaction, whether &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AW&lt;/code&gt; or &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;W&lt;/code&gt;, to take place
-before the other.
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Interconnect-awready-arready-not-going-high-on-one-SI/m-p/1090680&quot;&gt;[1]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Memory-Interfaces-and-NoC/MIG-do-not-assert-axi-awready/m-p/1138828&quot;&gt;[2]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Intrerconnect-holds-off-WDATA-without-AWADDR/m-p/1138307&quot;&gt;[3]&lt;/a&gt;
-The problem is generally compounded by the fact that few AXI slave substitutes
-act like the MIG AXI slave individuals ultimately want to use.  Therefore, once
-they verify their core against a generic AXI slave–perhaps even the VIP–they
-often pick up a bad habit along the way.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 4. In Xilinx's Ethernet-lite controller, RVALID depends on RREADY contrary to spec&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-axi-ethernetlite/axi_rvalid.png&quot; alt=&quot;&quot; width=&quot;511&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;I should also point out that this isn’t just a beginning user mistake either,
-since &lt;a href=&quot;/blog/2020/01/01/2019-in-review.html&quot;&gt;Xilinx made a very similar mistake in their AXI Ethernet-lite
-controller&lt;/a&gt;
-of not setting &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RVALID&lt;/code&gt; unless &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RREADY&lt;/code&gt; was already set.&lt;/p&gt;
-
-&lt;p&gt;Not every problem is so obvious.  &lt;a href=&quot;https://forums.xilinx.com/t5/Simulation-and-Verification/Writing-to-AXI-Slave-using-VIP-package-doesn-t-work/m-p/1097505&quot;&gt;This user set a valid signal on the clock
-immediately following a reset&lt;/a&gt;,
-not realizing that this would violate the specification.  Indeed, I might
-argue that the AXI4 specification isn’t very clear on this issue–a figure
-alone is used to explain it with a bare minimum of accompanying text.  (See Fig.
-A3-1 on page A3-36 in &lt;a href=&quot;/doc/axi-spec.pdf&quot;&gt;this copy of the
-spec&lt;/a&gt;.)&lt;/p&gt;
-
-&lt;p&gt;As with any bus protocol, you need to know when a request is made.  This
-follows from the requirement that there must be one response for every
-request.  An AXI request, for example, is made any time &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;xVALID &amp;amp;&amp;amp; xREADY&lt;/code&gt;
-are true on the same clock cycle.  Moreover, if &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;xVALID &amp;amp;&amp;amp; !xREADY&lt;/code&gt;, the
-request needs to be held into the next cycle.  &lt;a href=&quot;https://forums.xilinx.com/t5/Design-Entry/AXI4-cycles-but-no-response/m-p/1112425&quot;&gt;This
-user&lt;/a&gt;,
-however, didn’t see a problem with holding &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AWVALID&lt;/code&gt; high until his request
-had been made and then dropping it when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;AWREADY&lt;/code&gt; was low.  Breaking the
-protocol in this fashion will also break valid AXI components.  Not all
-components ignore bus signals when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;xVALID &amp;amp;&amp;amp; !xREADY&lt;/code&gt;.  Many components I’ve
-come across, such as &lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/axi_gpio/v2_0/pg144-axi-gpio.pdf&quot;&gt;Xilinx’s
-GPIO&lt;/a&gt;
-or even their IPIF register handler as just two examples,
-accomplish their internal task before setting &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;xREADY&lt;/code&gt; to accept the request
-for that task.  In other words, these designs, those that depend upon them,
-and many other AXI slave designs will start working on the request &lt;em&gt;before&lt;/em&gt;
-they accept the request in the first place.&lt;/p&gt;
-
-&lt;p&gt;Finally, there was one user who assigned meaning to AXI ID’s coming from his
-master.  If I recall, he was attempting to send side-channel information in the
-ID bits–something probably more appropriately left for the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;xUSER&lt;/code&gt; bits.
-This user was then disappointed to discover that the AXI width converter didn’t
-preserve AXI ID’s.  &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-width-converter-master-has-no-IDs/m-p/1166800&quot;&gt;[1]&lt;/a&gt;  Had he stuck with
-the rules of the bus, instead of trying to use an undocumented feature, he
-wouldn’t have needed to try to rearrange his design when the feature he wanted
-was suddenly no longer implemented.&lt;/p&gt;
-
-&lt;h2 id=&quot;throughput-throughput-throughput&quot;&gt;Throughput, throughput, throughput!&lt;/h2&gt;
-
-&lt;p&gt;Much to my surprise, when I started tallying these forum posts together, there
-were &lt;em&gt;a lot&lt;/em&gt; of requests for help achieving higher AXI throughput.  Perhaps
-this shouldn’t surprise anyone.  One of the main purposes of custom digital
-logic in the first place is to implement complex algorithms which can’t be
-done in real time on a high powered CPU.  One of the things that is often
-missed, however, is that high powered CPUs have carefully designed high speed
-bus implementations.  How shall FPGA designs built upon AXI compete?&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. What is a &quot;side effect&quot;?&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/side-effects.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Yes, AXI was designed to be a high performance bus.  That doesn’t mean that
-every implementation will achieve that high performance.  Indeed, there have
-been a lot of requests for help to achieve higher throughput, or complaints
-about the throughput provided by Xilinx’s infrastructure.  Here are just a few
-of those:
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI4-Lite-Memory-Mapped-Performance-poor/m-p/1115566&quot;&gt;[1]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Throughput-of-AXI-interconnect/m-p/1117062&quot;&gt;[2]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Memory-Interfaces-and-NoC/How-to-implement-memset-memcpy-to-PL-memory-space/m-p/1127227&quot;&gt;[3]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/AXI-BRAM-64-bit/m-p/1129534&quot;&gt;[4]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Can-ARM-Master-send-data-to-mutiple-AXI-slave-interfaces-in/m-p/1147271&quot;&gt;[5]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Can-t-latch-input-from-PS-to-PL-each-clock-cycle/m-p/1146449&quot;&gt;[6]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/How-can-I-define-AXI4-full-data-size-to-be-larger-than-32-bit/m-p/1146670&quot;&gt;[7]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI4-Lite-interface/m-p/1184689&quot;&gt;[8]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Improve-IO-Performance-for-Microblaze-to-IO-register-using-AXI/m-p/1169474&quot;&gt;[9]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Custom-AXI-slave-simulation-ADDR-LSB-OPT-MEM-ADDR-BITS/m-p/1182659&quot;&gt;[10]&lt;/a&gt;,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Advantage-of-Multi-slave-AXI-on-my-IP/m-p/1196157&quot;&gt;[11]&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;I was a bit surprised to discover that the &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/What-is-the-processor-s-command-for-AXI-Full/m-p/1168545&quot;&gt;PS (i.e. ARM’s CPU) doesn’t
-automatically communicate using bursts with the Programming Logic
-(PL)&lt;/a&gt;,
-but rather needs to be set up for that purpose.  When you think about it,
-however, it makes sense.  If the design hadn’t been built that way, then you
-might find yourself accidentally reading from a peripheral where reads also
-cause side effects not normally present when simply reading from a memory.
-Still, it’s worth remembering.&lt;/p&gt;
-
-&lt;p&gt;But let’s start at the top.  If you want high throughput through your AXI
-subsystem, then there are some very specific things you can and should be
-doing:&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 6. &quot;Rules&quot; for achieving maximum bus performance&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/axi-performance-rules.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Use a common clock across all components if possible.  &lt;a href=&quot;/blog/2017/10/20/cdc.html&quot;&gt;Crossing from one
-domain to another&lt;/a&gt; will add
-at least two clocks of latency from each domain.  It will also slow your
-bus down to the speed of the slowest clock.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Avoid width conversions by using a common width for your data bus.  Even the
-most basic width conversion will add two clocks of latency to your design.
-More complicated conversions, or converters designed to be generic will
-likely take more latency.  For example, even &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axi2axilsub.v&quot;&gt;my own AXI
-downsizer&lt;/a&gt;
-takes two clocks to process an incoming write request, and another clock
-(or two) on the return.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;If possible, use the maximum data width you can for this purpose–but make
-it common across all bus components.&lt;/p&gt;
-
-    &lt;p&gt;In one case, a user connected their 32-bit design to the 128-bit port of the
-ARM (PS).  They were then disappointed to discover that a 32-bit request
-from the ARM was coming into the bus at 128-bits (no surprise there), but
-then being converted into four independent 32-bit requests–one valid one
-and three empty requests!  (In the after-analysis, this may have been a
-result of the PS configuration getting out of sync with the RTL design.)&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;It’s not just throughput that’s at issue.  &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Intereconnector/m-p/1054644&quot;&gt;This user complained of too much
-latency in the interconnect&lt;/a&gt;, and
-&lt;a href=&quot;https://forums.xilinx.com/t5/Versal-and-UltraScale/Strategy-for-lowest-latency-to-access-AXI-register/m-p/1096094&quot;&gt;this one was looking for a strategy to achieve low latency
-access&lt;/a&gt;.  Indeed, latency and
-throughput are both related performance numbers.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 7. Steps to optimizing any design&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/optimization-rules.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Finally, as with all optimization tasks, your first step will be to get the
-design to work slowly, your second step will be to measure your performance,
-and then your third step will be to do any actual optimizations.  That
-leads to &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Transmission-time-FPGA-CPU-Zynq/m-p/1156187&quot;&gt;this discussion of how to measure
-throughput&lt;/a&gt;.  There was also &lt;a href=&quot;https://forums.xilinx.com/t5/Simulation-and-Verification/calculation-of-throughput-in-FPGA/m-p/1007913&quot;&gt;this question about
-how to measure the throughput to memory within an
-FPGA&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;I also have an approach I hope to write about soon for measuring AXI throughput.
-It’s built around this &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axiperf.v&quot;&gt;basic throughput measuring AXI-lite
-slave&lt;/a&gt;.  The
-slave examines AXI (full) bursts and makes measurements of the bus it can snoop
-on.  From this information, I should be able to measure bus throughput and
-latency–but that’s a project for another day.&lt;/p&gt;
-
-&lt;p&gt;Don’t expect too much from software running on the PS either.  I’ve seen a
-couple of users asking what it would take to get a software &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;memcpy()&lt;/code&gt; to run
-using burst mode.  &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/How-do-I-use-burst-transfer-using-AXI-Full-interface/m-p/958398&quot;&gt;How then shall a user command an AXI burst from
-software&lt;/a&gt;?
-(with links &lt;a href=&quot;https://forums.xilinx.com/t5/AXI-Infrastructure/AXI-burst-access-to-the-AXI-full-slave-from-Microblaze-is-this/td-p/843235&quot;&gt;1&lt;/a&gt;
-and &lt;a href=&quot;https://forums.xilinx.com/t5/AXI-Infrastructure/How-Do-I-Perform-an-AXI-Burst-in-Software/td-p/592502&quot;&gt;2&lt;/a&gt;)  As I mentioned above, the bottom line
-answer is … you can’t.&lt;/p&gt;
-
-&lt;p&gt;This follows from the nature of how CPUs work.  CPUs execute instructions.  They
-don’t execute bursts of instructions, but singular instructions.  Hence, if you
-have a software loop to read a string, the CPU doesn’t know to issue a burst.
-It only knows each instruction individually.  To make matters worse, if any read
-instruction receives a bus error, the CPU needs to stop on a dime at that
-instruction without issuing any further memory accesses or updating any further
-registers.  That makes burst memory handling challenging at best.&lt;/p&gt;
-
-&lt;p&gt;One potential solution is to tell the CPU that the memory address range in
-question is cachable, and then to read it into the cache since cache reads
-can be done in bursts.  This has other problems, however, since you might
-accidentally read peripheral memory you didn’t intend to read as a result of
-reading an entire cache line.  The bottom line here is that if it looks like
-memory, you might be able to cache it and get burst access.  If not, you’ll
-either need a DMA or be stuck with singleton reads and writes.&lt;/p&gt;
-
-&lt;h3 id=&quot;axi-datamover-bugs&quot;&gt;AXI Datamover Bugs&lt;/h3&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 8. Three types of AXI Data Mover DMAs&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/data-movers.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;A second topic that surprised me due to its prevalence was the number of
-issues surrounding &lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/axi_datamover/v5_1/pg022_axi_datamover.pdf&quot;&gt;Xilinx’s Datamovers (DMAs)&lt;/a&gt;.
-Xilinx provides three basic datamovers: a memory to memory DMA sometimes
-called MM2MM, a memory to stream DMA (MM2S), and a stream to memory DMA
-(S2MM).  They also provide other similar cores to include their &lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/axi_cdma/v4_1/pg034-axi-cdma.pdf&quot;&gt;centralized
-DMA (CDMA)&lt;/a&gt; and &lt;a href=&quot;https://www.xilinx.com/support/documentation/ip_documentation/axi_vdma/v6_2/pg020_axi_vdma.pdf&quot;&gt;Video DMA (VDMA)&lt;/a&gt; controllers.
-Sure enough, they’re all encrypted, or I would’ve run a formal check on them
-given all the controversy surrounding the S2MM datamover in particular.&lt;/p&gt;
-
-&lt;p&gt;Since we’ve just discussed AXI performance, it follows that the official answer
-to achieving high performance on an AXI bus is to use a datamover (DMA) for
-high speed memory transfer.  The good news is that these vendor provided data
-movers are indeed high speed, full of features,  and provided with a &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/DMA-transfer-tutorial/m-p/1169995&quot;&gt;tutorial
-on how to do DMA transfers&lt;/a&gt;.
-In particular, these DMAs are some of the few vendor supplied AXI masters that
-will &lt;a href=&quot;/blog/2020/06/16/axiaddr-limits.html&quot;&gt;use the full AXI burst
-capability&lt;/a&gt;.
-Even better, many user tasks can be placed nicely between an
-AXI MM2S and an S2MM, leaving the vendor tools to handle all of the complicated
-data movement processing.  What more could you want?&lt;/p&gt;
-
-&lt;p&gt;The problem here seems to stem from certain non-intuitive S2MM design features
-found in Xilinx’s deesign.  Whether or not these are actually &lt;em&gt;bugs&lt;/em&gt; appears
-to be a matter of debate, but their S2MM design clearly doesn’t do what many
-users are expecting.&lt;/p&gt;
-
-&lt;p&gt;I have not personally used Xilinx’s S2MM design, so I’m more of a witness
-and idea pollinator regarding it than anything else.  That said, I have built
-(and formally verified) &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axis2mm.v&quot;&gt;my own S2MM
-DMA&lt;/a&gt;, and I can
-assure you that mine does not have these non-intuitive features.&lt;/p&gt;
-
-&lt;p&gt;What non-intuitive features am I talking about?  Well, first, the S2MM design
-will stop its transfer upon receiving a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; signal.  I’m told this feature
-was created to support network packets, where the full length of the packet
-might not be known until the end of the packet.  The second problem is that
-without the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; signal, the S2MM design will hang while waiting for it.
-If that weren’t enough, users need to prevent the S2MM component from receiving
-any stream data prior to being configured with a transfer length, destination
-address, and a command to start transferring.  Failing to prevent data from
-entering prior to configuration will cause the S2MM design to hang.  Or, at
-least, this is what I’ve managed to learn from the various S2MM posts I’ve
-been watching.&lt;/p&gt;
-
-&lt;p&gt;Here are just some of these S2MM posts that I’ve come across:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Problem-with-AXI-DMA-data-transfer/m-p/1165733&quot;&gt;Broken S2MM&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Tready-S2MM-of-DMA-constantly-low/m-p/1154812&quot;&gt;Tready S2MM of DMA constantly low&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Custom-IP-works-functionally-but-on-integration-with-processor/m-p/1151489&quot;&gt;S2MM core locks on TLAST&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Strange-AXI-DMA-behavior/m-p/1146003&quot;&gt;DMA transfer fails&lt;/a&gt; (No solution identified)&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/How-do-I-verify-if-my-processor-Clock-is-entering-my-custom-IP/m-p/1150933&quot;&gt;Absent clock?&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Xilinx-IP-Catalog/How-to-recover-DMA-S2MM-Direct-not-S-G-without-losing-data/m-p/1135825&quot;&gt;Need to generate a missing TLAST signal&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-DMA-Receive-by-chunks/m-p/1116887&quot;&gt;Generating TLAST?&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/FPGA-Configuration/axi-dma-internal-error/m-p/1116414&quot;&gt;S2MM Requires pre-configuration&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/FPGA-Configuration/Problem-with-AXI-DMA/m-p/1116001&quot;&gt;S2MM Accepts data, then hangs&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-DMA-S2MM-LENGTH-Register/m-p/1112349&quot;&gt;Transfers end early&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/FPGA-Configuration/AXI-master-read-and-write-in-RTL/m-p/1102576&quot;&gt;Need a stream to memory solution&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Axi-dma-S2MM-receive-data-are-not-all-perfectly-normal/m-p/1092067&quot;&gt;First several words of S2MM transfer get lost&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/Problem-with-AXI-S2MM-DMA-and-SDK/m-p/1060268&quot;&gt;S2MM sometimes runs and works, other times just fails and trashes the SDK&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Datamover-Status-INTERR-Internal-Error/m-p/1166803&quot;&gt;Internal error in AXI Datamover&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-DMA-wrong-length-internal-error/td-p/1207387&quot;&gt;Wrong DMA Length ?&lt;/a&gt;&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Like I said, however, the official answer is that this S2MM design is bug free.
-Your mileage, however, might vary.&lt;/p&gt;
-
-&lt;p&gt;You are, of course, welcome to use &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axis2mm.v&quot;&gt;my own
-S2MM&lt;/a&gt;
-controller if you would rather.  It is available for free under the Apache
-license.  It has worked nicely for some users.  However, unlike Xilinx’s
-controller, mine doesn’t come with any Linux kernel or other software drivers.
-At the same time, it doesn’t have the surprising features either.&lt;/p&gt;
-
-&lt;h3 id=&quot;resetting-dma&quot;&gt;Resetting DMA&lt;/h3&gt;
-
-&lt;p&gt;Before I move on to the smaller categories,
-there is one large theme left and that is the problem associated with resetting
-an AXI DMA.  Indeed, this problem has been such an issue that I’ve written
-two posts on the topic–I’ll get to those in a moment.  The general problem
-here seems to be either that users just naturally want to reset the DMA
-between bursts, or that somehow the DMA gets hung and so they want to reset
-things and start over.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 9. Resetting the DMA alone&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/reset-desired.svg&quot; alt=&quot;&quot; width=&quot;560&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Why might your DMA hang?  Perhaps because you’ve copied one of Xilinx’s
-demonstration designs and you are trying to copy data from it?  That’s a common
-theme through this section, but also a theme I’ve rarely been able to prove.
-Perhaps the DMA failed because of the bugs in the demonstration designs.
-Perhaps it failed because an off-chip interface hung when the chip it was
-talking to went off line.  Perhaps something else went wrong with either the
-DMA or the AXI infrastructure and now the user wants to reset the DMA.
-&lt;a href=&quot;/formal/2019/09/06/axi-story.html&quot;&gt;[1]&lt;/a&gt;
-The problem, however, is that the user typically wants to reset the DMA
-&lt;em&gt;without resetting the rest of his design&lt;/em&gt;.&lt;/p&gt;
-
-&lt;p&gt;This is a problem in AXI, since AXI has no mechanism to abort an ongoing
-transaction simply because the master is no longer interested in either
-continuing it or receiving the results from it.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 10. Resetting the DMA requires resetting everything touching the AXI bus&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/full-axi-reset.svg&quot; alt=&quot;&quot; width=&quot;560&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The first post I wrote to address this problem was my post discussing protocol
-&lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewalls&lt;/a&gt;.  If the
-problem is caused by a misbehaving user peripheral, a
-&lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt; should fix the
-problem.  The &lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt;
-would guarantee that all AXI requests get responses, and that (following any
-protocol error) the DMA gets an appropriate bus error response.  Even better,
-my own &lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewalls&lt;/a&gt; can
-be configured to reset the downstream slave, and so allow you to recover from
-a failure should one ever happen.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 11. Using a firewall to limit the reset to a single peripheral&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/xilinx-forums/firewalled-reset.svg&quot; alt=&quot;&quot; width=&quot;560&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The second post discussed &lt;a href=&quot;/blog/2020/03/14/axi-reset.html&quot;&gt;the difficulty of resetting an AXI
-component&lt;/a&gt; such as a DMA.
-The problem, as mentioned above, is that you need to continue to provide any
-write data that you’ve committed to, and you need to continue to wait for any
-writes or reads to complete before you can declare a component idle.  That
-also means that you need to leave &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RREADY&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;BREADY&lt;/code&gt; high during this time,
-and further that you need to know how many responses are outstanding.  This
-is quite doable if the core was designed properly with a transaction abort
-function, but such a function is fundamentally &lt;em&gt;very different&lt;/em&gt; from a soft
-reset.  That’s the good news.  The bad news is that there’s no way to recover
-from a non-compliant slave apart from using a
-&lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt;–otherwise
-your design may well hang until the next reset.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Processor-System-reset-freezes-PS-with-long-aux-reset-pulse/m-p/1140853&quot;&gt;Short resets reset the DMA, long ones don’t&lt;/a&gt;.  This is probably another example of looking for the
-bug in the wrong place.  The underlying bug was associated with properly
-engineering separate reset domains, but that wasn’t apparent from the
-original question.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/PCIe-and-CPM/XDMA-Simulation-works-for-many-transfers-then-descriptor-count-0/m-p/1106305&quot;&gt;User reports a design lock up when the downstream hiccups and takes too
-long to respond&lt;/a&gt;.  Unfortunately,
-even with some help from an official Xilinx representative, this issue was
-never resolved to know what the root cause was.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-DMA-S2MM-issue/m-p/1087561&quot;&gt;Resetting S2MM, but not the rest of the design&lt;/a&gt;.  This looks
-like the S2MM problem above, where the S2MM was given data before being
-configured.  (But &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; was high …?)  This was then compounded when the
-user tried to recover his design by resetting his S2MM component and not the
-rest of the design.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/S2MM-DMA/m-p/1087864&quot;&gt;Resetting between every pair of transactions&lt;/a&gt;.  This user felt that it
-was appropriate to reset the S2MM core between every usage.  Such resets
-should  &lt;em&gt;never&lt;/em&gt; be required.  In reality, his underlying problem was probably
-the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; bug listed above.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/PCIe-and-CPM/Software-Reset-for-QDMA-IP-Not-Working/m-p/1069901&quot;&gt;Software resets hang the DMA&lt;/a&gt;.  This follows from our
-discussion above.  It also appears that &lt;a href=&quot;https://forums.xilinx.com/t5/PCIe-and-CPM/Software-Reset-for-QDMA-IP-Not-Working/m-p/1036558&quot;&gt;this user complained about the same
-issue twice&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/How-do-you-reset-the-AXI-DMA-IP/m-p/1008913&quot;&gt;How do you reset the AXI DMA IP&lt;/a&gt;?  This user was
-looking for a guaranteed way to restart the AXI DMA from software from
-scratch.  He was looking for a failsafe way to do this.  The problem is that,
-if your FPGA logic is hanging the DMA, there may be no hardware way to reset
-the design without resetting the entire design.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;The bottom line answer remains the same as before: 1) formally verify
-&lt;em&gt;everything&lt;/em&gt; that touches your bus, 2) Simulate everything before placing
-it onto your hardware, and 3) use logic analyzers if necessary if you are
-struggling with any problems afterwards.  If you do find hardware bugs in
-step three, that’s a sign you messed up steps 1 and 2.  Go back and re-do
-those better, so they won’t have the same problems again in the future.&lt;/p&gt;
-
-&lt;p&gt;If you can’t simulate an ARM CPU, then get a digital design with a CPU within it
-that you can simulate.&lt;/p&gt;
-
-&lt;h3 id=&quot;fft-ip-core&quot;&gt;FFT IP core&lt;/h3&gt;
-
-&lt;p&gt;FFT questions aren’t really AXI questions, but they aren’t all that uncommon
-either.  Indeed, FFT questions are common enough that we’ve discussed &lt;a href=&quot;/digilent/2017/05/29/fft-debugging.html&quot;&gt;how to
-solve FFT problems in
-general&lt;/a&gt;
-already, as well as how to handle &lt;a href=&quot;/dsp/2020/04/20/axil2axis.html&quot;&gt;in-hardware protocol testing with an
-AXI-stream based component&lt;/a&gt;.
-Both approaches should help the users below get closer to their solution.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/AI-Engine-DSP-IP-and-Tools/FFT-IP-core-hanging-after-sometime/m-p/1169001&quot;&gt;The FFT core hangs&lt;/a&gt;.  From a forum question
-standpoint, this one was horrible.  The user provided a vague description
-of something going wrong, but then provided no other information suitable
-for narrowing the problem down.  In the end, the user explained the issue
-by stating that there was an AXI protocol error of some unspecified type.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/AI-Engine-DSP-IP-and-Tools/FFT-IP-pipeline-latency/m-p/1164810&quot;&gt;What is the FFT IP core’s pipeline latency&lt;/a&gt;?  This question
-confused me.  Why not just measure it?  Any good simulation should be able
-to provide this answer.  This leaves me wondering if the user didn’t
-simulate his design before moving to hardware, and so had no hard insight into
-how the design was actually working now that he had placed it onto his
-hardware.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;h3 id=&quot;cache-coherency&quot;&gt;Cache coherency&lt;/h3&gt;
-
-&lt;p&gt;When working with a CPU, always be aware of the issue of cache coherency.  It’s
-not uncommon to use a DMA to transfer data and then, only later, to discover
-that the DMA has changed data within the CPU cache.  I know &lt;a href=&quot;/blog/2019/11/14/sdspi.html&quot;&gt;I’ve had that
-problem when working with the
-ZipCPU&lt;/a&gt;.  That also appears to
-be the &lt;a href=&quot;https://forums.xilinx.com/t5/Memory-Interfaces-and-NoC/PL-DDR-ACCESS/m-p/1090876&quot;&gt;problem this user was struggling
-from&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h3 id=&quot;how-to-debug-an-axi4-interconnect&quot;&gt;How to debug an AXI4 interconnect?&lt;/h3&gt;
-
-&lt;p&gt;It wasn’t clear from &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/FPGA-Verification/m-p/1180297&quot;&gt;this post&lt;/a&gt; if the user wanted to verify
-their own interconnect, or one they built on their own.&lt;/p&gt;
-
-&lt;p&gt;Personally, I would recommend formal verification.  That said, my own AXI
-interconnect has been failing its formal proof for some time (while passing
-simulation tests), so … I have some work to do here in my own back yard.&lt;/p&gt;
-
-&lt;h3 id=&quot;failing-to-provide-a-full-16-clock-reset&quot;&gt;Failing to provide a full 16-clock reset&lt;/h3&gt;
-
-&lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Block-Memory-Generator-IP-AXI4-Lite/m-p/1185875&quot;&gt;This one&lt;/a&gt; isn’t quite as simple as my title
-indicates.  Re-reading the post again today, it appears as though the user
-had multiple reset domains across clock domains, and that they weren’t properly
-synchronized.&lt;/p&gt;
-
-&lt;h3 id=&quot;ethernet-lite&quot;&gt;Ethernet-Lite&lt;/h3&gt;
-
-&lt;p&gt;Remember how I mentioned that Xilinx’s AXI ethernet lite core was not
-bus compliant?  Here’s &lt;a href=&quot;https://forums.xilinx.com/t5/Design-Entry/AXI-Ethernet-Lite-Core-behaviour-to-AXI-master-bus/m-p/1169426&quot;&gt;how that looks from this user’s
-perspective&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Bottom line takeaway?  What you see may be leading you very far from the
-true underlying problem.  Verification needs to start at the low level,
-and it needs to be methodical, lest you end up with an &lt;a href=&quot;/zipcpu/2017/12/28/ugliest-bug.html&quot;&gt;inexplicable
-mystery in hardware&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h3 id=&quot;mm2s-performance&quot;&gt;MM2S performance&lt;/h3&gt;
-
-&lt;p&gt;While most of the problems seem to center around the unexpected S2MM behavior,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Problem-with-AXI-datamover-MM2S/m-p/1174964&quot;&gt;one user had a real challenge with the
-MM2S&lt;/a&gt;.  In this case, the user was getting horrendous
-performance from the MM2S DMA.  A DMA &lt;em&gt;should&lt;/em&gt; be able to transfer one beat of
-data on every cycle.  In this example, the MM2S wasn’t maintaining that speed.
-Looking over the problem again now, I wonder if his data FIFOs weren’t deep
-enough.  Not knowing how the detailed design was actually configured, it’s
-hard to be certain.&lt;/p&gt;
-
-&lt;h3 id=&quot;measuring-logic-usage&quot;&gt;Measuring logic usage&lt;/h3&gt;
-
-&lt;p&gt;One of the challenges associated with a complicated bus design is the logic
-complexity required to implement it.  In my own work, I’ve done lots of
-comparisons between Wishbone, AXI, and AXI-lite “equivalent” components.
-(I use “equivalent” in quotes, because the various differences between
-bus implementations make it hard to do true apples to apples comparisons.)&lt;/p&gt;
-
-&lt;p&gt;Needless to say, since FPGA cost goes up with available logic, logic usage
-comes up as a topic.  Much to my surprise, I only found two posts among
-my set dealing with this topic.  In the first post, the user is asking
-&lt;a href=&quot;https://forums.xilinx.com/t5/Other-FPGA-Architecture/FPGA-logic-estimator-to-select-device/m-p/1165735&quot;&gt;how to quickly and easily estimate logic resource
-requirements&lt;/a&gt;.
-This is usually pretty easy to do with Yosys at all levels of the design,
-although I’m not quite sure how I would do it with Vivado without building
-my entire design and connecting it to an XDC file.&lt;/p&gt;
-
-&lt;p&gt;A second user is looking for tips and tricks to reduce his design size.  The
-key to this post is that &lt;a href=&quot;https://forums.xilinx.com/t5/Synthesis/Size-Optimized-HDL-Tricks-Guidlines/m-p/1093591&quot;&gt;his timer is taking up 60% of his 25k LUT
-area&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Yes, FPGAs are getting bigger and more powerful every day.  However, if you
-take that FPGA and place a microblaze on it, a flash-based boot loader, a MIG
-SDRAM controller, and the necessary AXI interconnect to connect them all
-together, you might quickly find that half of your resources are already
-used.  As with my rules for optimization above, step number one is to get
-something working, and step two is to start measuring the problem.  From there
-you can start to balance performance needs as required.&lt;/p&gt;
-
-&lt;p&gt;Indeed, &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Native-Control-of-AXI4-Lite-Master/m-p/978697&quot;&gt;this post&lt;/a&gt; really takes the cake.  The
-user wanted to know the easiest way to control an AXI4-lite peripheral.
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Native-Control-of-AXI4-Lite-Master/m-p/978697&quot;&gt;Xilinx’s answer was to recommend using a microblaze CPU&lt;/a&gt;.  Seriously?  Just to control an AXI4-lite peripheral, you now need
-a CPU, an interconnect, a flash device, and a block RAM and/or external
-SDRAM.  Why not just build a simple state machine?&lt;/p&gt;
-
-&lt;h3 id=&quot;mig-generates-extra-rvalids&quot;&gt;MIG generates extra RVALIDs&lt;/h3&gt;
-
-&lt;p&gt;Much to my surprise, the MIG generated AXI interface is highly dependent upon
-the performance of the memory chip itself.  Indeed, if you misconfigure your
-memory chip and its timings, the result will often masquerade as an AXI bug.&lt;/p&gt;
-
-&lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Memory-Interfaces-and-NoC/MIG-DDR3-SDRAM-controller-responding-without-request/m-p/1038755&quot;&gt;When I first encountered this problem&lt;/a&gt;, I was absolutely convinced Xilinx’s controller had an AXI bug within it.
-I could count AXI requests and responses, and sure enough I was getting a
-response without ever issuing a request.  Upon further investigation, I
-discovered I had the MIG configured for the wrong memory chip.  The controller
-was issuing read requests of the MIG to keep the PLL locked, the responses
-weren’t coming back in their expected windows, and so I was getting read
-returns I wasn’t expecting.&lt;/p&gt;
-
-&lt;p&gt;At the time, I thought I was the only one who had ever or would ever have this
-issue.  I was wrong.  &lt;a href=&quot;https://forums.xilinx.com/t5/Memory-Interfaces-and-NoC/MIG-generating-RVALID-without-having-a-AXI-read-cycle-Kingston/m-p/1167170&quot;&gt;Here’s a user with a similar issue, discovering in the
-end that their chosen memory chip wasn’t
-supported&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h3 id=&quot;design-works-infrastructure-is-broken&quot;&gt;Design works, infrastructure is broken&lt;/h3&gt;
-
-&lt;p&gt;One of the complaints that always catch my eyes are those claiming that Xilinx’s
-AXI infrastructure is broken.  I see this complaint often enough that I thought
-I’d create my own category for it here.  Unfortunately, in spite of all the
-complaints I’ve seen, few can actually be traced to Xilinx’s interconnect.  Of
-those I’ve reviewed, I’ve moved them into other sections in this post simply
-because the problems were caused by user designs rather than Xilinx’s
-interconnect.&lt;/p&gt;
-
-&lt;p&gt;Sure, I’d love to say I’d found a problem with their interconnect.  That would
-be great advertising material for &lt;a href=&quot;/about/gisselquist-technology.html&quot;&gt;Gisselquist
-Technology&lt;/a&gt;!  You can
-rest assured that I’d certainly post about it here if I had found such!
-Unfortunately, all of the bugs I’ve actually traced down that started with
-complaints about Xilinx’s interconnect have turned into bugs elsewhere.  I’m
-not going to go as far as to say that there aren’t any bugs in their
-interconnect, but I sure haven’t seen any evidence of such … yet.
-(I’m still looking …)&lt;/p&gt;
-
-&lt;p&gt;To make matters worse for my own pride, &lt;a href=&quot;https://www.avery-design.com&quot;&gt;Avery Design
-Systems&lt;/a&gt; pointed out to me (gently) that Xilinx’s
-AXI interconnect put &lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;my own AXI
-crossbar&lt;/a&gt; to shame in
-terms of performance.  Ouch.&lt;/p&gt;
-
-&lt;p&gt;What I have instead for this section appears to be a list of dissatisfied users
-who just wanted more than the tools were offering them.&lt;/p&gt;
-
-&lt;p&gt;For example, here’s a question from someone who just wasn’t satisfied with what
-he had.  &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Lite-Register-Array/m-p/1158304&quot;&gt;He wanted a simple way to connect and control a massive numbers of
-registers to a peripheral&lt;/a&gt;.
-The constraint here was apparently imposed by his work environment, where he
-was “asked to add as little custom as possible and instead use vendor IPs as
-much as [he could].”  That’s a great idea, when the vendor IPs 1) do what you
-want, and 2) work.  Once we realized this, there wasn’t much more we could do
-to help him.  It was a shame, however, since &lt;a href=&quot;/blog/2020/03/08/easyaxil.html&quot;&gt;building a basic AXI slave
-register controller&lt;/a&gt; is
-actually pretty easy to do–even for a hundred (or more) registers.&lt;/p&gt;
-
-&lt;p&gt;&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-SmartConnect-limited-to-8-masters/m-p/1089712&quot;&gt;Another user complained that Xilinx’s brand new (at the time) SmartConnect
-was limited to 8 masters&lt;/a&gt;.
-While I offered him an &lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;open source AXI interconnect
-alternative&lt;/a&gt;, he didn’t
-reply and so it’s not clear if his issue was ever answered.&lt;/p&gt;
-
-&lt;p&gt;In my final example, I wish I could tell you what &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Full-Master-64bit-MSB-32bit-error/m-p/1153145&quot;&gt;this user’s error
-was&lt;/a&gt;.
-Looking over his design, I couldn’t see anything wrong with it.
-When I later commented to that effect, he accepted my comment as the
-solution.  Perhaps there was something else wrong elsewhere in his design?&lt;/p&gt;
-
-&lt;p&gt;Just to round out the section with an actual “problem”, I’ll point out that at
-one time I complained about the fact that Xilinx’s AXI to AXI-lite bridge
-limited the AXI-lite downstream to only one burst at a time.  The response I
-discovered was two-fold.  First, I discovered that this was a “feature” of
-their area optimized interconnect.  Second, I was told that AXI-lite was never
-designed for speed, so you shouldn’t expect high performance from it anyway.
-If you want speed, you should be using AXI full (and a custom DMA-type of
-master, not a CPU).&lt;/p&gt;
-
-&lt;p&gt;Sorry, that’s all I have for (validated) complaints about Xilinx’s AXI
-infrastructure.&lt;/p&gt;
-
-&lt;h3 id=&quot;limited-size&quot;&gt;Limited size&lt;/h3&gt;
-
-&lt;p&gt;One complaint that’s come up a couple of times is that the various DMAs have
-a limited size that they can transfer.  &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-DMA-IP-Core-upgrade/m-p/1034872&quot;&gt;This user, for example, is complaining
-that the DMA size is limited to 8MB&lt;/a&gt;.  (Yes, I remember
-when nobody thought anyone would ever need more than 640kB …)&lt;/p&gt;
-
-&lt;p&gt;I know from my own experience that I came across this issue as well when
-designing &lt;a href=&quot;https://github.com/ZipCPU/wb2axip&quot;&gt;my own DMAs&lt;/a&gt;.  At some point,
-you need to allocate how many bits will be used to capture the transfer
-length.  You also need to decide how wide the address bus should be, and
-whether or not the DMA will be allowed to wrap from high addresses back
-around to low addresses, etc., etc.  (Welcome to hardware design!)  In my case,
-I parameterized most if not all of these items.  That way, if you don’t like my
-default choices, you can just adjust the parameters until you have the choice
-you want.&lt;/p&gt;
-
-&lt;p&gt;Unfortunately, Xilinx doesn’t appear to have parameterized their DMA’s transfer
-sizes.  This means that you’ll either need to interrupt your CPU that much
-more, use a scatter-gather engine to script multiple DMA transfers, or
-choose to switch to an open source implementation that doesn’t have that limit.&lt;/p&gt;
-
-&lt;h3 id=&quot;partial-address-decoding&quot;&gt;Partial address decoding&lt;/h3&gt;
-
-&lt;p&gt;Every now and again, someone writes in asking about something absolutely crazy
-taking place in their design–something so crazy it doesn’t make any sense.
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-Peripheral-Register-Access/m-p/1014667&quot;&gt;In this case, a user wrote in describing how every 16th byte in his design
-was getting written in a single write&lt;/a&gt;.  It made no
-sense to him.  Indeed, it doesn’t make much sense at all–until you dig into
-how address decoding is done within an FPGA.&lt;/p&gt;
-
-&lt;p&gt;This phenomenon is a consequence of what’s known as “partial address decoding”.
-This is the cheap way of address decoding, where you don’t compare against all
-address bits.  Instead you only compare against enough bits to make sure that
-the peripherals are all at the addresses they are promised to be at and you
-make no promises regarding phantom peripherals which may appear to reside at
-any of the other addresses.&lt;/p&gt;
-
-&lt;p&gt;Here was &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Vivado-what-is-addresses-and-address-ranges-of-IPs-in-vivado/m-p/984656&quot;&gt;another user asking how address decoding is accomplished within an
-interconnect&lt;/a&gt;.  It’s
-really not that hard to understand–especially not when you dig into it
-just a little bit.&lt;/p&gt;
-
-&lt;p&gt;To read more on this topic, feel free to look at &lt;a href=&quot;/zipcpu/2019/09/03/address-assignment.html&quot;&gt;how AutoFPGA handles address
-assignments&lt;/a&gt;,
-since I discuss the topic there.&lt;/p&gt;
-
-&lt;h3 id=&quot;know-the-specification&quot;&gt;Know the specification&lt;/h3&gt;
-
-&lt;p&gt;FPGA design is a type of engineering.  As an engineer, you’ll be required to
-read, study, and understand complex data sheets.  This is the nature of the
-business.  One such data sheet is the &lt;a href=&quot;/doc/axi-spec.pdf&quot;&gt;AXI
-specification&lt;/a&gt;.  That’s sort of a
-requirement when working with AXI.  Know &lt;a href=&quot;/doc/axi-spec.pdf&quot;&gt;the
-specification&lt;/a&gt;, and things will get much
-easier.&lt;/p&gt;
-
-&lt;p&gt;One user I remember declared that AXI was too hard.  &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Read-and-write-through-AXI4/m-p/999075&quot;&gt;He wanted something
-easier&lt;/a&gt;.
-I wish I had a better answer for him, but the bottom line is that engineering
-requires reading, studying, and understanding complex data sheets.  It’s what
-engineers get paid for.   If you don’t like it, find something you do like.&lt;/p&gt;
-
-&lt;p&gt;Another user just wanted to know the easiest way to drive an AXI UART-lite?
-&lt;a href=&quot;https://forums.xilinx.com/t5/Xilinx-Evaluation-Boards/AXI-4-UART-Lite/m-p/998352&quot;&gt;He just needed a basic AXI master&lt;/a&gt;.
-Their request could’ve been quite simply handled, with the exception that they
-were limiting themselves to &lt;em&gt;proven IP only&lt;/em&gt; (i.e. Xilinx’s vendor libraries).
-&lt;a href=&quot;https://forums.xilinx.com/t5/Xilinx-Evaluation-Boards/AXI-4-UART-Lite/m-p/997614&quot;&gt;[2nd Ref]&lt;/a&gt;&lt;/p&gt;
-
-&lt;p&gt;Without understanding AXI, &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-DMA-changing-some-value-to-0/m-p/998347&quot;&gt;this user assumed READY would just stay high once
-it rose initially&lt;/a&gt;.  Sure enough, his design didn’t
-do what he was expecting.  Like most of the engineers I’ve known, myself
-included, this engineer was also quite convinced the problem wasn’t in his
-own design but in the DMA he was using.&lt;/p&gt;
-
-&lt;p&gt;I’d love to say that all bugs get solved.  &lt;a href=&quot;https://forums.xilinx.com/t5/Embedded-Development-Tools/Writing-data-in-AXI-register-through-XIo-Out32-address-data-or/m-p/998160&quot;&gt;This user posted that something
-was causing his design to freeze when accessing his custom AXI IP component&lt;/a&gt;.  The bug dates back to 2012.
-I don’t have records going back that far, but I do know the demo IP was broken
-back in 2016.  I also have reason to believe it was broken earlier–in 2014
-based on some user designs I’ve examined dating back that far.&lt;/p&gt;
-
-&lt;p&gt;It’s not that uncommon to find students asking for help, and just trying to
-get their homework done.  They’ll take the demo design and modify it as little
-as possible.  As an example, here’s an individual complaining that his &lt;a href=&quot;https://forums.xilinx.com/t5/Implementation/custom-ip-creation-in-vivado/m-p/995679&quot;&gt;matrix
-solution AXI slave not working&lt;/a&gt;.  Sadly, this individual’s design had so
-many problems within it that we never got far enough to get to the problem
-he was struggling with.&lt;/p&gt;
-
-&lt;p&gt;It’s a shame to find someone who used Xilinx’s demo design.  In this case,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Synthesis/AXI-custom-ip-with-microblaze/m-p/993821&quot;&gt;the user design only worked once&lt;/a&gt;.  When I pointed out the bugs in Xilinx’s
-demo design, the user upgraded to the latest version of Vivado thinking that
-the bugs would have been fixed.  Imagine their surprise, and indeed my own,
-when the bugs reported in 2017 are still present in Vivado 2020.2.&lt;/p&gt;
-
-&lt;p&gt;Here’s a crazy discussion of things not working: &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Xil-In32-taking-excessively-long-time-to-read-two-registers/m-p/983131&quot;&gt;in this example, a user
-measures the time difference between two AXI reads in his design&lt;/a&gt;.  Two reads, with nothing else in between
-them, are recorded to take around 50us.  That’s dismal performance!  In the
-end, he discovered that he could drop this time down to less than a microsecond
-by switching the C compiler from debug mode to release mode.&lt;/p&gt;
-
-&lt;p&gt;Reading &lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/Xil-In32-taking-excessively-long-time-to-read-two-registers/m-p/983131&quot;&gt;his post&lt;/a&gt;
-again today, in hind sight, it looks like I missed his implicit conversion from
-integer to double in between his two AXI reads.  The bottom line here is that
-you need to know what your CPU is doing.  You might also find it helps to dig
-into the assembly of what’s going on every now and again.  This should’ve been
-one of those times.&lt;/p&gt;
-
-&lt;p&gt;There should be a rule against complicated AXI signaling.  Looking over
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI-lite-read-channel-overflow/m-p/961738&quot;&gt;this user’s custom AXI peripheral&lt;/a&gt;, he makes one
-of the more fundamental mistakes.  &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RVALID&lt;/code&gt; should be set based upon
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ARVALID &amp;amp;&amp;amp; ARREADY&lt;/code&gt; &lt;em&gt;and nothing else&lt;/em&gt;!  Keep it simple.  If your design isn’t
-ready to handle the its inputs, then keep &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ARREADY&lt;/code&gt; low.  Much to my surprise,
-his design was producing two &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RVALID&lt;/code&gt;s for every &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ARVALID &amp;amp;&amp;amp; ARREADY&lt;/code&gt;.
-No wonder the design wasn’t working!  Had he posted his full custom AXI
-module, I would’ve provided a simple formal check–I might’ve even been able
-to point out the line that was broken.  Indeed, the formal check should’ve
-taken place before he ever tried his design in actual hardware.  Failing
-that, a good &lt;a href=&quot;/formal/2020/05/16/firewall.html&quot;&gt;firewall&lt;/a&gt;
-would’ve helped find the problem nicely.&lt;/p&gt;
-
-&lt;h2 id=&quot;looking-for-a-tutorial&quot;&gt;Looking for a tutorial&lt;/h2&gt;
-
-&lt;p&gt;If the above posts haven’t made the case for it, several users have asked for
-better training materials.  &lt;a href=&quot;https://forums.xilinx.com/t5/Ethernet/AXI-Lite-Slave-Example-Tutorial/m-p/967775&quot;&gt;Here’s a user looking for an AXI-lite slave
-example/tutorial&lt;/a&gt;.    Here’s &lt;a href=&quot;https://forums.xilinx.com/t5/Design-Entry/Custom-AXI-IP-Tutorial/m-p/1085203&quot;&gt;another, requesting a custom IP AXI
-tutorial&lt;/a&gt;.  Or a third, &lt;a href=&quot;https://forums.xilinx.com/t5/Memory-Interfaces-and-NoC/How-to-interface-custom-IP-with-MIG-DDR3-via-AXI-master-burst/m-p/1073843&quot;&gt;wondering how to move data from memory to an FPGA
-processing core and back to memory
-again&lt;/a&gt;.
-Again, the common theme here is, where shall I go to find the training material
-I need to learn how to do what I need to?&lt;/p&gt;
-
-&lt;p&gt;Not everything fits nicely into official training material.  Some questions,
-&lt;a href=&quot;https://forums.xilinx.com/t5/Processor-System-Design-and-AXI/AXI4-4K-address-boundary/m-p/996921&quot;&gt;like this one on how to handle non-power of two burst
-lengths&lt;/a&gt;, just need simple explanations.  Questions like
-these make the forums fun.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
-
-&lt;p&gt;Yes, AXI can be complex.  Frankly, it’s becoming the cost of doing business
-with either a CPU or external memory on an FPGA.  Read &lt;a href=&quot;/doc/axi-spec.pdf&quot;&gt;the
-specification&lt;/a&gt;, study it, and
-understand it.&lt;/p&gt;
-
-&lt;p&gt;You can also look up the various AXI articles I’ve posted.  I’ve posted articles
-on designing both AXI and AXI-lite slaves and masters.  We’ve discussed
-on this blog &lt;a href=&quot;/blog/2020/03/14/axi-reset.html&quot;&gt;how to reset AXI
-designs&lt;/a&gt;, and &lt;a href=&quot;/formal/2020/06/12/four-keys.html&quot;&gt;the problems
-with Xilinx’s DMAs&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;Let me also encourage you to formally verify your AXI designs.  The formal
-verification tool can be one of the better teachers you come across.  You
-just need to provide the formal solver with your design and &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/bench/formal/faxil_slave.v&quot;&gt;an
-AXI-lite&lt;/a&gt;
-or AXI property file.  Then, run the solver.  If the design fails, the solver
-will give you the line number of a failing property together with a trace
-showing the bug.  Believe me, two hours with a formal solver will fix a lot
-more bugs in your design than you’ll fix in two hours just trying to get your
-design placed on hardware.&lt;/p&gt;
-
-&lt;p&gt;Finally, let me also point out that a lot of the user problems above could’ve
-been avoided if the user had access to the RTL designs for the other half
-of the interface they were working with.&lt;/p&gt;
-
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;There hath no temptation taken you but such as is common to man: but God is faithful, who will not suffer you to be tempted above that ye are able; but will with the temptation also make a way to escape, that ye may be able to bear it. (1Cor 10:13)&lt;/em&gt;</description>
-        <pubDate>Sat, 20 Mar 2021 00:00:00 -0400</pubDate>
-        <link>https://zipcpu.com/blog/2021/03/20/xilinx-forums.html</link>
-        <guid isPermaLink="true">https://zipcpu.com/blog/2021/03/20/xilinx-forums.html</guid>
-        
-        
-        <category>blog</category>
         
       </item>
     
