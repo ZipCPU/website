@@ -6,14 +6,509 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 26 Oct 2021 12:37:50 -0400</pubDate>
-    <lastBuildDate>Tue, 26 Oct 2021 12:37:50 -0400</lastBuildDate>
+    <pubDate>Mon, 15 Nov 2021 06:20:49 -0500</pubDate>
+    <lastBuildDate>Mon, 15 Nov 2021 06:20:49 -0500</lastBuildDate>
     <generator>Jekyll v4.2.0</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Envisioning the Ultimate I2C Controller</title>
+        <description>&lt;p&gt;I wanted to share a quick design idea.  I think it’s an awesome &lt;em&gt;idea&lt;/em&gt;, but
+the frank reality at this point is that it is only an &lt;em&gt;idea&lt;/em&gt;.  I haven’t
+finished the implementation of it.  Or, rather, I have most of the
+implementation complete, it takes less than 400 6–LUTs, and I haven’t yet
+verified it.  Yes, verification is where the majority of the work will
+lie–as always in this business.&lt;/p&gt;
+
+&lt;p&gt;Still, the idea I’m about to share is fundamental enough it’s worth sharing.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-problem-telemetry&quot;&gt;The Problem: Telemetry&lt;/h2&gt;
+
+&lt;p&gt;Here’s the basic problem: a client wants a small remote sensor.  This sensor
+will be placed in a hostile environment (under water, on a rocket, in space,
+wherever), where it will be impossible to electronically inspect or examine
+it.  Because the environment this sensor will be in is so hostile to
+electronics, it’s important to monitor the health, welfare, and status of
+the sensor as a whole from a remote location.&lt;/p&gt;
+
+&lt;p&gt;This means that the sensor needs to report back to the surface not only the
+sensor measurements themselves, but also other things such as: temperature
+(is the sensor overheating?), voltage (is it using too much power?), and
+other things such as air pressure or humidity.  For example, if water ever got
+into the sensor chamber, there may be a bare minimum of time to save the
+sensor before it is catastrophically destroyed.&lt;/p&gt;
+
+&lt;p&gt;You know, just the realities of life.&lt;/p&gt;
+
+&lt;p&gt;All of these “extra” measurements then need to be grouped together into a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt; stream, and forwarded
+from the remote sensor to an operator somewhere.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;Wikipedia defines telemetry&lt;/a&gt; (today)
+as: “the in situ collection of measurements or other data at remote points and
+their automatic transmission to receiving equipment (telecommunication) for
+monitoring.”&lt;/p&gt;
+
+&lt;p&gt;This is a good definition for us, since this is exactly what needs to be
+accomplished: multiple sensors need to be read, their readings time stamped,
+and then returned via a data link.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. An I2C Sensor bus requires only two wires&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ultimate-i2c/i2cbus.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;For simple design reasons, it helps to share as many wires as possible between
+various sensors, and this has lead the hardware team to connect multiple
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; sensors across a single pair of
+wires common to all the sensors as well as the FPGA–which will be acting as
+the master and gathering the sensor data and reporting it.&lt;/p&gt;
+
+&lt;p&gt;So how shall such a system be implemented?&lt;/p&gt;
+
+&lt;h2 id=&quot;design-requirements&quot;&gt;Design Requirements&lt;/h2&gt;
+
+&lt;p&gt;Today, therefore, we’re discussing how to implement a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt;
+system composed of measurements from a set of diverse
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+sensors all on the same bus.&lt;/p&gt;
+
+&lt;p&gt;Here’s the first reality hit, though: every sensor is different.  Some sensors
+have single byte addresses, some two byte addresses, and some don’t support
+addresses at all.  This means that every sensor needs its own startup script
+and its own configuration.&lt;/p&gt;
+
+&lt;p&gt;Once configured, however, every sensor then needs to be polled at regular
+intervals, and not all sensors need to be polled at the same interval.  In
+order to meet the real time requirements of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt;
+system, every frame collection must start at a specific time, and then complete
+by a final time.  During this time, sensor measurements will be read and
+reported.  This measure and report process will proceed ad infinitum.&lt;/p&gt;
+
+&lt;p&gt;The final output reporting will be done via a network data packet, where the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt;
+data will be spread across every sensor data packet using only four
+bytes per packet.  (Remember, the purpose of this system is &lt;em&gt;data&lt;/em&gt; collection,
+not
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt;
+collection.  The
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt;
+needs to remain a small and minor portion of this system.)&lt;/p&gt;
+
+&lt;h2 id=&quot;design-choices&quot;&gt;Design Choices&lt;/h2&gt;
+
+&lt;p&gt;My first thought was to simply use a CPU for this purpose.  Why not?  The
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
+will play a prominent role in the system as it is, and
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+is an easy enough protocol to handle via CPU.  Some might even argue that
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+is a tailor made protocol for a microcontroller implementation.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 2. Problems with building real-time software&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ultimate-i2c/rt-software.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Then I got to thinking about it: CPUs aren’t known for their
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Real-time_computing&quot;&gt;real time&lt;/a&gt;
+capabilities.  While it is possible to create &lt;a href=&quot;https://en.wikipedia.org/wiki/Real-time_computing&quot;&gt;real time
+software&lt;/a&gt;, were I to do
+so I’d then be stuck with a CPU that could only run one program.  One wrong
+tweak to that program and I’d have to re-verify the whole
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Real-time_computing&quot;&gt;real time&lt;/a&gt; capability
+again.  Worse, I’d like to reserve the CPU for ad-hoc development tasks
+along the way, and dedicating it to a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Real-time_computing&quot;&gt;real time&lt;/a&gt;
+processing task like this would render it unusable for other tasks.&lt;/p&gt;
+
+&lt;p&gt;This forces the sensor implementation into the fabric of the FPGA.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;CHOICE #1&lt;/strong&gt;: A logic based FPGA solution&lt;/p&gt;
+
+&lt;p&gt;Unfortunately, the logic required for a hardware based solution is … not
+trivial.  Such a solution may need to be reconfigured often during
+development, as different sensor configurations are tried and tested until
+a final configuration is chosen to deliver to the customer.&lt;/p&gt;
+
+&lt;p&gt;The easiest way to build a re-configurable anything is to force the
+configuration to be read from memory somewhere: either
+&lt;a href=&quot;/blog/2018/08/16/spiflash.html&quot;&gt;flash&lt;/a&gt; or RAM.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;CHOICE #2&lt;/strong&gt;: The &lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; logic will be scripted from memory&lt;/p&gt;
+
+&lt;p&gt;The next question is, how shall this data be timed?  Specifically, we want
+every data packet to start at a timestamp, provided at a regular interval.
+This sensor timestamp moreover will need to be synchronized to the data
+collection timestamp from the rest of the system.  The idea, therefore, is
+that measurement reading will be looped, and the top of the loop starts at
+a known time with respect to the rest of the systems timing.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;CHOICE #3&lt;/strong&gt;: The measurement sequence will start from an external
+time–stamped signal&lt;/p&gt;
+
+&lt;p&gt;Next design question, how shall the results be reported?&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3. Modifying AXI Stream&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ultimate-i2c/netpkt.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This answer is given by the rest of the design: the results will be reported
+via an AXI stream packet output.  If necessary, I’ll might choose to switch to
+a modified AXI stream based packet protocol I’m using.  The big difference?
+The modified protocol allows for a packet to be aborted if any downstream
+component stalls the interface by an amount greater than any buffer within it.
+In the absence of any abort conditions, though, it’s simply AXI stream.&lt;/p&gt;
+
+&lt;p&gt;&lt;strong&gt;CHOICE #4&lt;/strong&gt;: Results will be reported via an AXI stream output.&lt;/p&gt;
+
+&lt;p&gt;Given these few choices, it’s now fairly easy to outline the form of the design.&lt;/p&gt;
+
+&lt;h2 id=&quot;outlining-the-design&quot;&gt;Outlining the design&lt;/h2&gt;
+
+&lt;p&gt;With this information, I can now outline the form this design will take in
+Fig. 4 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. I2C System Diagram&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ultimate-i2c/controller.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;From this standpoint, it looks a lot like a special purpose CPU.&lt;/p&gt;
+
+&lt;p&gt;The first step will be to reuse a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;ZipCPU instruction
+fetch&lt;/a&gt; component.
+From here, a small state machine can handle everything else.&lt;/p&gt;
+
+&lt;p&gt;Indeed, I’ve now applied this approach to several projects, with generally
+great success.&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;I have a SONAR transmitter design that can send a scripted SONAR waveform
+from memory.&lt;/p&gt;
+
+    &lt;p&gt;In this case, the transmitter can accept instructions from either the
+instruction fetch or from a slave interface.  The instructions consist of
+4’bit register addresses, and 28’bit values, some with side effects.  This
+allows the CPU to either control the transmitter directly, or to give it a
+script to run from.&lt;/p&gt;
+
+    &lt;p&gt;Instructions consist of things like:&lt;/p&gt;
+
+    &lt;ul&gt;
+      &lt;li&gt;
+        &lt;p&gt;Setting the amplitude&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;Setting an optional chirp rate, for linear FM support.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;Setting the frequency.  A non-zero frequency will turn the transmitter on.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;Waiting for a period of time, or perhaps for an external synchronization
+interrupt.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;Turning off the transmitter.  In this case, setting a zero frequency
+will turn the transmitter off.&lt;/p&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+
+    &lt;p&gt;Using this approach, the transmitter can generate basic tones,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Chirp_spectrum#Linear_chirp&quot;&gt;linear FM&lt;/a&gt;,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Phase-shift_keying&quot;&gt;BPSK&lt;/a&gt; and
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Frequency-shift_keying&quot;&gt;BFSK&lt;/a&gt; signals, and
+even &lt;a href=&quot;https://en.wikipedia.org/wiki/Chirp_compression&quot;&gt;hyperbolic FM&lt;/a&gt;
+signals.  The design is not only easy to build, low in logic cost, but
+it’s easy to verify as well.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;This &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;instruction
+fetch&lt;/a&gt;
+approach has also been a very successful part of an &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisgdma.v&quot;&gt;AXI scatter-gather DMA
+design&lt;/a&gt; I have.
+In this design, a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisgfsm.v&quot;&gt;small
+FSM&lt;/a&gt;
+(170 6-LUTs) processes the scatter-gather “table”, as it comes from the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;CPU
+fetch&lt;/a&gt;
+controller.&lt;/p&gt;
+
+    &lt;ul&gt;
+      &lt;li&gt;
+        &lt;p&gt;When the DMA is not in use, the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;instruction fetch&lt;/a&gt;
+is held in its reset state.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axisgfsm.v&quot;&gt;FSM&lt;/a&gt;
+is then initialized with an address provided over an AXI-lite slave
+interface.  This address is then fed to the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;instruction
+fetch&lt;/a&gt;
+as if the CPU waas jumping to a new address.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;As table values are received, they are written to the DMA via the DMA’s
+&lt;a href=&quot;/blog/2020/03/08/easyaxil.html&quot;&gt;AXI-lite control
+interface&lt;/a&gt;.  This
+includes the source address, destination
+address, DMA length, and potentially any options to be given to the DMA,
+such as generating an interrupt or continuing in spite of any error–all
+coming from the table entry.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;Two bits are stolen from each source address in the table.  These bits
+control whether the table entry is a normal DMA entry record, whether it
+is the last one in the list, whether it is to be skipped, or whether the
+address is a link (i.e. pointer) to another table entry elsewhere in
+memory.&lt;/p&gt;
+
+        &lt;p&gt;Skipping entries, or jumping to a new address is again handled like a
+CPU branch instruction.&lt;/p&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;One unique feature of the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;instruction
+fetch&lt;/a&gt;
+that implements a table in this manner is that you do not want any form of
+instruction cache.  Unlike the CPU, where an instruction cache is
+highly desirable, applications like those above operate on memory that may
+have just changed, so a cache only gets in the way.  Not only that, unlike a
+CPU, table memory like this is typically only going to be read once–so, again,
+a cache wouldn’t help here.&lt;/p&gt;
+
+&lt;p&gt;I should also point out that, the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;ZipCPU’s instruction AXI-lite
+fetch&lt;/a&gt;
+has been specifically tested with 8–bit instructions–even though the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
+doesn’t have 8–bit instructions.  This is one of the reasons why.&lt;/p&gt;
+
+&lt;p&gt;That’s the first step.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. Proposed I2C Controller Instruction Set&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/ultimate-i2c/insn-list.svg&quot; alt=&quot;&quot; width=&quot;180&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The second step is to decide on an “instruction set”.  Ten instructions
+will be sufficient for our purposes here.  Each instruction can fit in eight
+bits, with only the SEND and JUMP instructions requiring subsequent immediate
+values.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;CATCH&lt;/strong&gt;:  I’m not (yet) certain what to call this instruction.  My notes
+currently call it an ABORT instruction, but CATCH might capture it better.
+The idea is that this instruction sets the address to jump to should a
+data write request ever fail to receive an ACK–sort of like the “catch” half
+of a try-catch block in C++ or Java.  Likewise, if for some reason
+arbitration is lost, this catch instruction would set the address we’d
+return to.&lt;/p&gt;
+
+    &lt;p&gt;If I choose to use my modified AXI stream based packet protocol, either of
+these conditions would cause the outgoing packet to be aborted as well.
+That way the downstream packet receiver can know that the packet is being
+restarted from the top.  Without this ABORT signal, the only way to know
+that a NAK or loss of &lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+arbitration happened would be to receive a packet of the wrong
+length–knowing that the final (known packet-length) bytes would be correct.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;WAIT&lt;/strong&gt;:  This instruction will cause the
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; FSM to wait for an external
+synchronization signal.  This is how I intend to synchronize this
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; controller with the rest of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt; frame.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;START&lt;/strong&gt;: Now we get to more regular
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+instructions.  This particular one will send an
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+start condition.  If the interface isn’t idle, then it will cause a
+repeated start condition to be sent across the interface.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;**SEND &lt;DATA&gt;**:  This command would cause the following byte in the
+instruction stream to be &quot;sent&quot; over the interface.  This would include the
+first byte of any [I2C](https://www.i2c-bus.org/specification) transaction.
+Similarly, many read transactions require an address to be sent following
+the first byte, before sending a repeated start and receiving data, and that
+address could be sent via a SEND command.  Finally, this command would be
+very useful when sending the known and pre-determined configuration to the
+device.&lt;/DATA&gt;&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;RXK (RX w/ ACK)&lt;/strong&gt;: Receive a byte of data, and ACK (acknowledge) the byte
+upon completion.  This will signal to the slave that another byte is yet to
+be received following this one.  Once received, the byte will be placed on
+the output AXI stream packet.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;RXN (RX w/ NAK)&lt;/strong&gt;: Receive a byte of data, and NAK (negative acknowledge)
+the result.  This will signal to the
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+slave that this is the last byte to be requested.  As before, the byte
+received will be placed into an output AXI stream packet.  (As an option
+I’m considering, this might also send a STOP command.  It just depends on
+how complex I want to make the state machine.)&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;RXLK&lt;/strong&gt; and &lt;strong&gt;RXLN&lt;/strong&gt;:  These two instructions mirror the RXK and RXN
+instructions above.  They will receive a byte of data and either ACK or NAK
+the result, while also sending the received byte downstream.  The
+difference between these two and their previous counterparts is that these
+two instructions will set the TLAST field in the AXI stream output.  The
+result is that this byte will be marked as the last byte in the outgoing
+AXI stream &lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt; packet.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;STOP&lt;/strong&gt;: Send an &lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+stop condition.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;JUMP &amp;lt;ADDRESS&amp;gt;&lt;/strong&gt;: This is the only other instruction, aside from the SEND
+instruction, that gets followed by an immediate address.  In this case, the
+immediate bytes contain a system memory bus address to jump to.&lt;/p&gt;
+
+    &lt;p&gt;In general, the controller would JUMP to the WAIT instruction at the top of
+the &lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt; packet, but having
+a specific JUMP instruction allows for more options–such as if the loop
+includes multiple WAIT instructions.  Either way, since this instruction
+set has no ability for a conditional jump, the only type of loop this
+instruction set will support is an infinite loop.  Also, since I’ve provided
+no HALT instruction in this list, the controller will always enter into
+an infinite loop.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;There are many other instructions I could have added, but the application
+described above doesn’t require any more.  For example, I could have
+implemented a wait-timer instruction with a two, three, or even four byte wait
+counter.  Were I expecting bus contention, I might also consider creating an
+instruction sequence for a more fine grained checkpoint-restart capability,
+so that collisions could properly be recovered from.  In this case, I don’t
+expect any other masters on the bus, so I see no need for such instructions
+yet.&lt;/p&gt;
+
+&lt;p&gt;For now, lets take a quick look at what an instruction stream might look
+like that uses this instruction set.&lt;/p&gt;
+
+&lt;p&gt;First, it would start with a CATCH instruction, followed by whatever
+instructions are necessary to configure the various sensors.
+Often, writing to a sensor simply consists of a series of bytes to be sent
+to the sensor.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;	CATCH	; Return here following any protocol errors
+	; Then, for each sensor
+	START
+	SEND	(sensor ID)
+	SEND	(sensor value address)
+	SEND	(config sensor value #1)
+	SEND	(config sensor value #2)
+	SEND	(config sensor value #3)
+	; etc.
+	STOP
+	; Now repeat the above for the next sensor
+	; ... etc.&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Once all of the sensors have been configured, we can then switch to the
+operational &lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt; loop.  This
+will start with a second CATCH instruction, followed by a WAIT instruction
+to wait for the top of the loop.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;	CATCH	; Return here following any protocol errors
+loop:
+	WAIT	; Wait here for an external synchronization signal&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now it’s time to read from each sensor.  Here’s a typical interaction to read
+three bytes from a given sensor.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;	START
+	SEND	&amp;lt;sensor ID&amp;gt;	; Which sensor ID do we wish to read from?
+	SEND	&amp;lt;address&amp;gt;	; Which address w/in sensor to read from
+	START			; Send a repeated start condition
+	RXK			; Read byte #1
+	RXK			; Read byte #2
+	RXK			; Read byte #3
+	RXN			; Read byte #4, last byte
+	STOP&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Not all sensors need addresses, however.  Some sensors have only one value
+to be read.  In the following example, the sensor requires no address, yet
+provides the last three bytes of the sequence.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-asm&quot; data-lang=&quot;asm&quot;&gt;	START
+	SEND	&amp;lt;sensor ID&amp;gt;	; Which sensor ID do we wish to read from?
+	START			; Send a repeated start condition
+	RXK			; Read byte #1
+	RXK			; Read byte #2
+	RXLN			; Read byte #3, last byte of the telemetry pkt
+	STOP
+	JUMP			; Return to the top of our loop above.&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;At least, this is my design idea for this problem.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;As I mentioned above, I’ve been pleasantly surprised at the number of ways I’ve
+found to use a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axilfetch.v&quot;&gt;generic, cache-less, CPU instruction fetch
+module&lt;/a&gt;.
+This one capability has repaid me in reuse spades multiple times over with
+each application I’ve used it on: scatter gather DMAs, SONAR transmit waveform
+encoding, and now my draft design for an ultimate
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+controller listed above.&lt;/p&gt;
+
+&lt;p&gt;Reality, however, is that very few problems will limit themselves to a set
+of only &lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; sensors.  The actual
+problem this design was drawn from is no different.  It includes not only
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; sensors, but also multiple
+SPI sensors–all of which when put together will make for a very diverse
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Telemetry&quot;&gt;telemetry&lt;/a&gt; sensor set.  Still,
+this same approach should also work well for scripting complex SPI sensor
+interactions together.&lt;/p&gt;
+
+&lt;p&gt;Looking over my instruction set again in hind sight, I’m tempted to split the
+JUMP instruction into two parts.  The first part might be an instruction to
+set the JUMP target address, and the second part would be the JUMP instruction
+itself.  This would not only simplify instruction decoding, but it would also
+make the instruction sequence easier to relocate to any address in
+memory–without needing to go back and fix up the jump address once a
+memory location was assigned to the script.&lt;/p&gt;
+
+&lt;p&gt;One missing component of the above explanation is the bus slave component.
+In this example, as with all of my examples, I like to make controllers
+like this controllable.  Things that an external controller might do
+include: interrupting the script and halting the controller, issuing ad-hoc
+(scriptless) commands, adjusting the
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; clock timing, and replacing the
+script with another script.  An external CPU might also decide to issue
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+commands via direct bit banging–should such a capability be implemented.
+Don’t forget, as well, that if these sensor commands are kept in some kind of
+&lt;a href=&quot;/blog/2018/08/16/spiflash.html&quot;&gt;flash memory&lt;/a&gt;, then
+the controller would need to be shut down in order to erase or program the
+&lt;a href=&quot;/blog/2018/08/16/spiflash.html&quot;&gt;flash memory&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;A second missing component from the design above is the internal logic
+analyzer.  Let’s just say that, because of a &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/doc/examples/hdmi-eddc/&quot;&gt;bad
+experience&lt;/a&gt;
+with a prior &lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; controller, the
+internal logic analyzer connection will be a minimum requirement of any new
+implementation.  The problem I had before with the last
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; controller, was that a bug in
+the controller tended to leave the interface mid-transaction.  When I then came
+back later and reloaded the FPGA or otherwise reset the design, the
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt;
+bus interaction didn’t reset–the slave remained mid-ACK and wouldn’t release
+the data wire.  The (compressed) logic analyzer was necessary to diagnose the
+problem, and bit banging over the bus was necessary to fix it.  Although this
+only lasted until I found my bug, it has left me cautious when designing
+&lt;a href=&quot;https://www.i2c-bus.org/specification&quot;&gt;I2C&lt;/a&gt; controllers.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;For a dream cometh through the multitude of business; and a fool's voice is known by multitude of words.  (Eccl 5:3)&lt;/em&gt;</description>
+        <pubDate>Mon, 15 Nov 2021 00:00:00 -0500</pubDate>
+        <link>https://zipcpu.com/blog/2021/11/15/ultimate-i2c.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/blog/2021/11/15/ultimate-i2c.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Clock Gating</title>
