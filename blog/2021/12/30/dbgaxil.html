@@ -1,0 +1,1358 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Creating a Simple AXI-Lite Master for the Hexbus</title>
+  <meta name="description" content="This post continues our series over the last three years looking into AXI andAXI-lite interface design.  Normally I’d take a moment to recount all of thevari...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2021/12/30/dbgaxil.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Creating a Simple AXI-Lite Master for the Hexbus</h1>
+    <p class="post-meta"><time datetime="2021-12-30T00:00:00-05:00" itemprop="datePublished">Dec 30, 2021</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>This post continues our series over the last three years looking into AXI and
+AXI-lite interface design.  Normally I’d take a moment to recount all of the
+various articles in a series as background to any new article, but if you
+check the <a href="/topics.html">topics page</a>, you’ll see I’ve now
+written over 25 AXI articles.  These include a discussion on <a href="/blog/2020/03/08/easyaxil.html">how to build an
+AXI-lite slave</a>, a <a href="/blog/2019/05/29/demoaxi.html">high
+performance AXI (full) slave</a>,
+<a href="/dsp/2020/04/20/axil2axis.html">how to debug an AXI stream based
+design</a>, and even how to build
+both an <a href="/blog/2020/03/23/wbm2axisp.html">AXI-lite
+master</a> as well as how to
+modify a general purpose <a href="/zipcpu/2021/04/17/axilops.html">AXI-lite
+master</a> for <a href="/zipcpu/2021/09/30/axiops.html">AXI
+(full)</a> performance–to
+include exclusive access but not burst performance.</p>
+
+<p>Today, let’s look into extending our <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus
+design</a> with an <a href="https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexecaxi.v">AXI-lite
+back end</a>.</p>
+
+<p>If you’ve followed my blog from the beginning, you might remember that I’ve
+spent quite a bit of time discussing what I call a
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a> early on.
+As I use the term, a <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging
+bus</a>
+is a way of accessing the bus within a logic design from a remote host.
+Typically, I do this over a <a href="/blog/2017/06/17/why-network-debugging.html">serial
+port</a>, b
+sending special commands to the design, although I have transport systems that
+will work well for both SPI and
+<a href="https://github.com/ZipCPU/xulalx25soc/blob/master/rtl/jtagser.v">JTAG</a> as
+well.  The design then decodes the various characters sent across the
+link into bus read or bus write requests, issues the requests of the
+internal bus, and then returns the results.</p>
+
+<table align="center" style="float: none"><caption>Fig 1. How a debugging bus fits into a larger system</caption><tr><td><img src="/img/dbgaxil/fpga-w-dbgbus.svg" alt="" width="640" /></td></tr></table>
+
+<p>Why would you ever want to do something like this?  Wouldn’t it make
+more sense to just issue the commands from a soft-core CPU within the design?
+Well, there are actually a lot of reasons why you might want to use a
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a>.
+For example …</p>
+
+<ol>
+  <li>
+    <p>You might be building a CPU.  Until that CPU works, a
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a>
+can give you a strong confidence that <a href="/zipcpu/2017/05/20/which-came-first.html">the rest of the design
+works</a>.  You
+can even use the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a>
+to <a href="https://github.com/ZipCPU/zbasic/blob/master/sw/host/zipload.cpp">pre-load the flash or
+RAM</a> for
+your CPU before releasing the design from reset.</p>
+  </li>
+  <li>
+    <p>This applies just as much to all of those Vendor CPU’s as it does to your
+own homebrew CPU.  Once you place that CPU into the FPGA, you lose almost
+all insight into what’s going on within the FPGA.  For example,
+<a href="https://forums.xilinx.com/t5/Xilinx-IP-Catalog/Fixed-Interval-Timer-doesn-t-trigger-interrupt-on-Microblaze/m-p/1082878">what if your CPU wasn’t getting the interrupt you were
+expecting</a>?  Well, why not go and
+just query the <a href="/zipcpu/2019/04/02/icontrol.html">interrupt controller on the
+bus</a> to see what’s
+going on?</p>
+  </li>
+  <li>
+    <p>When working with an external piece of hardware, and until you have that
+hardware “under control”–where your design interacts with it properly and
+they way you expect it to–sometimes you have to work with things to figure
+out what’s going right (or wrong) with the interface.  A good example might
+be <a href="/blog/2019/03/27/qflexpress.html">my work in a Quad SPI flash
+controller</a>.  Being able
+to explore “what-if” scenarios from a command line can be quite powerful.
+(What if I have the timing delay messed up, and it needs to be three clock
+cycles instead of four?  Let’s try that …)  By using a
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a>
+to find and fix problems, you won’t need to take the time to rebuild your
+FPGA design until you know what was going wrong with the current design.</p>
+
+    <p>Indeed, and as an example, someone recently tried out <a href="/blog/2019/03/27/qflexpress.html">my Quad SPI flash
+controller</a>.  So far,
+he tells me that the controller works as long as he only uses the memory
+mapped I/O port.  However, without being able to shut the CPU down and run
+ad-hoc queries, he’s been struggling to figure out why the flash won’t handle
+his arbitrary access commands.  A proper <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging
+bus</a>
+interface will help this individual.</p>
+  </li>
+  <li>
+    <p>You’ve seen me discuss how a
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a> could
+be used to <a href="/dsp/2020/04/20/axil2axis.html">debug a signal processing
+chain</a>
+by <a href="/dsp/2019/12/21/histogram.html">inspecting histograms</a>
+or even taking <a href="/dsp/2020/03/17/cheap-spectra.html">spectral
+estimates</a> of what’s
+going on within that chain.  All this can be done from an external computer
+via commands sent over a <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a>.</p>
+  </li>
+  <li>
+    <p>Of course there’s also my own favorite use for the bus: getting access to a
+<a href="/blog/2017/06/08/simple-scope.html">bus-based internal logic
+analyzer</a>, such as
+my <a href="/blog/2017/07/08/getting-started-with-wbscope.html">Wishbone
+Scope</a>.
+(Don’t get hung up on the term
+“<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>”.  Yes,
+there is now an <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/axilscope.v">AXI-lite version of
+it</a>, and even
+a <a href="https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v">virtual AXI (full)
+version</a> which
+can use SDRAM as a back end.)</p>
+
+    <p>Such a <a href="/blog/2017/06/08/simple-scope.html">bus-based
+scope</a> capability
+requires you to have access to your design from an external location.  If
+you can get access to the design externally, you can
+then command the scope, adjust the window location with respect to the
+trigger, and then read back the results to tell you what’s going on within
+the design–even potentially after the CPU has locked up.</p>
+
+    <p>Once you do start using that soft-core CPU of yours within the design, you
+can then also script the <a href="/blog/2017/06/08/simple-scope.html">logic
+analyzer</a> from within
+the soft-core CPU’s software to capture according to whatever your software
+is doing by just <a href="/blog/2018/11/03/soc-fpga.html">writing to the
+bus</a>.  Indeed, I’ve been
+known to do that with my <a href="https://github.com/ZipCPU/zbasic/blob/master/sw/board/cputest.c">CPU test
+script</a>,
+to provide me with a trace should any individual CPU test fail–but let’s
+not get ahead of ourselves today.</p>
+  </li>
+</ol>
+
+<p>In the military, we might say that such a “<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging
+bus</a>” gives you the
+ability to “<a href="https://en.wikipedia.org/wiki/Command_and_control">command and
+control</a>” your design.  You
+can also use it to get
+“<a href="https://en.wikipedia.org/wiki/Telemetry">telemetry</a>“-like data
+back from a running design.  Okay, the analogy doesn’t quite
+work–<a href="https://en.wikipedia.org/wiki/Telemetry">Telemetry</a> is a <a href="/blog/2021/11/15/ultimate-i2c.html">“push”-based
+system, always broadcasting information to
+listeners</a>, whereas a
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debugging bus</a>
+requires a bus master to “pull” any desired information–but it’s still a
+matter of getting debugging information from within the system under test.
+Perhaps a better analogy might be “micromanaging” an interaction, but we won’t
+push a bad metaphor quite so far.</p>
+
+<h2 id="the-hexbus-design">The Hexbus Design</h2>
+
+<table align="center" style="float: right"><caption>Fig 2. An overview of the parts and pieces in my standard debugging bus</caption><tr><td><img src="/img/wb-uart-ovw.svg" alt="" width="280" /></td></tr></table>
+
+<p><a href="/blog/2017/06/05/wb-bridge-overview.html">When we started talking about a debugging bus, I offered an overview of the
+debugging bus</a>
+I’d been using in my own designs–one I’ve called my
+“<a href="https://github.com/ZipCPU/openarty/blob/master/rtl/wbubus/wbubus.v">wbubus</a>”
+since it offers a “Wishbone to UART” conversion.  Data would come in, get
+decoded–possibly even
+<a href="/formal/2019/10/05/formal-enough.html">decompressed</a>,
+head into a FIFO, and then from there commands would issue to the bus.
+Results would then get formed from the <a href="https://github.com/ZipCPU/openarty/blob/master/rtl/wbubus/wbuexec.v">bus
+executor</a>
+and sent into a
+<a href="https://github.com/ZipCPU/openarty/blob/master/rtl/wbubus/wbufifo.v">FIFO</a>,
+from whence they would be mixed with <a href="https://github.com/ZipCPU/openarty/blob/master/rtl/wbubus/wbuidleint.v">an interrupt or idle
+signal</a>,
+<a href="https://github.com/ZipCPU/openarty/blob/master/rtl/wbubus/wbucompress.v">compressed</a>,
+and then recoded back into bytes that could be sent back across the
+<a href="/formal/2019/02/21/txuart.html">serial port</a>.  We then
+built, together, a <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">second debugging bus
+design</a> that I called
+the “<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>”
+design since it is designed around a simpler hexadecimal encoding.  You can
+see the block diagram for this
+“<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>” in Fig. 3 below.</p>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 3. The hexbus design</caption><tr><td><img src="/img/dbgaxil/hexbus.svg" alt="" width="280" /></td></tr></table>
+
+<p>That “<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>”
+was meant to be a demonstration only design–showing you how it
+might be done.  It was built around a <a href="/blog/2017/06/14/creating-words-from-bytes.html">very simple hexadecimal
+encoding</a>
+that could just about <a href="/blog/2017/06/22/simple-wb-interconnect.html">be read and debugged
+manually</a>.
+Together, then, we walked through all the pieces of it from
+<a href="/blog/2017/06/14/creating-words-from-bytes.html">converting the incoming characters into 34-bit command
+words</a>,
+<a href="/blog/2017/06/08/simple-wb-master.html">issuing those commands across the bus</a>,
+and then <a href="/blog/2017/06/15/words-back-to-bytes.html">recoding the 34-bit command
+results</a> back
+for transmission across the <a href="/formal/2019/02/21/txuart.html">serial
+port</a>.  My intention, however,
+was always to throw away the
+“<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>” implementation
+when I was done.  It was only meant to be a demonstration design after all.</p>
+
+<table align="center" style="float: right"><caption>Fig 4. Could the hexbus protocol drive an AXI bus?</caption><tr><td><img src="/img/dbgaxil/hexaxil.svg" alt="" width="280" /></td></tr></table>
+
+<p>That was until I tried working with an iCE40.  No matter how hard I tried, I
+couldn’t seem to fit <a href="/blog/2017/06/05/wb-bridge-overview.html">my full featured wbubus debugging
+bus</a>
+onto <a href="https://github.com/ZipCPU/icozip">an iCE40 HX8K together with the
+ZipCPU</a>.  The two just wouldn’t fit in the
+same design at the same time.  The
+“<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>”
+on the other hand was simple enough to fit.
+Using the <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> for
+debugging, the entire design, CPU + hexbus, currently fits in 4,659 LUTs–small
+enough that I could probably go back and retrofit it with the
+<a href="/blog/2017/06/05/wb-bridge-overview.html">wbubus</a>
+now.  It’s not the smallest iCE40 design, but debugging it isn’t all that
+hard.  In other words, this throw-away design has now been well loved and well
+used.</p>
+
+<p>For today, however, the key detail is that the
+“<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>”
+design has always been fundamentally a
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> design.</p>
+
+<p>What if we wanted to give it an <a href="/formal/2018/12/28/axilite.html">AXI-lite
+capability</a> instead?
+This will be the topic of today’s article.</p>
+
+<h2 id="the-hexbus-code">The Hexbus Code</h2>
+
+<table align="center" style="float: right"><caption>Fig 5. Hexbus line protocol</caption><tr><td><img src="/img/dbgaxil/linecode.svg" alt="" width="420" /></td></tr></table>
+
+<p>Just to review, there are a couple basic commands to the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> encoding, as
+illustrated in Fig. 5 on the right.  The address can be set for following
+transactions by sending an “A” followed by up to 8 lower case hexadecimal
+characters.  A read request consists of a simple solitary “R”,
+whereas a write request starts with the letter “W” and is then followed by the
+hexadecimal value to be written.  Further, I chose to use white space
+characters as command separators or synchronization characters if and when
+needed.  Hence, both address and write commands can end with a white space
+character.  They can also end with any other non-hex character, such as the
+beginning of the next command.</p>
+
+<table align="center" style="float: left; padding: 20px"><caption>Fig 6. Internal command protocol</caption><tr><td><img src="/img/dbgaxil/internal-code.svg" alt="" width="420" /></td></tr></table>
+
+<p>By the time these commands arrive at <a href="https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexecaxi.v">our new AXI-lite bus
+master</a>,
+they are bundled into 34-bit words as shown in Fig. 6 on the left.  Commands
+are determined by the first two bits of those 34-bit words.  <code class="language-plaintext highlighter-rouge">2'b00</code>
+prefixes a read request, <code class="language-plaintext highlighter-rouge">2'b01</code> a write request, <code class="language-plaintext highlighter-rouge">2'b10</code> a set address
+request, and <code class="language-plaintext highlighter-rouge">2'b11</code> is either a reset request (handled earlier) or a don’t
+care.</p>
+
+<p>The commands themselves arrive via a basic stream protocol, as shown in Fig. 7
+below.  Once the bus command is complete, a response is then generated
+and sent via a similar stream protocol to the next block in the processing
+chain–the difference being that there’s no <a href="https://en.wikipedia.org/wiki/Back_pressure">back
+pressure</a> on the outgoing
+responses.</p>
+
+<table align="center" style="float: right"><caption>Fig 7. AXI-lite Controller Block Diagram</caption><tr><td><img src="/img/dbgaxil/blk-controller.svg" alt="" width="420" /></td></tr></table>
+
+<p>One of the challenges, and indeed vulnerabilities, associated with the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> design is that
+there are no FIFO’s anywhere in the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> protocol.
+Remember, this protocol is designed to be <em>simple</em>, and to fit on really small
+hardware.  This means that the stream protocol and handshakes shown above in
+Fig. 7 are a misnomer:
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> can’t handle
+overflow anywhere in its processing.  The downstream processor <em>must</em> be ready
+to accept any response value provided.  The upstream source can only delay
+values by one or two clock cycles at the most.  Further, it is the
+responsibility of the <a href="https://github.com/ZipCPU/dbgbus/blob/maste/hexbus/sw/hexbus.cpp">host
+software</a>,
+not the RTL, to guarantee that there are no overflows in actual operation.</p>
+
+<p>This block diagram in Fig. 7, together with the command protocol shown in Fig. 6
+above, is where we’ll start today’s design discussion from.</p>
+
+<h2 id="building-the-axi-lite-bus-master">Building the AXI-Lite Bus Master</h2>
+
+<p>The key feature of <a href="https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexecaxi.v">this AXI-lite master that we’ll be discussing
+today</a> is
+not so much that it’s implemented internally as a state machine, but rather that
+we’ll encode our current state in the AXI-lite signals themselves:  On any
+write request, we’ll set <code class="language-plaintext highlighter-rouge">AWVALID</code>, <code class="language-plaintext highlighter-rouge">WVALID</code>, and <code class="language-plaintext highlighter-rouge">BREADY</code> and then hold
+<code class="language-plaintext highlighter-rouge">BREADY</code> high until the <code class="language-plaintext highlighter-rouge">BVALID</code> acknowledgment.  Likewise, on a read request,
+we’ll set <code class="language-plaintext highlighter-rouge">ARVALID</code> and <code class="language-plaintext highlighter-rouge">RREADY</code> and then hold <code class="language-plaintext highlighter-rouge">RREADY</code> high until we receive
+our <code class="language-plaintext highlighter-rouge">RVALID</code> response.  The “Idle” state will therefore be encoded as
+<code class="language-plaintext highlighter-rouge">!BREADY &amp;&amp; !RREADY</code>.</p>
+
+<p>We’ll expect one of two paths from idle back to idle, as shown in Fig. 8 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 8. AXI-lite controller state diagram</caption><tr><td><a href="/img/dbgaxil/axil-fsm.svg"><img src="/img/dbgaxil/axil-fsm.svg" alt="" width="780" /></a></td></tr></table>
+
+<p>Let’s start by decoding our incoming command.  We have three possible values
+that can come into our core that we need to worry about, as shown in Fig. 6
+above.  (Reset is handled elsewhere in the stack.)  Either we want to process
+an address, a read command, or a write command.  From this we can create one
+of three flags, with two caveats.  First, if the incoming strobe (valid) bit is
+low, then there’s no command ready at the input, and second, if we are still
+busy with the last command, then we can also ignore any incoming requests.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">localparam</span> <span class="p">[</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">CMD_SUB_RD</span> <span class="o">=</span> <span class="mb">2'b00</span><span class="p">,</span>
+				<span class="n">CMD_SUB_WR</span> <span class="o">=</span>	<span class="mb">2'b01</span><span class="p">,</span>
+				<span class="n">CMD_SUB_ADDR</span> <span class="o">=</span>	<span class="mb">2'b10</span><span class="p">,</span>
+				<span class="n">CMD_SUB_SPECIAL</span><span class="o">=</span><span class="mb">2'b11</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">i_cmd_addr</span> <span class="o">=</span> <span class="p">(</span><span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">32</span><span class="p">]</span> <span class="o">==</span> <span class="n">CMD_SUB_ADDR</span><span class="p">);</span>
+		<span class="n">i_cmd_rd</span>   <span class="o">=</span> <span class="p">(</span><span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">32</span><span class="p">]</span> <span class="o">==</span> <span class="n">CMD_SUB_RD</span><span class="p">);</span>
+		<span class="n">i_cmd_wr</span>   <span class="o">=</span> <span class="p">(</span><span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">32</span><span class="p">]</span> <span class="o">==</span> <span class="n">CMD_SUB_WR</span><span class="p">);</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_cmd_stb</span> <span class="o">||</span> <span class="n">o_cmd_busy</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">i_cmd_addr</span><span class="p">,</span> <span class="n">i_cmd_rd</span><span class="p">,</span> <span class="n">i_cmd_wr</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">3'h0</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This should be familiar as your <a href="/blog/2017/08/14/strategies-for-pipelining.html">basic <code class="language-plaintext highlighter-rouge">VALID</code>/<code class="language-plaintext highlighter-rouge">!READY</code> handshake that we’ve
+discussed</a>
+often enough before.  The difference here is that <a href="/blog/2019/05/22/skidbuffer.html">this custom protocol doesn’t
+require that the ready logic be registered, so there’s no protocol requirement
+for any skidbuffers</a>.</p>
+
+<p>Now we can start figuring out how to process these commands.</p>
+
+<h3 id="address-processing">Address Processing</h3>
+
+<p>The first, and perhaps easiest, command to handle is the address command.  If
+ever we receive an address word, we’ll want to set the bus address.  Then,
+later, when we receive an actual read or write command we’ll acknowledge
+the address back across the channel.  That means we’re going to need to keep
+track of the current bus address, as well as whether or not we want to
+acknowledge a new address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">M_AXI_AWADDR</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">newaddr</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">begin</span></code></pre></figure>
+
+<p>So let’s break down, now, how we’ll handle a new address command.  In general,
+we’ll just set our outgoing address word.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">i_cmd_addr</span><span class="p">)</span>
+			<span class="n">M_AXI_AWADDR</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">i_cmd_word</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">2</span><span class="p">],</span> <span class="mb">2'b00</span> <span class="o">}</span><span class="p">;</span></code></pre></figure>
+
+<p>Well, not quite.  As it turns out, that’s a nice first pass, but we can do
+better with just a touch of <em>compression</em>.  Let’s use the two lower (unused)
+address bits as a compression scheme, as illustrated in Fig. 6 above: one
+bit will indicate an address <em>difference</em>, whereas the second bit will indicate
+whether or not we <em>increment</em> addresses between commands.</p>
+
+<p>First, bit <code class="language-plaintext highlighter-rouge">1</code>.  If bit <code class="language-plaintext highlighter-rouge">1</code> is set we’ll allow that this command word encodes
+a difference and we’ll adjust our address by this difference.  Otherwise we’ll
+set it as above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+				<span class="c1">// New address</span>
+				<span class="n">M_AXI_AWADDR</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">i_cmd_word</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">2</span><span class="p">],</span> <span class="mb">2'b00</span> <span class="o">}</span><span class="p">;</span>
+			<span class="k">else</span>
+				<span class="c1">// Difference address</span>
+				<span class="n">M_AXI_AWADDR</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="n">i_cmd_word</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">2</span><span class="p">],</span> <span class="mb">2'b00</span> <span class="o">}</span>
+						<span class="o">+</span> <span class="n">M_AXI_AWADDR</span><span class="p">;</span></code></pre></figure>
+
+<p>Synchronizing the initial address will be a task of the <a href="https://github.com/ZipCPU/dbgbus/blob/6531a0b3e51394a4de37379da7e1bdf566dd2908/hexbus/sw/hexbus.cpp#L290-L335">software address
+encoder</a>:
+the first address given to the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>
+will never be a difference address,
+whereas difference addresses may be used for subsequent address requests if
+they reduce the number of bytes that need to be transmitted for any new address.</p>
+
+<p>Bit <code class="language-plaintext highlighter-rouge">0</code> on the other hand will be an increment indicator.  If we leave it zero,
+then we’ll naturally increment our address from one request to the next.
+Otherwise, if one, we won’t adjust it from one request to the next at all.
+Either way, that means we’ll need to store this value away for later.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="n">inc</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span></code></pre></figure>
+
+<p>This also means that you can set an address by hand and have the core mostly
+just “do the right thing.”</p>
+
+<p>We can also use a flag, <code class="language-plaintext highlighter-rouge">newaddr</code>, to indicate that the next results from the
+bus will be the result of reading or writing to this new address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="n">newaddr</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>Now, any time an address word gets accepted by the bus, we’ll
+increment the address if this <code class="language-plaintext highlighter-rouge">inc</code>rement bit is set, or otherwise just leave
+it the same.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="k">if</span> <span class="p">((</span><span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_AWREADY</span><span class="p">)</span>
+					<span class="o">||</span><span class="p">(</span><span class="n">M_AXI_ARVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_ARREADY</span><span class="p">))</span>
+				<span class="n">M_AXI_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">2</span><span class="p">]</span><span class="o">&lt;=</span> <span class="n">M_AXI_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">2</span><span class="p">]</span><span class="o">+</span><span class="p">(</span><span class="n">inc</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">);</span></code></pre></figure>
+
+<p>Likewise, whenever we get a new read or write command that will use this
+new address, then we’ll then send a copy of the address over the link at
+the same time we issue the bus command.  That means we can clear our new
+address flag at that time as well.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">(</span><span class="n">i_cmd_rd</span> <span class="o">||</span> <span class="n">i_cmd_wr</span><span class="p">)</span>
+				<span class="n">newaddr</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>We can also use the same logic for the read address, and so just copy the read
+address value from the write address register.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">M_AXI_ARADDR</span> <span class="o">=</span> <span class="n">M_AXI_AWADDR</span><span class="p">;</span></code></pre></figure>
+
+<p>Sometime later, we’re going to need to come back to this and make certain that,
+upon a read or write command, the address response gets sent back across the
+bus.  We can make a mental note of that to ourselves now by simply adding a
+formal property to our design:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span><span class="o">&amp;&amp;</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">i_cmd_rd</span> <span class="o">||</span> <span class="n">i_cmd_wr</span><span class="p">)))</span>
+	<span class="k">begin</span>
+		<span class="c1">// A new address should generate a response headed downstream</span>
+		<span class="cp">`ASSERT</span><span class="p">(</span><span class="n">o_rsp_stb</span>  <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">newaddr</span><span class="p">));</span>
+
+		<span class="c1">// That response should include ... the new address</span>
+		<span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">newaddr</span><span class="p">))</span>
+			<span class="cp">`ASSERT</span><span class="p">(</span><span class="n">o_rsp_word</span> <span class="o">==</span> <span class="o">{</span> <span class="n">RSP_SUB_ADDR</span><span class="p">,</span>
+				<span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">1</span><span class="p">]),</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">inc</span><span class="p">)</span> <span class="o">}</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This simply states that the first step of processing any read or write command,
+that is on the first clock following <code class="language-plaintext highlighter-rouge">i_cmd_rd || i_cmd_wr</code>, we must
+acknowledge any new/updated address–but only if the address had been changed
+since the last read or write command.</p>
+
+<h3 id="write-processing">Write Processing</h3>
+
+<p>The next step is write processing.  If you’ve never built an
+<a href="/blog/2020/03/23/wbm2axisp.html">AXI master</a> before,
+this will be easier than you think.  Indeed, the way we’ll build this below
+it’ll be <em>really</em> easy.  We’ll control
+the valid signals, the write data, and then return an acknowledgment on success
+or failure.  Oh, one more thing–we’ll set <code class="language-plaintext highlighter-rouge">BREADY</code> to note that we are no
+longer idle, and now expecting a <code class="language-plaintext highlighter-rouge">BVALID</code> response.</p>
+
+<p>First, we clear everything on reset.  This is a necessity.  AXI <em>requires</em> a
+reset, so let’s make certain we implement it here.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">M_AXI_AWVALID</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">M_AXI_WVALID</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">M_AXI_BREADY</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">M_AXI_AWVALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">M_AXI_WVALID</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">M_AXI_BREADY</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>The next step is going to look a bit backwards.  Chronologically we’d set
+<code class="language-plaintext highlighter-rouge">AWVALID &amp;&amp; WVALID &amp;&amp; BREADY</code> on any write command.  I’m instead going to start
+with the last half of the operation, and say that if we are waiting on a write
+response then …</p>
+
+<ol>
+  <li>We should stop waiting if/when we get that response.</li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_BREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_BVALID</span><span class="p">)</span>
+			<span class="n">M_AXI_BREADY</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<ol start="2">
+  <li><code class="language-plaintext highlighter-rouge">AWVALID</code> and <code class="language-plaintext highlighter-rouge">WVALID</code> should also each be cleared independently when their
+respective <code class="language-plaintext highlighter-rouge">xREADY</code> signals go high.</li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_AWREADY</span><span class="p">)</span>
+			<span class="n">M_AXI_AWVALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WREADY</span><span class="p">)</span>
+			<span class="n">M_AXI_WVALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>This is really the biggest gotcha of building an AXI4-lite interface: the write
+address and write data channels aren’t synchronized at all.  Sure, we’ll
+synchronize them both to start of this transaction, but either one of these
+two channels may get accepted before the other.  This is captured by the fact
+that both of these signals are handled in the same logic block, although in
+separate <code class="language-plaintext highlighter-rouge">if</code> statements.</p>
+
+<p>That’s the end of processing the burst.  Seriously?  Yeah, it really is that
+easy.  No, we haven’t gotten to the write data yet–but that’s even easier.</p>
+
+<p>For now, let’s step back and look at how we would generate a write request
+in the first place.</p>
+
+<ol start="3">
+  <li>On any write request from our interface, we set all three signals high,
+<code class="language-plaintext highlighter-rouge">AWVALID</code>, <code class="language-plaintext highlighter-rouge">WVALID</code>, and <code class="language-plaintext highlighter-rouge">BREADY</code>.  Remember, these signals are also
+encoding our state machine.  We won’t return to idle again until <code class="language-plaintext highlighter-rouge">BREADY</code>
+is cleared.</li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_cmd_wr</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">M_AXI_AWVALID</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">M_AXI_WVALID</span>  <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">M_AXI_BREADY</span>  <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That leaves only two signals left for the write half, <code class="language-plaintext highlighter-rouge">WDATA</code> and <code class="language-plaintext highlighter-rouge">WSTRB</code>.
+In the case of <code class="language-plaintext highlighter-rouge">WSTRB</code>, it’s easy: the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> only supports
+full 32-bit word accesses–this is no different from the
+<a href="/blog/2017/06/05/wb-bridge-overview.html">wbubus</a> or any
+of my other debugging buses.  As a result, there’s no way to access an 8-bit
+byte within any 32-bit word using the protocol we defined above in Fig. 6.
+For this reason, we can just leave <code class="language-plaintext highlighter-rouge">WSTRB</code> as all ones: any write will write
+to all four bytes at the same time.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assign</span>	<span class="n">M_AXI_WSTRB</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>The second piece is almost just as unremarkable: if we aren’t busy, then we
+can set the write data based upon any incoming command.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_BREADY</span><span class="p">)</span>
+		<span class="n">M_AXI_WDATA</span> <span class="o">&lt;=</span> <span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">31</span><span class="o">:</span><span class="mi">0</span><span class="p">];</span></code></pre></figure>
+
+<p>There’s just one problem with this: how much downstream logic will get driven
+every time <code class="language-plaintext highlighter-rouge">i_cmd_word</code> changes?  There’s a cost in terms of power to every
+wire that has to change.  Thus, although this is a low-logic solution, there
+is also a low power solution.</p>
+
+<p>Perhaps the ultimate low power solution would be to only update
+<code class="language-plaintext highlighter-rouge">WDATA</code> on a new write request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_cmd_wr</span><span class="p">)</span>
+		<span class="n">M_AXI_WDATA</span> <span class="o">&lt;=</span> <span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">31</span><span class="o">:</span><span class="mi">0</span><span class="p">];</span></code></pre></figure>
+
+<p>I’ve also been experimenting with forcing value to zero when not in use, for
+much the same reason.  In that case, we might try:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+		<span class="n">M_AXI_WDATA</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_cmd_wr</span><span class="p">)</span>
+		<span class="n">M_AXI_WDATA</span> <span class="o">&lt;=</span> <span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">31</span><span class="o">:</span><span class="mi">0</span><span class="p">];</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_WREADY</span><span class="p">)</span>
+		<span class="n">M_AXI_WDATA</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Either way, the point is that following a write request, we want to make
+certain that we are then driving the bus based upon that request.  A simple
+assertion at this point in the design can help us describe this.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="n">S_AXI_ARESETN</span> <span class="o">&amp;&amp;</span> <span class="n">i_cmd_wr</span>
+	<span class="o">|=&gt;</span> <span class="n">M_AXI_BREADY</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_AWVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_WVALID</span>
+		<span class="o">&amp;&amp;</span> <span class="n">M_AXI_WDATA</span> <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_cmd_word</span><span class="p">[</span><span class="mi">31</span><span class="o">:</span><span class="mi">0</span><span class="p">]));</span></code></pre></figure>
+
+<p>There’s just one thing we’ve skipped, and that’s creating the write return
+response.  We’ll come back to that in a moment, though, following the read
+state machine.</p>
+
+<h3 id="read-processing">Read Processing</h3>
+
+<p>As it turns out, reads are even easier than writes.  On a reset, we clear
+<code class="language-plaintext highlighter-rouge">ARVALID</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_AXI_ARESETN</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">M_AXI_ARVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+		<span class="n">M_AXI_RREADY</span>  <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>While waiting for a response, we’ll clear <code class="language-plaintext highlighter-rouge">ARVALID</code> on any <code class="language-plaintext highlighter-rouge">ARREADY</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_RREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_ARREADY</span><span class="p">)</span>
+			<span class="n">M_AXI_ARVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span></code></pre></figure>
+
+<p>Once we get our read response, we’ll clear <code class="language-plaintext highlighter-rouge">RREADY</code>–sending us back to our idle
+state.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_RVALID</span><span class="p">)</span>
+			<span class="n">M_AXI_RREADY</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span></code></pre></figure>
+
+<p>But how shall we begin any reads?  Simple!  If we are in our idle state,
+then start a read on any request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_cmd_rd</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">M_AXI_ARVALID</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="n">M_AXI_RREADY</span>  <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>We can even capture this thought in a simple assertion.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">assert</span> <span class="k">property</span> <span class="p">(</span><span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">S_AXI_ACLK</span><span class="p">)</span>
+		<span class="n">S_AXI_ARESETN</span> <span class="o">&amp;&amp;</span> <span class="n">i_cmd_rd</span>
+		<span class="o">|=&gt;</span> <span class="n">M_AXI_ARVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_RREADY</span><span class="p">);</span></code></pre></figure>
+
+<p>While this sort of ad-hoc assertion isn’t sufficient to pass
+<a href="/blog/2018/03/10/induction-exercise.html">induction</a>,
+it’s certainly good enough to get us started when we get there.  Actually,
+when we get there below, I’m going to continue using <a href="/formal/2019/02/21/txuart.html">immediate
+assertions</a>–they’re a bit
+more verbose, but they can have the same effect without many of the <a href="/formal/2019/02/21/txuart.html">serious
+drawbacks associated with formally verifying concurrent
+assertions</a>.</p>
+
+<p>All that remains is to grab and return the response to then be sent to rest
+of the debugging bus design.</p>
+
+<h3 id="return-processing">Return Processing</h3>
+
+<p>Now that we’ve run the bus and accomplished our transaction, it’s important
+that we return a proper response downstream.  In this case, we’ll want to send
+one of several words down the debugging bus processing chain depending on
+both our state, and the response we just received from the bus:</p>
+
+<ol>
+  <li>Following a system reset, we’ll immediately send a reset
+confirmation downstream</li>
+  <li>On a write response, we’ll send a write acknowledgment</li>
+  <li>On a read response, we’ll need to send the RDATA value that the bus returned</li>
+  <li>
+    <p>On any <a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>, we’ll want to send a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>, response.</p>
+  </li>
+  <li>Finally, on any new address, we’ll send that new address downstream the
+first time it is used</li>
+</ol>
+
+<p>Now, how shall all these values be encoded?  I’ll admit, I spend far more time
+thinking about this than perhaps I should have.</p>
+
+<p>If you’ll remember, some time ago I discussed <a href="/zipcpu/2019/03/28/return-decoding.html">minimizing logic usage when
+the question was how to select from a number of potential sources–each with
+a valid flag</a>.
+The answer I came up with at the time was to pre-calculate an index, and then
+to use a case statement based upon that index to determine a return value.</p>
+
+<p>An alternative approach that came up in a twitter thread with Clifford was to
+use a for loop, but in such a fashion that it would simply collapse into a
+sum of products.  For example, if you know that only one ACK value will ever
+be true at a time, you might write:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">return_value</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span><span class="o">&lt;</span><span class="n">AXI_LIST_SIZE</span><span class="p">;</span> <span class="n">k</span><span class="o">=</span><span class="n">k</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">ack</span><span class="p">[</span><span class="n">k</span><span class="p">])</span>
+			<span class="n">return_value</span> <span class="o">=</span> <span class="n">return_value</span> <span class="o">|</span> <span class="n">data</span><span class="p">[</span><span class="n">k</span><span class="p">];</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Notice how the result doesn’t depend upon any multiplexers: it’s just a giant
+OR statement–a “sum” (i.e. OR) of “products” (ANDs).  As long as you, the
+designer, can ensure that the <code class="language-plaintext highlighter-rouge">ack</code> vector will only ever be one hot or zero,
+then this approach can work well.</p>
+
+<p>Indeed, this is the approach I chose to use for the response word, returning
+data to our debugging bus processing chain.  I started by initializing this
+response word to zero.  Then, on any write return, I set the response word.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">rsp_word</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_BVALID</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_BRESP</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+				<span class="n">rsp_word</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">28</span><span class="p">]</span> <span class="o">=</span> <span class="n">RSP_BUS_ERROR</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">28</span><span class="p">];</span>
+			<span class="k">else</span>
+				<span class="n">rsp_word</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">32</span><span class="p">]</span> <span class="o">=</span> <span class="n">RSP_WRITE_ACKNOWLEDGMENT</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">32</span><span class="p">];</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>Note that there are two possible returns here: either there’s been a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>, and a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>,
+return needs to be generated, or we are simply acknowledging
+that a write has been completed.</p>
+
+<p>Given that this is the first potential value of the response word, there were
+no “OR” values here–at least, not yet.  For the first word, we can just set
+things independent of any prior value in the chain.</p>
+
+<p>We can then move on to any read response.  Here things change subtly.  Unlike
+if <code class="language-plaintext highlighter-rouge">BVALID</code> was true above, where I could force the prior value of <code class="language-plaintext highlighter-rouge">rsp_word</code>
+to a known value, in this case of <code class="language-plaintext highlighter-rouge">RVALID</code> I might need to set <code class="language-plaintext highlighter-rouge">rsp_word</code> to
+completely different response word.  In this case, the synthesizer would never
+know that <code class="language-plaintext highlighter-rouge">RVALID</code> would only ever be true if <code class="language-plaintext highlighter-rouge">BVALID</code> were not.  So, I used
+the “OR” approach outlined above to capture the idea of merging these two
+return responses.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_RVALID</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_RRESP</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+				<span class="n">rsp_word</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">28</span><span class="p">]</span> <span class="o">=</span> <span class="n">rsp_word</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">28</span><span class="p">]</span>
+						<span class="o">|</span> <span class="n">RSP_BUS_ERROR</span><span class="p">[</span><span class="mi">33</span><span class="o">:</span><span class="mi">28</span><span class="p">];</span>
+			<span class="k">else</span>
+				<span class="n">rsp_word</span> <span class="o">=</span> <span class="n">rsp_word</span>
+					<span class="o">|</span> <span class="o">{</span> <span class="n">RSP_SUB_DATA</span><span class="p">,</span> <span class="n">M_AXI_RDATA</span> <span class="o">}</span><span class="p">;</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>As a final potential return value, the response word needs to contain any
+new address the first time we use it.  As before, we’ll simply OR this
+together with the prior values.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">newaddr</span><span class="p">)</span>
+			<span class="n">rsp_word</span> <span class="o">=</span> <span class="n">rsp_word</span> <span class="o">|</span> <span class="o">{</span> <span class="n">RSP_SUB_ADDR</span><span class="p">,</span>
+					<span class="o">{</span><span class="p">(</span><span class="mi">32</span><span class="o">-</span><span class="n">AW</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span><span class="p">,</span>
+					<span class="n">M_AXI_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">2</span><span class="p">],</span> <span class="mb">1'b0</span><span class="p">,</span> <span class="o">!</span><span class="n">inc</span> <span class="o">}</span><span class="p">;</span></code></pre></figure>
+
+<p>The neat thing about these “OR” functions is that they don’t create <a href="/zipcpu/2019/03/28/return-decoding.html">long
+multiplexer chains</a>.
+Further, because this <code class="language-plaintext highlighter-rouge">rsp_word</code>, however, is built of “OR” functions, the
+practical reality is that you must build it in an <code class="language-plaintext highlighter-rouge">always @(*)</code> block.  Within
+the <code class="language-plaintext highlighter-rouge">always @(*)</code> block, <code class="language-plaintext highlighter-rouge">rsp_word</code> is allowed to reference the last value of
+<code class="language-plaintext highlighter-rouge">rsp_word</code>–something that would not work in an <code class="language-plaintext highlighter-rouge">always @(posedge CLK)</code> block.
+That also means that, now that we’ve built our response word, <code class="language-plaintext highlighter-rouge">rsp_word</code>,
+we now need to register it in a second step.</p>
+
+<p>For those who know me and the logic I write, you’ll know that I don’t normally
+use two process blocks.  The complexity of <code class="language-plaintext highlighter-rouge">rsp_word</code> above, however, is
+enough to force us into a two process implementation.</p>
+
+<p>Hence, here’s the second process.  It starts with the reset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">o_rsp_stb</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">o_rsp_word</span> <span class="o">=</span> <span class="n">RSP_RESET</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_rsp_stb</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="n">o_rsp_word</span> <span class="o">&lt;=</span> <span class="n">RSP_RESET</span><span class="p">;</span></code></pre></figure>
+
+<p>On any system reset, our first response down the processing chain will be to
+acknowledge that reset.</p>
+
+<p>Otherwise, we’ll send a response downstream on either any response from the bus,
+or any time we get a read or write request after a new address has been set.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+		<span class="n">o_rsp_stb</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">o_rsp_word</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_BVALID</span> <span class="o">||</span> <span class="n">M_AXI_RVALID</span><span class="p">)</span>
+			<span class="n">o_rsp_stb</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">newaddr</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">i_cmd_rd</span> <span class="o">||</span> <span class="n">i_cmd_wr</span><span class="p">))</span>
+			<span class="n">o_rsp_stb</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>The final step is to set the response word that will be valid if ever
+<code class="language-plaintext highlighter-rouge">o_rsp_stb</code> is also valid.  This is the data word, set above, that will
+be qualified by <code class="language-plaintext highlighter-rouge">o_rsp_stb</code> and ignored any time <code class="language-plaintext highlighter-rouge">o_rsp_stb</code> is zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">o_rsp_word</span> <span class="o">&lt;=</span> <span class="n">rsp_word</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This ends the basic AXI-lite bus master implementation.  A couple things to
+note:</p>
+
+<ol>
+  <li>
+    <p>We kept this simple, by limiting ourselves to no more than one request at
+a time.  AXI-lite can handle many more, but our goal here was simplicity.</p>
+  </li>
+  <li>
+    <p>We encoded our “state machine”’s state in the various hand shaking signals
+used by AXI-lite.  While this may not feel like a conventional state machine,
+it is technically a state machine.  Even better, the approach is both
+simple and effective.</p>
+  </li>
+</ol>
+
+<p>Although this design was intended for use with a debugging bus
+implementation, the unexpected reality is that we could use this approach
+to <em>script</em> any AXI-lite interaction we wanted to create.  In other words,
+this simple approach is quite a bit more powerful than I had originally
+intended.</p>
+
+<h2 id="verification">Verification</h2>
+
+<p>Let’s do verification the easy way.  Any time you need to verify that an
+AXI-lite implementation “works”, the easy way to verify it is to grab <a href="/formal/2018/12/28/axilite.html">a copy
+of the formal AXI-lite model</a>
+and then to simply instantiate it within your design.</p>
+
+<p>There’s a couple of configuration notes to setting this up.  First, we only
+need two bits to be able to count up to the maximum number of transactions
+on the bus.  Hence, we’ll set the <code class="language-plaintext highlighter-rouge">F_LGDEPTH</code> to 2 and define a couple of
+values to connect to our model having this width.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">localparam</span>	<span class="n">F_LGDEPTH</span><span class="o">=</span><span class="mi">2</span><span class="p">;</span>
+	<span class="kt">wire</span>	<span class="p">[</span><span class="n">F_LGDEPTH</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>
+			<span class="n">faxil_awr_outstanding</span><span class="p">,</span> <span class="n">faxil_wr_outstanding</span><span class="p">,</span>
+			<span class="n">faxil_rd_outstanding</span><span class="p">;</span></code></pre></figure>
+
+<p>We also need to set the address width (<code class="language-plaintext highlighter-rouge">C_AXI_ADDR_WIDTH</code>) and data width
+<code class="language-plaintext highlighter-rouge">(C_AXI_DATA_WIDTH)</code> of the property set.  We’ll
+allow the design to assume the existence of a reset <code class="language-plaintext highlighter-rouge">(F_OPT_ASSUME_RESET)</code>,
+while also not requiring that reset to be a full 16 clock cycles
+<code class="language-plaintext highlighter-rouge">(F_OPT_NO_RESET)</code>.  (Xilinx’s AXI implementation notes require a long reset,
+even though most of their IP does not.)</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">faxil_master</span> <span class="p">#(</span>
+		<span class="p">.</span><span class="n">C_AXI_ADDR_WIDTH</span><span class="p">(</span><span class="n">AW</span><span class="o">+</span><span class="mi">2</span><span class="p">),.</span><span class="n">C_AXI_DATA_WIDTH</span><span class="p">(</span><span class="mi">32</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">F_OPT_ASSUME_RESET</span><span class="p">(</span><span class="mb">1'b1</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">F_OPT_NO_RESET</span><span class="p">(</span><span class="mb">1'b1</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">F_LGDEPTH</span><span class="p">(</span><span class="n">F_LGDEPTH</span><span class="p">)</span></code></pre></figure>
+
+<p>From here, the rest of instantiating the <a href="/formal/2018/12/28/axilite.html">AXI-lite
+properties</a> are very
+straightforward.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="p">)</span> <span class="n">faxil</span><span class="p">(</span>
+		<span class="p">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">i_clk</span><span class="p">),</span> <span class="p">.</span><span class="n">i_axi_reset_n</span><span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_axi_awvalid</span><span class="p">(</span><span class="n">M_AXI_AWVALID</span><span class="p">),</span> <span class="p">.</span><span class="n">i_axi_awready</span><span class="p">(</span><span class="n">M_AXI_AWREADY</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_awaddr</span><span class="p">(</span><span class="n">M_AXI_AWADDR</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_awprot</span><span class="p">(</span><span class="n">M_AXI_AWPROT</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_axi_wvalid</span><span class="p">(</span><span class="n">M_AXI_WVALID</span><span class="p">),</span> <span class="p">.</span><span class="n">i_axi_wready</span><span class="p">(</span><span class="n">M_AXI_WREADY</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_wdata</span><span class="p">(</span><span class="n">M_AXI_WDATA</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_wstrb</span><span class="p">(</span><span class="n">M_AXI_WSTRB</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_axi_bvalid</span><span class="p">(</span><span class="n">M_AXI_BVALID</span><span class="p">),</span> <span class="p">.</span><span class="n">i_axi_bready</span><span class="p">(</span><span class="n">M_AXI_BREADY</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_bresp</span><span class="p">(</span><span class="n">M_AXI_BRESP</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_axi_arvalid</span><span class="p">(</span><span class="n">M_AXI_ARVALID</span><span class="p">),</span> <span class="p">.</span><span class="n">i_axi_arready</span><span class="p">(</span><span class="n">M_AXI_ARREADY</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_araddr</span><span class="p">(</span><span class="n">M_AXI_ARADDR</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_arprot</span><span class="p">(</span><span class="n">M_AXI_ARPROT</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_axi_rvalid</span><span class="p">(</span><span class="n">M_AXI_RVALID</span><span class="p">),</span> <span class="p">.</span><span class="n">i_axi_rready</span><span class="p">(</span><span class="n">M_AXI_RREADY</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_rdata</span><span class="p">(</span><span class="n">M_AXI_RDATA</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">i_axi_rresp</span><span class="p">(</span><span class="n">M_AXI_RRESP</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">f_axi_rd_outstanding</span><span class="p">(</span><span class="n">faxil_rd_outstanding</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">f_axi_wr_outstanding</span><span class="p">(</span><span class="n">faxil_wr_outstanding</span><span class="p">),</span>
+			<span class="p">.</span><span class="n">f_axi_awr_outstanding</span><span class="p">(</span><span class="n">faxil_awr_outstanding</span><span class="p">)</span>
+	<span class="p">);</span></code></pre></figure>
+
+<p>At this point, we should be able to start running and passing proofs.
+<a href="/blog/2018/03/10/induction-exercise.html">Induction</a>
+will take some more work, but we’ll get to that in a moment.  Even better,
+this design is so simple that 20-40 clock steps should be sufficient for any
+non-<a href="/blog/2018/03/10/induction-exercise.html">induction</a>
+proof.</p>
+
+<p>This is also the point where I tend to start throwing assertions at the wall,
+just to make certain that things I’ve assumed during my design really are true.
+For example, we chose above to capture our “state” in <code class="language-plaintext highlighter-rouge">BREADY</code> and <code class="language-plaintext highlighter-rouge">RREADY</code>.
+Our goal was that if we were ever working on a write, then <code class="language-plaintext highlighter-rouge">BREADY</code> should
+be true, and if we were ever working on a read the <code class="language-plaintext highlighter-rouge">RREADY</code> should be true.
+If neither are true, then we should be idle.  This also means that both should
+never be true together.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">M_AXI_BREADY</span> <span class="o">||</span> <span class="o">!</span><span class="n">M_AXI_RREADY</span><span class="p">);</span></code></pre></figure>
+
+<p>Let’s break this down a bit more, though.  If <code class="language-plaintext highlighter-rouge">BREADY</code> is false, then we are
+not in the middle of any write transactions.  The number of <code class="language-plaintext highlighter-rouge">AWVALID</code>s that
+have taken place without seeing any corresponding <code class="language-plaintext highlighter-rouge">BVALID</code> are zero, and the
+same can be said for <code class="language-plaintext highlighter-rouge">WVALID</code>s.  Not only that, but if <code class="language-plaintext highlighter-rouge">BREADY</code> is false, then
+both <code class="language-plaintext highlighter-rouge">AWVALID</code> and <code class="language-plaintext highlighter-rouge">WVALID</code> should be zero–since we’re not in the <em>middle</em> of
+any write transaction either.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_BREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_awr_outstanding</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_wr_outstanding</span>  <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">M_AXI_WVALID</span>  <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span></code></pre></figure>
+
+<p>Where things get a bit more interesting is when <code class="language-plaintext highlighter-rouge">BREADY</code> is true.  In this
+case, we’ll have a write address request outstanding if <code class="language-plaintext highlighter-rouge">AWVALID</code> has been
+accepted and dropped.  The same will be true of a write data request should
+<code class="language-plaintext highlighter-rouge">WVALID</code> have been accepted and then dropped.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_awr_outstanding</span> <span class="o">==</span> <span class="p">(</span><span class="n">M_AXI_AWVALID</span> <span class="o">?</span> <span class="mi">0</span><span class="o">:</span><span class="mi">1</span><span class="p">));</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_wr_outstanding</span>  <span class="o">==</span> <span class="p">(</span><span class="n">M_AXI_WVALID</span>  <span class="o">?</span> <span class="mi">0</span><span class="o">:</span><span class="mi">1</span><span class="p">));</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Indeed, this is often all I have to do to verify the write half of an AXI-lite
+interface.  It’s pretty easy, and nearly boilerplate.</p>
+
+<p>The read half isn’t all that different either.</p>
+
+<p>If <code class="language-plaintext highlighter-rouge">RREADY</code> is low, then we aren’t trying to read and so both <code class="language-plaintext highlighter-rouge">ARVALID</code>
+and the number of read requests outstanding should both be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">M_AXI_RREADY</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_rd_outstanding</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">M_AXI_ARVALID</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span></code></pre></figure>
+
+<p>If, on the other hand, we are reading and so <code class="language-plaintext highlighter-rouge">RREADY</code> is high, then 
+either <code class="language-plaintext highlighter-rouge">ARVALID</code> is one or we have exactly one read request outstanding.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">faxil_rd_outstanding</span> <span class="o">==</span> <span class="p">(</span><span class="n">M_AXI_ARVALID</span> <span class="o">?</span> <span class="mi">0</span><span class="o">:</span><span class="mi">1</span><span class="p">));</span></code></pre></figure>
+
+<p>How about reset?  Following a reset, we should be able to assume that nothing
+is incoming.  Likewise, following a reset, we should be in our idle “state”
+with both <code class="language-plaintext highlighter-rouge">BREADY</code> and <code class="language-plaintext highlighter-rouge">RREADY</code> low.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="o">!</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">||</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)))</span>
+	<span class="k">begin</span>
+		<span class="cp">`ASSUME</span><span class="p">(</span><span class="o">!</span><span class="n">i_cmd_stb</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">M_AXI_BREADY</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">M_AXI_RREADY</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Did you notice how we only checked <code class="language-plaintext highlighter-rouge">BVALID</code> above if <code class="language-plaintext highlighter-rouge">BREADY</code> were  also true?
+Or likewise we only checked <code class="language-plaintext highlighter-rouge">RVALID</code> if <code class="language-plaintext highlighter-rouge">RREADY</code> was also true?  Let’s add a
+quick property to help guarantee that neither <code class="language-plaintext highlighter-rouge">BVALID</code> or <code class="language-plaintext highlighter-rouge">RVALID</code> will ever
+be true unless we are expecting them.  (This should also be captured by the
+properties above, but an extra assertion or two won’t hurt anything.)</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_BVALID</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">M_AXI_BREADY</span><span class="p">);</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_RVALID</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">M_AXI_RREADY</span><span class="p">);</span></code></pre></figure>
+
+<p>So far, we’ve focused primarily on the AXI-lite interface.  Indeed, the above
+is really all that’s required to verify an AXI-lite interface.  There’s
+literally nothing more to it.</p>
+
+<p>In the meantime, though, I’d like to assume the stream properties our incoming
+interface.  This interface is essentially an AXI stream interface, although
+the labels are a bit different.  For example, we used a busy instead of a
+ready–but the principle remains almost identical.  Hence, following any
+reset, we can assume that the STB (VALID) goes low.  Second, following any
+<code class="language-plaintext highlighter-rouge">STB &amp;&amp; BUSY</code> (i.e. VALID &amp;&amp; !READY), pending requests need to remain that:
+pending and without change.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assume</span><span class="p">(</span><span class="o">!</span><span class="n">i_cmd_stb</span><span class="p">);</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">i_cmd_stb</span> <span class="o">&amp;&amp;</span> <span class="n">o_cmd_busy</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">assume</span><span class="p">(</span><span class="n">i_cmd_stb</span><span class="p">);</span>
+		<span class="k">assume</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">i_cmd_word</span><span class="p">));</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>That leaves us with one last property: that our BUSY signal will be true any
+time either <code class="language-plaintext highlighter-rouge">BREADY || RREADY</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_cmd_busy</span> <span class="o">==</span> <span class="p">(</span><span class="n">M_AXI_BREADY</span> <span class="o">||</span> <span class="n">M_AXI_RREADY</span><span class="p">));</span></code></pre></figure>
+
+<p>This, however, is one of those “Do I really need this?” assertions.  Why?
+Because we defined <code class="language-plaintext highlighter-rouge">o_cmd_busy</code> as <code class="language-plaintext highlighter-rouge">BREADY || RREADY</code>.  Why then have an
+assertion to verify this?</p>
+
+<p>Do we need such an assertion?  Probably not.  I’ve placed it in here, though,
+to remind myself that <code class="language-plaintext highlighter-rouge">o_cmd_busy</code> has a specific definition.  There will be
+consequences should I ever try to change it in the future.  This is just a
+reminder of that–something to force me to think a touch harder before ever
+adjusting this value.</p>
+
+<h3 id="contract-checking">Contract checking</h3>
+
+<p>Now that we know our
+<a href="/formal/2018/12/28/axilite.html">AXI-lite interface</a>
+works, let’s turn our attention to the specific functionality of this design.
+Specifically, we want to know not just that the design will follow the <a href="/formal/2018/12/28/axilite.html">AXI-lite
+rules of the road</a>, but also
+that it will do what we want it to.  So, let’s check some
+<a href="/formal/2020/06/12/four-keys.html">contract rules</a>.</p>
+
+<p>For example, we want to assert the <code class="language-plaintext highlighter-rouge">newaddr</code> flag following any requested
+address, but also to guarantee that it returns low after we issue any bus
+requests.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_past_valid</span> <span class="o">||</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">newaddr</span><span class="p">);</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">i_cmd_addr</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">newaddr</span><span class="p">);</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">i_cmd_rd</span> <span class="o">||</span> <span class="n">i_cmd_wr</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">newaddr</span><span class="p">);</span>
+	<span class="k">else</span>
+		<span class="k">assert</span><span class="p">($</span><span class="nb">stable</span><span class="p">(</span><span class="n">newaddr</span><span class="p">));</span></code></pre></figure>
+
+<p>Following this further, on any request to read or write following a new
+address request, we should also be producing a downstream response acknowledging
+the new address.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">((</span><span class="n">f_past_valid</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span><span class="o">&amp;&amp;</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">i_cmd_rd</span> <span class="o">||</span> <span class="n">i_cmd_wr</span><span class="p">)))</span>
+	<span class="k">begin</span>
+		<span class="cp">`ASSERT</span><span class="p">(</span><span class="n">o_rsp_stb</span>  <span class="o">==</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">newaddr</span><span class="p">));</span>
+		<span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">newaddr</span><span class="p">))</span>
+			<span class="cp">`ASSERT</span><span class="p">(</span><span class="n">o_rsp_word</span> <span class="o">==</span> <span class="o">{</span> <span class="n">RSP_SUB_ADDR</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="mi">30</span><span class="o">-</span><span class="n">AW</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span><span class="p">,</span>
+				<span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_AWADDR</span><span class="p">[</span><span class="n">AW</span><span class="o">+</span><span class="mi">1</span><span class="o">:</span><span class="mi">1</span><span class="p">]),</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">inc</span><span class="p">)</span> <span class="o">}</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Finally, the new address flag should be low while any request is pending.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">M_AXI_BREADY</span> <span class="o">||</span> <span class="n">M_AXI_RREADY</span><span class="p">))</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">newaddr</span><span class="p">);</span></code></pre></figure>
+
+<p>How about resets?  Following any reset, we said we wanted to produce a
+reset response output.  Here, we’ll just double check that this happens.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span>
+		<span class="cp">`ASSERT</span><span class="p">((</span><span class="n">o_rsp_stb</span><span class="p">)</span><span class="o">&amp;&amp;</span><span class="p">(</span><span class="n">o_rsp_word</span> <span class="o">==</span> <span class="n">RSP_RESET</span><span class="p">));</span></code></pre></figure>
+
+<p>We can then check for write acknowledgments following <code class="language-plaintext highlighter-rouge">BVALID</code> and
+<code class="language-plaintext highlighter-rouge">BRESP=OKAY</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_BVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_BRESP</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_rsp_stb</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_rsp_word</span> <span class="o">==</span> <span class="n">RSP_WRITE_ACKNOWLEDGEMENT</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Read acknowledgments are also (nearly) identical.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+			<span class="o">&amp;&amp;</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_RVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_AXI_RRESP</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_rsp_stb</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_rsp_word</span> <span class="o">==</span> <span class="o">{</span> <span class="n">RSP_SUB_DATA</span><span class="p">,</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_RDATA</span><span class="p">)</span> <span class="o">}</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>The last response we might return is a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.
+In this case, if <code class="language-plaintext highlighter-rouge">xRESP</code> is every anything other than <code class="language-plaintext highlighter-rouge">OKAY</code>, then it’s an
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>.  (AXI-lite doesn’t allow
+<code class="language-plaintext highlighter-rouge">xRESP</code> to ever equal <code class="language-plaintext highlighter-rouge">EXOKAY=2'b01</code>.)  We don’t care, here, if it’s a slave
+error, <code class="language-plaintext highlighter-rouge">2'b10</code>, or an interconnect error, <code class="language-plaintext highlighter-rouge">2'b11</code>–a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> return is a
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a> return as far as
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">this</a>
+protocol goes.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_reset</span><span class="p">))</span>
+		<span class="o">&amp;&amp;</span><span class="p">(($</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_BVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_BRESP</span><span class="p">[</span><span class="mi">1</span><span class="p">]))</span>
+			<span class="o">||</span><span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="n">M_AXI_RVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_AXI_RRESP</span><span class="p">[</span><span class="mi">1</span><span class="p">]))))</span>
+	<span class="k">begin</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_rsp_stb</span><span class="p">);</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">o_rsp_word</span> <span class="o">==</span> <span class="n">RSP_BUS_ERROR</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>At this point, we should have good confidence that our design will always
+return the values downstream that it’s supposed to.</p>
+
+<h2 id="cover-checks">Cover Checks</h2>
+
+<p>This leaves us one last verification step.  So far, we’ve proven that this
+design will follow the <a href="/formal/2018/12/28/axilite.html">AXI-lite
+protocol</a>.  We’ve proven this
+via <a href="/blog/2018/03/10/induction-exercise.html">induction</a>.
+We’ve also guaranteed that the design will properly return appropriate values
+down stream based upon what’s going on within.</p>
+
+<p>What we haven’t done is to prove that responses are still possible.</p>
+
+<p>I’ve just had one too many designs where I’ve convinced myself that the design
+works when, for one reason or another, I’ve made one too many assumptions to
+keep the design from working.  For example, I once assumed <code class="language-plaintext highlighter-rouge">reset</code> was always
+true.  It was amazing how quickly the design passed a formal check, and just
+as disheartening to see that it never worked in simulation or hardware.</p>
+
+<p>A good cover check will help guarantee we haven’t made such mistakes.</p>
+
+<p>Therefore, let’s see if we can complete several writes and reads.</p>
+
+<p>The first step is to count the number of writes that complete.  In this case,
+let’s count how many writes in a row we can go through–while disallowing any
+reads.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">cvr_writes</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="n">M_AXI_RREADY</span><span class="p">)</span>
+		<span class="n">cvr_writes</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_BVALID</span><span class="p">)</span>
+		<span class="n">cvr_writes</span> <span class="o">&lt;=</span> <span class="n">cvr_writes</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>Our goal will be to accomplish four writes before returning to idle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_writes</span> <span class="o">==</span> <span class="mi">4</span> <span class="o">&amp;&amp;</span> <span class="n">faxil_awr_outstanding</span> <span class="o">==</span> <span class="mi">0</span>
+			<span class="o">&amp;&amp;</span> <span class="n">faxil_wr_outstanding</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span></code></pre></figure>
+
+<p>You can see how well we did in Fig. 9 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 9. Cover, four writes in a row</caption><tr><td><a href="/img/dbgaxil/cvr-writes-annotated.svg"><img src="/img/dbgaxil/cvr-writes-annotated.svg" alt="" width="780" /></a></td></tr></table>
+
+<p>In this case, there are four write requests, and six responses forwarded 
+downstream.  The first response acknowledges a reset, and the next acknowledges
+the new address.  These two responses are then followed by a regular write
+acknowledgment, and then (bonus!) three
+<a href="https://en.wikipedia.org/wiki/Bus_(computing)">bus</a>
+<a href="https://en.wikipedia.org/wiki/Bus_error">error</a>
+acknowledgments.</p>
+
+<p>This is also the place where I usually measure throughput as well.  In this
+case, the throughput is horrible: one word can be written every three cycles.
+It’s worse than that, though, since this doesn’t capture any
+<a href="/blog/2019/07/17/crossbar.html">interconnect</a>
+latencies.</p>
+
+<p>On the other hand, the purpose of this design was never throughput–it was
+low logic, and a basic demonstration of an AXI-lite master.  We’ll come back
+to the logic estimate in a moment to see how well we did there.</p>
+
+<p>For now, let’s repeat this test with reads.  Can we cover a set of four reads
+in a row?  The first step is to count them–much like we did before.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">cvr_reads</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="n">M_AXI_BREADY</span><span class="p">)</span>
+		<span class="n">cvr_reads</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_AXI_RVALID</span><span class="p">)</span>
+		<span class="n">cvr_reads</span> <span class="o">&lt;=</span> <span class="n">cvr_reads</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>Now let’s let the formal tool find us a sequence showing how four reads might
+look in a row, once we’ve returned to idle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_reads</span> <span class="o">==</span> <span class="mi">4</span> <span class="o">&amp;&amp;</span> <span class="n">faxil_rd_outstanding</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+<span class="k">endmodule</span></code></pre></figure>
+
+<p>You can see the result of this exercise in Fig. 10 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 10. Cover, four reads in a row</caption><tr><td><a href="/img/dbgaxil/cvr-reads-annotated.svg"><img src="/img/dbgaxil/cvr-reads-annotated.svg" alt="" width="780" /></a></td></tr></table>
+
+<p>As before, we’re getting about a 33% throughput.  There’s a reset
+acknowledgment, a new address acknowledgment, a read response, and then
+three read bus errors.  The 33% throughput isn’t great, and it’s certainly
+nothing to write home about.  But, as before, our goal is low logic
+and this is certainly that.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>I’ve now mentioned several times that our purpose is low logic.  How low,
+therefore, did we get?  A quick Yosys run shows that this simple and basic
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>
+<a href="https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexecaxi.v">design</a>
+requires no more than 148 4-LUTs.  Not bad for an iCE40, no?
+Indeed, the <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">entire AXI-lite verseion of the
+hexbus</a> on an iCE40
+(minus the serial port) requires no more than 349 4-LUTs.</p>
+
+<p>Surely 349 4-LUTs can be easily hidden in a larger design, no?  Surely it’s a
+small price to pay for ad-hoc, external access to the bus within a design?
+Other costs, however, will always add up.  Don’t forget that, in addition
+to the missing serial port cost (about 135 4-LUTs), there’s also the cost of
+adding yet one more master to the <a href="/blog/2019/07/17/crossbar.html">internal
+crossbar</a>–something
+that can run upwards of 1500 4-LUTs by itself alone.</p>
+
+<p>Still, this does make for a very low logic AXI-lite master.  Remember our
+last <a href="/blog/2020/03/23/wbm2axisp.html">AXI-lite master</a>
+implementation?  That was a bridge from
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> to
+<a href="/formal/2018/12/28/axilite.html">AXI-lite</a>.  Comparably,
+it requires 118 4-LUTs to the 148 4-LUTs used by today’s controller.  The big
+difference with this controller, though, is that this one is intended for
+scripting.  Therefore, there are fewer wires used to control <a href="https://github.com/ZipCPU/dbgbus/blob/master/hexbus/rtl/hbexecaxi.v">this
+master</a>.</p>
+
+<p>Better, because this controller can be easily scripted, its uses go well beyond
+the <a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">debug bus</a>
+implementation it is designed and presented for.</p>
+
+<p>Before leaving, I should also point out that neither the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a> nor the
+<a href="/blog/2017/06/05/wb-bridge-overview.html">wbubus</a>
+is the end-all in debugging bus implementations.  The first can transfer,
+at best, one 32-bit word every 10 bytes (100 baud intervals).  The
+<a href="/blog/2017/06/05/wb-bridge-overview.html">wbubus</a> is better,
+but it can transfer one 32-bit word in six bytes (60 baud intervals, or 40%
+faster–before compression).  I’m currently working on a newer version of the
+bus which will be able to transfer one 32-bit word in five bytes (50 baud
+intervals)–while still reserving one bit so as to multiplex a console channel
+over the debugging bus.  Were I to implement it without console support, then
+the new bus implementation would be able to transfer (worst case) one word in
+45 baud intervals.  That’s a full 55% faster than the
+<a href="https://github.com/ZipCPU/dbgbus/tree/master/hexbus">hexbus</a>,
+and yes, times do add up when you are transferring large amounts of information.
+Indeed, that last couple of percentage points can amount to minutes of
+valuable transfer time.</p>
+
+<p>As you can see, with a little bit of work, performance and throughput can
+and do improve over time–although getting that last little bit always tends to
+be somewhat of a challenge.  Perhaps that’s just the reality of any engineering
+endeavor.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>The fear of the LORD is the beginning of knowledge: but fools despise wisdom and instruction.  (Prov 1:7)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
