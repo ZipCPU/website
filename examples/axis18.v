@@ -1,6 +1,8 @@
+`default_nettype none
 module axis18 #(
 		parameter	DW = 16
 	) (
+		// {{{
 		input	wire			S_AXI_ACLK, S_AXI_ARESETN,
 		//
 		input	wire			S_AXIS_TVALID,
@@ -12,6 +14,7 @@ module axis18 #(
 		input	wire			M_AXIS_TREADY,
 		output	reg	[DW-1:0]	M_AXIS_TDATA,
 		output	reg			M_AXIS_TLAST
+		// }}}
 	);
 
 	always @(posedge S_AXI_ACLK)
@@ -45,6 +48,8 @@ module axis18 #(
 	if (!f_past_valid)
 		assume(!S_AXI_ARESETN);
 
+	// Multiclock assumptions
+	// {{{
 	always @(posedge gbl_clk)
 	if (!$rose(S_AXI_ACLK))
 	begin
@@ -56,17 +61,24 @@ module axis18 #(
 
 		assume($stable(M_AXIS_TREADY));
 	end
+	// }}}
 
+	// AXI Stream assumptions applied to the slave input channel
+	// {{{
 	always @(posedge S_AXI_ACLK)
 	if (!f_past_valid || $past(!S_AXI_ARESETN))
 		assume(!S_AXIS_TVALID);
 	else if ($past(S_AXIS_TVALID && !S_AXIS_TREADY))
 	begin
 		assume(S_AXIS_TVALID);
-		assume(S_AXIS_TDATA == $past(S_AXIS_TDATA));
+		// assume(S_AXIS_TDATA == $past(S_AXIS_TDATA));
+		assume($stable(S_AXIS_TDATA));
 		assume($stable(S_AXIS_TLAST));
 	end
+	// }}}
 
+	// AXI Stream assertions applied to the master (output) channel
+	// {{{
 	always @(posedge S_AXI_ACLK)
 	if (!f_past_valid || $past(!S_AXI_ARESETN))
 		assert(!f_past_valid || !M_AXIS_TVALID);
@@ -76,6 +88,7 @@ module axis18 #(
 		assert($stable(M_AXIS_TDATA));
 		assert($stable(M_AXIS_TLAST));
 	end
+	// }}}
 
 	always @(*)
 	if (f_past_valid && S_AXI_ARESETN && S_AXIS_TREADY)
@@ -84,5 +97,21 @@ module axis18 #(
 		assert(S_AXIS_TVALID);
 		assert(S_AXIS_TDATA == M_AXIS_TDATA);
 	end
+	////////////////////////////////////////////////////////////////////////
+	//
+	// Cover
+	////////////////////////////////////////////////////////////////////////
+	//
+	reg	[3:0]	cvr_beats;
+
+	always @(posedge S_AXI_ACLK)
+	if (!S_AXI_ARESETN)
+		cvr_beats <= 0;
+	// else if (M_AXIS_TVALID && M_AXIS_TREADY && !cvr_beats[3])
+	else if ($past(S_AXIS_TVALID && S_AXIS_TREADY) && $changed(S_AXIS_TDATA) && !cvr_beats[3])
+		cvr_beats <= cvr_beats + 1;
+
+	always @(*)
+		cover(S_AXI_ARESETN && cvr_beats[3]);
 `endif
 endmodule
