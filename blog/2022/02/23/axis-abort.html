@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>AXI Stream is broken</title>
+  <meta name="description" content="There, I said it.  One of the simplest and most useful AXI protocols,AXI Stream, is fundamentally flawed.">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2022/02/23/axis-abort.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">AXI Stream is broken</h1>
+    <p class="post-meta"><time datetime="2022-02-23T00:00:00-05:00" itemprop="datePublished">Feb 23, 2022</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>There, I said it.  One of the simplest and most useful AXI protocols,
+<a href="/doc/axi-stream.pdf">AXI Stream</a>, is fundamentally flawed.</p>
+
+<p>Let’s quickly review AXI Stream, and then I’ll tell you what I mean by saying
+the protocol is broken.  Then I’ll propose a method of fixing at least part
+of the problem.</p>
+
+<h2 id="what-is-axi-stream">What is AXI Stream?</h2>
+
+<p>We’ve discussed <a href="/doc/axi-stream.pdf">AXI Stream</a>s
+a couple of times on this blog already, most recently when discussing the basic
+<a href="/blog/2021/08/28/axi-rules.html">AXI handshaking rules</a>.
+As a quick background, <a href="/doc/axi-stream.pdf">AXI Stream</a>
+is a protocol that can be useful for transferring <em>stream</em> data around within
+a chip.  Unlike <em>memory</em> data, there’s no address associated with stream
+data–it’s just a stream of information.</p>
+
+<table align="center" style="float: right"><caption>Fig 1. AXI stream signals</caption><tr><td><img src="/img/slave-rules/axis-signals.png" alt="" width="302" /></td></tr></table>
+
+<p>But how fast shall the stream run?  As fast as it can be produced, or as
+fast as it can be consumed?  This is determined by a pair of values:
+<code class="language-plaintext highlighter-rouge">TVALID</code>, indicating that the data in the stream is valid on the current clock
+cycle and produced by the source (master), and <code class="language-plaintext highlighter-rouge">TREADY</code>, indicating that
+the consumer (slave) is prepared to accept data.  Whenever <code class="language-plaintext highlighter-rouge">TVALID </code>and
+<code class="language-plaintext highlighter-rouge">TREADY</code> are both true, <code class="language-plaintext highlighter-rouge">TDATA</code> moves through the stream.</p>
+
+<p>A third signal is also very useful, and that is <code class="language-plaintext highlighter-rouge">TLAST</code>.  The <code class="language-plaintext highlighter-rouge">TLAST</code> signal
+can be used to create <em>packets</em> of data, having beginning and ending.
+The packet ends when <code class="language-plaintext highlighter-rouge">TLAST</code> is true, and begins on the first <code class="language-plaintext highlighter-rouge">TVALID</code> signal
+following the <code class="language-plaintext highlighter-rouge">TLAST</code> signal.</p>
+
+<p>The stream standard also defines such signals as <code class="language-plaintext highlighter-rouge">TID</code> (an ID for a packet),
+<code class="language-plaintext highlighter-rouge">TDEST</code> (the packet’s destination), <code class="language-plaintext highlighter-rouge">TSTRB</code> (which bytes have valid
+information), and <code class="language-plaintext highlighter-rouge">TKEEP</code> (which bytes in a stream cannot be removed), but I
+have personally only rarely seen uses for these.  The one exception is the
+<code class="language-plaintext highlighter-rouge">TUSER</code> field which comes nicely into play in video streams–but I digress.</p>
+
+<p>There’s one other important term you need to know:
+<a href="https://en.wikipedia.org/wiki/Back_pressure"><em>backpressure</em></a>.
+<a href="https://en.wikipedia.org/wiki/Back_pressure">Backpressure</a> is what’s created when
+the source is ready to send data, that is when <code class="language-plaintext highlighter-rouge">TVALID</code> is true, but the
+consumer isn’t ready to receive it and so <code class="language-plaintext highlighter-rouge">TREADY</code> is false.  Under the
+<a href="/doc/axi-stream.pdf">AXI Stream</a> protocol, there’s no limit
+to how much <a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a>
+a slave may impose on any stream.</p>
+
+<p>And herein lies my complaint.</p>
+
+<h2 id="whats-wrong-with-axi-stream">What’s wrong with AXI Stream?</h2>
+
+<p>There are three basic types of stream components, and realistically
+<a href="/doc/axi-stream.pdf">AXI Stream</a> only works for one of
+these three.</p>
+
+<table align="center" style="float: none"><caption>Fig 2. AXI stream doesn't capture hard real-time requirements well</caption><tr><td><img src="/img/axis-abort/axis-pipeline.svg" alt="" width="780" /></td></tr></table>
+
+<ol>
+  <li>
+    <p><strong>Sources</strong>.  Most of the physical data sources I’ve come across produce
+data at a fixed and known rate.  Examples of these sources include:</p>
+
+    <ul>
+      <li><a href="https://en.wikipedia.org/wiki/Analog-to-digital_converter">Analog to Digital converters</a></li>
+      <li>Network PHYs</li>
+      <li>Digital cameras</li>
+    </ul>
+
+    <p>In all three of three of these examples, data comes whether you are ready
+for it or not.  What then happens if <code class="language-plaintext highlighter-rouge">TVALID</code> is true, from the source, but
+the processing stream isn’t ready to handle it?  i.e. <code class="language-plaintext highlighter-rouge">TREADY</code> is low?
+Where does the data go?</p>
+
+    <p>As an example, <a href="/dsp/dsp.html">some of the filters we’ve created on this
+blog</a> can only accept one data sample every
+<code class="language-plaintext highlighter-rouge">N</code> samples (for some arbitrary <code class="language-plaintext highlighter-rouge">N</code>).  What happens if you choose to feed
+the filter with data arriving at faster than one sample every <code class="language-plaintext highlighter-rouge">N</code> clock
+cycles?</p>
+
+    <p>Let’s call this the <em>over-energetic source</em> problem for lack of a better
+term, and it is a problem.  In general, there is no way to detect an
+over-energetic source from within the protocol  As a result, there is no
+protocol compliant way to handle this situation.  Given a sufficient amount
+of <a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a>,
+data will simply be dropped in a non-protocol compliant fashion.  There’s
+really no other choice.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 3. There are always real-time requirements</caption><tr><td><img src="/img/axis-abort/real-time.svg" alt="" width="420" /></td></tr></table>
+
+<ol start="2">
+  <li>
+    <p><strong>Processing components</strong>.  These are neither sources nor sinks, and in
+today’s taxonomy, I shall arbitrarily declare that they have no real time
+requirement.  In these cases, the
+<a href="/doc/axi-stream.pdf">AXI Stream</a> protocol can be a
+really good fit.</p>
+
+    <p>A good example of such processing components would include data processing
+engines.  Perhaps some seismic data was recorded a couple of years ago
+and you wish to process it in an FPGA today.  In this case, there’s may be
+neither explicit latency nor throughput requirements.  The data stream can
+move through the system as fast as the hardware algorithm will allow it.</p>
+  </li>
+  <li>
+    <p><strong>Sinks</strong>.  Here you have the second problem: most sinks need to interact
+with physical hardware at a known rate.  Corollaries to the examples above
+form good examples here as well:</p>
+
+    <ul>
+      <li><a href="https://en.wikipedia.org/wiki/Digital-to-analog_converter">Digital to analog converters</a></li>
+      <li>Network PHYs</li>
+      <li>Video monitors</li>
+    </ul>
+
+    <p>What happens in these cases if it’s time to produce a sample, <code class="language-plaintext highlighter-rouge">TREADY</code> is
+true to accept that sample, but <code class="language-plaintext highlighter-rouge">TVALID</code> is not?  That is, data is required
+but there’s no data to be had?  We might call this the <em>sluggish source</em>
+problem for the sake of a discussion, although the condition itself is
+often called a <a href="https://en.wikipedia.org/wiki/Buffer_underrun">buffer
+underrun</a>.</p>
+
+    <p>As with the first situation, there’s really no protocol compliant way of
+handling this situation.</p>
+
+    <p>Unlike the first situation, however, a sink can often detect this situation
+(!<code class="language-plaintext highlighter-rouge">TVALID &amp; READY</code>) and handle it in an application specific manner.  For
+example, a <a href="https://en.wikipedia.org/wiki/Digital-to-analog_converter">DAC</a>
+might replicate the last output value and raise an error flag.  A network
+PHY might simply terminate the packet early–without any
+<a href="https://en.wikipedia.org/wiki/Cyclic_redundancy_check">CRC</a>, and so cause
+the receiver to drop the packet.  A video stream might blank to black, and
+then wait for the next frame to resynchronize.</p>
+  </li>
+</ol>
+
+<p>From this list, you can see that two of the three
+<a href="/doc/axi-stream.pdf">AXI Stream</a> component types can’t
+handle the raw <a href="/doc/axi-stream.pdf">AXI Stream</a> protocol
+very well.  Of these two, the over-energetic source problem is the most
+problematic.</p>
+
+<p>There’s another, more minor, problem with
+<a href="/doc/axi-stream.pdf">AXI streams</a>, and that is the problem
+of recording any metadata associated with the stream.  As an example, let’s
+just consider the <code class="language-plaintext highlighter-rouge">TLAST</code> signal.  What should an
+<a href="/doc/axi-stream.pdf">AXI streams</a>
+processing system do with the <code class="language-plaintext highlighter-rouge">TLAST</code> signal when the data needs to be
+recorded to memory?  In general, it’s just dropped.  In many cases, that
+“just works”.  For example, if you are recording video, where every video
+frame has the same length, then you should be able to tell what packet you are
+on by where the write pointer is in memory.  On the other hand, if every
+packet has a different size, then a different format is really needed.</p>
+
+<p>These are the two problems I’ve come across when working with
+<a href="/doc/axi-stream.pdf">AXI streams</a> which I would like to
+address today.</p>
+
+<h2 id="motivating-a-solution">Motivating a Solution</h2>
+
+<p>Just to motivate a solution a little bit, I’m currently working on building
+a SONAR data capture design for a customer.  This particular design will be
+for an underwater SONAR device, so physical access to the actual device will
+be limited.  We’ve chosen instead to run all access over an Ethernet
+connection.  On top of that, prior experience building designs like this has
+generated some reluctance in the team I’m working with to have a design depend
+upon a CPU.  They would rather have a design that “just works” as soon as power
+is applied.</p>
+
+<p>Fig. 4 shows a basic outline of this application, where data is collected from
+a number of sensors, serialized, compressed, organized into packets, converted
+to UDP, and then forwarded across a network data link.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. A Basic network data collector</caption><tr><td><img src="/img/axis-abort/sonar-application.svg" alt="" width="640" /></td></tr></table>
+
+<p>My <a href="/blog/2018/02/09/first-cyclonev.html">previous approach</a>
+to network handling didn’t “just work” at the speeds I wanted to work at.  In
+that case, the ARM CPU on the DE10-Nano couldn’t keep up with my data rate
+requirements.  (Okay, <a href="/blog/2019/04/27/axi-addr.html">part of the fault was the
+method I was using</a> to
+transfer data to the CPU …)  Lesson learned?  Automated data processing,
+and in particular network packet handling <em>that approaches the capacity of
+the network link</em>, should be handled in the fabric, not in the CPU.</p>
+
+<p>This meant that I needed to rearrange my approach to handling networks.
+I needed something automatic, something that didn’t require a CPU, and
+something that “just worked”.</p>
+
+<p>I first looked at <a href="/doc/axi-stream.pdf">AXI stream</a>,
+and then came face to face with the problem above: what happens if the stream
+is going to someplace where the buffer is full?  What happens if there’s too
+much <a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a>
+in the system to handle a new packet?  What happens when an output packet is
+blocked by a collision with another outgoing packet, or when such a collision
+takes so long to resolve that there’s no longer any buffer space to hold the
+outgoing packet?</p>
+
+<p>In network protocols, the typical answer to this problem is to drop packets.
+Unfortunately, the <a href="/doc/axi-stream.pdf">AXI stream</a>
+protocol offers no native support for dropping packets.</p>
+
+<p>Let’s fix that.</p>
+
+<h2 id="proposing-a-solution-packet-aborts">Proposing a solution: Packet aborts</h2>
+
+<p>At this point, I’m now well into the design of this system, and the solution
+I chose was to add an <code class="language-plaintext highlighter-rouge">ABORT</code> signal to the
+<a href="/doc/axi-stream.pdf">AXI stream</a> protocol.  The basic
+idea behind this signal is that an AXI master should be able to cancel any
+ongoing packets if the slave generates too much
+<a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a> (holds <code class="language-plaintext highlighter-rouge">TREADY</code> low
+too long).</p>
+
+<p>Here are the basic rules to this new <code class="language-plaintext highlighter-rouge">ABORT</code> signal:</p>
+
+<ol>
+  <li>
+    <p><code class="language-plaintext highlighter-rouge">ABORT</code> may be raised at any time–whether or not <code class="language-plaintext highlighter-rouge">TVALID</code> or <code class="language-plaintext highlighter-rouge">TREADY</code> are
+true.</p>
+
+    <p><code class="language-plaintext highlighter-rouge">ABORT</code> may also be raised for any cause.
+<a href="https://en.wikipedia.org/wiki/Back_pressure">Backpressure</a>
+is only one potential cause.  Why?  Think about it.  An <code class="language-plaintext highlighter-rouge">ABORT</code> signal caused
+by <a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a> at one point in a
+processing chain may need to propagate forward to other portions of the
+chain that weren’t suffering
+<a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a>.  In other
+words, the protocol needs to allow <code class="language-plaintext highlighter-rouge">ABORT</code>’s whether or not
+<a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a>
+was currently present on a given link.</p>
+  </li>
+  <li>
+    <p>Following an abort, the next sample from the
+<a href="/doc/axi-stream.pdf">AXI stream</a>
+will always be the first sample of the next packet.</p>
+  </li>
+  <li>
+    <p>If <code class="language-plaintext highlighter-rouge">ABORT &amp;&amp; !TVALID</code>, then the <code class="language-plaintext highlighter-rouge">ABORT</code> may be dropped immediately.</p>
+  </li>
+  <li>
+    <p>If <code class="language-plaintext highlighter-rouge">ABORT &amp;&amp; TVALID</code>, then the <code class="language-plaintext highlighter-rouge">ABORT</code> signal may not be dropped until
+after <code class="language-plaintext highlighter-rouge">ABORT &amp;&amp; TVALID &amp;&amp; TREADY</code>.</p>
+  </li>
+  <li>
+    <p>Once <code class="language-plaintext highlighter-rouge">TVALID &amp;&amp; TREADY &amp;&amp; TLAST</code> have been received, the source can no
+longer abort a packet.</p>
+  </li>
+</ol>
+
+<p>The <code class="language-plaintext highlighter-rouge">ABORT</code> signal is very similar to a <code class="language-plaintext highlighter-rouge">TUSER</code> signal, but with a couple
+subtle differences.  First, <code class="language-plaintext highlighter-rouge">TUSER</code> is only valid if <code class="language-plaintext highlighter-rouge">TVALID</code> is also true,
+whereas <code class="language-plaintext highlighter-rouge">ABORT</code> may be raised at any time.  Second, an <code class="language-plaintext highlighter-rouge">ABORT</code> signal may be
+raised <em>while</em> the channel is stalled with <code class="language-plaintext highlighter-rouge">TVALID &amp;&amp; !TREADY</code>.  This
+would be a protocol violation if a <code class="language-plaintext highlighter-rouge">TUSER</code> signal was used to carry an <code class="language-plaintext highlighter-rouge">ABORT</code>
+signal.</p>
+
+<p>Still, that’s the basic protocol.  For lack of a better name, I’ve chosen to
+call this the “AXI network” protocol or AXIN for short.</p>
+
+<h2 id="the-drop-signal">The DROP signal</h2>
+
+<p>I would be remiss if I didn’t mention
+<a href="https://twitter.com/joshltyler">@JoshTyler</a>’s <a href="https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv">prior
+work</a>
+before going any further.  <a href="https://twitter.com/joshltyler">@JoshTyler</a>
+chose to use a DROP signal, similar to my <code class="language-plaintext highlighter-rouge">ABORT</code> signal proposed above.
+Whenever his <a href="https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv">Packet
+FIFO</a>
+encounters a DROP signal, it simply drops the entire packet–much like
+the <code class="language-plaintext highlighter-rouge">ABORT</code> signal I’ve proposed above would do.</p>
+
+<p>There are a couple of subtle differences, however, between his DROP signal and
+my proposed <code class="language-plaintext highlighter-rouge">ABORT</code> signal.  The biggest difference between the two is that, in
+the AXIN protocol, the <code class="language-plaintext highlighter-rouge">ABORT</code> signal may arrive without an accompanied
+<code class="language-plaintext highlighter-rouge">TVALID</code>.  <code class="language-plaintext highlighter-rouge">ABORT</code> may also be raised even if the stream is stalled with
+<code class="language-plaintext highlighter-rouge">TVALID &amp;&amp; !TREADY</code>.  From this standpoint, it’s more of an out of band signal
+whereas <a href="https://twitter.com/joshltyler">@JoshTyler</a>’s DROP signal is in band.</p>
+
+<p>Both approaches are designed to solve this problem, and both could work nicely
+for this purpose.  In general, <a href="https://twitter.com/joshltyler">@JoshTyler</a>’s
+approach looks like it was easier to implement.  However, it also looks like
+<a href="https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv">his implementation</a>
+might hang if ever given a packet larger than the size of <a href="https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv">his
+FIFO</a>.</p>
+
+<h2 id="measuring-success-does-it-work">Measuring success: does it work?</h2>
+
+<p>Of course, the first question should always be, does my proposed AXIN
+protocol work?  At this point in the development of my own design, I can
+answer that with a resounding <em>yes!</em>  Not only does this technique work, it
+works quite well.</p>
+
+<p>Allow me to share some of my experiences working with this protocol, starting
+from the beginning.</p>
+
+<table align="center" style="float: right"><caption>Fig 5. First steps</caption><tr><td><img src="/img/axis-abort/first-steps.svg" alt="" width="360" /></td></tr></table>
+
+<ol>
+  <li>As with most of the protocols I’ve come to work with, my first step was to
+build a set of formal properties to define the AXIN protocol.  These matched
+the modified AXI stream properties outlined above.</li>
+</ol>
+
+<p>That was the easy part.</p>
+
+<table align="center" style="float: left; padding=25px"><caption>Fig 6. The AXIN FIFO</caption><tr><td><img src="/img/axis-abort/netfifo.svg" alt="" width="360" /></td></tr></table>
+
+<ol start="2">
+  <li>
+    <p>The next piece I built was a basic <code class="language-plaintext highlighter-rouge">ABORT</code> enabled FIFO, shown in Fig. 6 on
+the left.  This FIFO had two AXIN ports: an AXIN slave port and an AXIN
+master port.  The simple goal of the FIFO was to provide some buffer room
+between a packet source and a destination.</p>
+
+    <p>Here I came across the first problem with the protocol: the FIFO turned out
+to be a real challenge to build.  (<a href="https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv">Josh’s
+implementation</a>
+looks easy in comparison.) What happens, for example, if two packets are in
+a FIFO and the third packet aborts?  The first two packets, which now have
+allocated memory within the FIFO must go through.  What happens if the FIFO
+is completely full with less than a packet and the source aborts?  The FIFO
+output must abort as well, and the FIFO should then flush the incoming
+packet until its end–even though the source will know nothing of the packet
+getting dropped.  All of these new conditions made this AXIN protocol a
+challenge to build a design for.  Today, however, the task is now done and
+the FIFO works.</p>
+  </li>
+</ol>
+
+<p>Once I had a FIFO in place, things started getting easier.  I then built an
+AXIN payload to UDP converter, an AXIN multiplexer to select from multiple
+packet sources, an AXIN broadcast element to broadcast packets to multiple
+separate packet handlers, and more.  With each new component, the protocol
+became easier and easier to use.</p>
+
+<p>Two recent examples might help illustrate the utility of this approach.</p>
+
+<ul>
+  <li>
+    <p>First, on startup, the network PHY is given a long reset.  (It might be
+too long …)  During this time, however, packets are still generated–they
+just need to be dropped internally because the network controller is holding
+the PHY in reset.  Sure enough, the FIFO that I had put so much time and
+energy into worked like a champ!  It dropped these packets, and recovered
+immediately once the controller brought the PHY out of reset and started
+accepting packets.  Even better, I haven’t found any bugs in it since the
+formal verification work I went through.</p>
+  </li>
+  <li>
+    <p>The second example I have is one of data packet generation.  As you may
+recall, one of the primary design goals was to broadcasting data packets,
+each containing an internal time stamp.  The problem is that this data packet
+includes in its header a time stamp associated with the data–something not
+known until the data is available.  In other words, the header cannot be
+formed until the both the data and its associated time stamp are available.
+Once that first data sample is available, though, the data must now wait for
+the header to be formed and forwarded downstream.  The problem then replicates
+itself again in the next processing stage: the payload to UDP packet
+converter.</p>
+
+    <p>My first approach to data packet generation was to try and schedule the
+packet header generation between the time when the data entered the
+data compression pipeline stage and when it came out to go into the payload
+generator (See Fig. 4 above), but then I came across a simulation trace in
+which the last data sample of one packet was immediately followed by the
+first data sample of the next packet.  That left no time cycles for header
+generation between the last data sample of the one packet and the first
+sample of the next.  When I went back to the drawing board to look for another
+solution, I found my AXIN FIFO.  Placing this FIFO between the data source
+and the packet generator solved this problem nicely, and I haven’t had a
+reason to look back since.</p>
+  </li>
+</ul>
+
+<p>Indeed, the ease of building these subsequent data handling components has
+easily repaid the time I have put into building the original FIFO a couple
+times over.</p>
+
+<p>No, this new protocol isn’t perfect.  I still needed a way to transition
+from a packet that can be dropped to one that has been fully accepted.
+In particular, I wanted to generate a DMA engine that could store a packet
+into memory.  Indeed, this brings up the next problem: how shall packet
+boundaries be preserved once the packet is stored in memory?</p>
+
+<p>I’ve seen two solutions to this problem.  One solution is to record <code class="language-plaintext highlighter-rouge">TLAST</code>
+along with the packet data, so the boundary can be rediscovered at a later
+time.  This works, as long as you have room for the <code class="language-plaintext highlighter-rouge">TLAST</code> bit.  A second
+solution I’ve found in a vendor design is to capture <code class="language-plaintext highlighter-rouge">TLAST</code> data in a
+separate memory.  This works until you discover one memory becoming full
+before the other one.  Indeed, I seem to recall a bug report having to do
+with the <code class="language-plaintext highlighter-rouge">TLAST</code> buffer suffering from an overrun while the <code class="language-plaintext highlighter-rouge">TDATA</code> buffer
+still had plenty of room in it …</p>
+
+<p>But I digress.</p>
+
+<p>Just as a quick reminder, most data buses have a power of two width.  That
+means they are 8b, 16b, 32b, 64b, 128b, etc. wide.  At this width, there’s no
+room for an extra bit of information to hold the <code class="language-plaintext highlighter-rouge">TLAST</code> bit indicating the end
+of a packet once it has been placed into memory.  I wanted another solution
+to this problem therefore.</p>
+
+<table align="center" style="float: right"><caption>Fig 7. Converting from AXIN to AXI Stream</caption><tr><td><img src="/img/axis-abort/pkt2stream.svg" alt="" width="360" /></td></tr></table>
+
+<ol start="3">
+  <li>
+    <p>This leads to the third main component I built: A bridge from AXIN to a
+proper <a href="/doc/axi-stream.pdf">AXI stream</a> with no <code class="language-plaintext highlighter-rouge">TLAST</code>.
+I then embed into this stream, in the first 32’bit word of packet data, the
+length of the packet in bytes.  Then, once converted to this format, basic
+<a href="/doc/axi-stream.pdf">AXI stream</a>
+tasks become easy again, since I could now use regular
+<a href="/doc/axi-stream.pdf">AXI stream</a> components.  Similarly, I
+could now write packets to memory and maintain the packet boundaries at the
+same time.</p>
+
+    <p>As with the FIFO, however, this component was a real challenge to build.
+Just so we are clear, the challenge wasn’t so much the challenge of writing
+Verilog to handle the task.  That part was easy.  The real challenge was
+writing Verilog that would work under all conditions.  Sure enough, the formal
+solver kept finding condition after condition that my AXIN to stream bridge
+wasn’t handling properly.  For example, what should happen if the incoming
+packet is longer than the slave’s packet buffer?  The slave should drop the
+packet–not the master.  All of these and more had to go into this protocol
+converter.</p>
+
+    <p>One reality of my current version of the bridge, however, is that it limits
+the size of a packet to what can be stored within the block RAM found within
+the bridge.  Given time, I’ll probably remove this limitation by adding an
+external memory interface–but that’s a project still to come.</p>
+
+    <p>However, being able to capture a full packet in block RAM has the advantage
+of guaranteeing that any locally generated packets can be guaranteed to be
+complete packets before they are sent to the PHY.</p>
+  </li>
+</ol>
+
+<p>Once the whole packet processing chain was put together, it looked roughly
+like Fig. 8 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 8. Network processing chain</caption><tr><td><img src="/img/axis-abort/net-stream-blocks.svg" alt="" width="780" /></td></tr></table>
+
+<p>First, the packet would be formed by grouping raw data samples together with
+a time stamp and a frame number.  In general, this involved a series of stages,
+almost all with small FIFOs, as various headers were applied.  The result was
+typically an <a href="https://en.wikipedia.org/wiki/Ethernet_frame">Ethernet packet</a>
+encapsulating an <a href="https://en.wikipedia.org/wiki/IPv4">IPv4 packet</a>
+encapsulating a <a href="https://en.wikipedia.org/wiki/User_Datagram_Protocol">UDP
+packet</a> with an
+application specific payload.  This generated packet had the basic structure
+shown in Fig. 9.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 9. Final packet structure</caption><tr><td><img src="/img/axis-abort/datapacket.svg" alt="" width="180" /></td></tr></table>
+
+<p>Going back to Fig. 8, this packet was then buffered, converted to
+AXI stream proper (without <code class="language-plaintext highlighter-rouge">TLAST</code>), and then sent through an
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>.  On the
+other side of the FIFO, the packet was converted back to the AXIN
+protocol, albeit with the <code class="language-plaintext highlighter-rouge">ABORT</code> signal now held low, and a single packet
+source was selected to feed the network controller.  Because every packet
+source had its own buffer, and because the <a href="/blog/2018/07/06/afifo.html">asynchronous
+FIFO</a> operated on
+32-bit data using a clock speed that was faster than one quarter the network
+speed, there was never a chance that the network controller would run dry
+prior between starting and completing a packet.</p>
+
+<p>Further, in spite of all the resources used by this approach, the Artix
+A7-200T I am using still has plenty of LUTs and LUT RAMs (over 80%+) remaining
+for a lot more design work.</p>
+
+<p>Perhaps the proverb that describes this work the best is, “In all labour
+there is profit,” since my original work to generate the formal AXIN
+properties, the following network FIFO, and then AXIN to stream converter,
+has now all been repaid in spades via reuse.
+(<a href="https://www.blueletterbible.org/kjv/pro/14/23">Prov 14:23</a>)</p>
+
+<h2 id="conclusions">Conclusions</h2>
+
+<p><a href="/doc/axi-stream.pdf">AXI stream</a> remains a simple and
+easy to use protocol.  Indeed, it is ideal for any application where you can
+guarantee your design will match any needed rates before using it.  Yes,
+<a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a> is a great feature,
+but it is also important to recognize that all systems have a limit of how
+much <a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a> they can handle
+before breaking any real time requirements.  Once the
+<a href="https://en.wikipedia.org/wiki/Back_pressure">backpressure</a> limit of any design
+has been reached, some <a href="/doc/axi-stream.pdf">AXI stream</a>
+sources may need to be able to control what happens next.  Others simply need
+to be able to flag the existence of the data loss.  Either way, apart from
+careful extra-protocol engineering and rate management, data loss becomes
+inevitable.</p>
+
+<p>So, just how should dropped data be handled in your application?</p>
+
+<p>In the case of network packet data that I’ve been working with, the easy
+answer is to drop a whole packet whenever on-chip packet congestion becomes too
+much to deal with.  The <code class="language-plaintext highlighter-rouge">ABORT</code> signal has worked nicely for this purpose, in
+spite of the initial challenges I had in working with it.</p>
+
+<p>In many ways, this only pushes the problem up a level in the stack.
+In my case, that’s okay:  Most network protocols are robust enough to be
+able to handle some amount of packet loss.  Packet loss can be detected
+via packet frame counters, time stamps or both.  Packet loss can also be
+detected in client-server relationships whenever a reply to a given request is
+not received in a timely manner.  In those cases, requests can be retried or
+eventually abandoned.  This is all quite doable, and doing it in a controlled
+manner is key to success.</p>
+
+<p>Indeed, this technique has worked so well that I’ve started applying something
+similar to video streams as well.  Have you noticed, for example, that many
+video IPs are very sensitive to which IPs get reset first?  That, however, may
+need to remain a topic for another day.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Why do the heathen rage, and the people imagine a vain thing? (Ps 2:1)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
