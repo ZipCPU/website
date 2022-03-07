@@ -104,4 +104,5 @@ module areset(i_clk, i_areset_n, o_reset);
 	always @(*)
 	if (!i_areset_n)
 		assert(sync_fifo == 2'b11);
+`endif
 endmodule
