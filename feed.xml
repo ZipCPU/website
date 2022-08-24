@@ -6,14 +6,640 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Sat, 16 Jul 2022 16:01:12 -0400</pubDate>
-    <lastBuildDate>Sat, 16 Jul 2022 16:01:12 -0400</lastBuildDate>
+    <pubDate>Wed, 24 Aug 2022 10:21:20 -0400</pubDate>
+    <lastBuildDate>Wed, 24 Aug 2022 10:21:20 -0400</lastBuildDate>
     <generator>Jekyll v4.2.0</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Protocol Design for Network Debugging</title>
+        <description>&lt;p&gt;What do you do when you need
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;,
+but don’t have it?&lt;/p&gt;
+
+&lt;p&gt;Let me back up and set the stage a bit more.  I’m working with what will be
+an underwater design, as shown in Fig. 1.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1. Controlling an Underwater FPGA&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/sysdesign.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;For those who haven’t figured it out, this will (eventually) form the basis of
+a SONAR device.&lt;/p&gt;
+
+&lt;p&gt;At first, this problem seems simple enough: there will be an FPGA device
+controlled via a network port.  Easy, got it.  Better yet, what’s the easiest
+network protocol to use?
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;.  Open
+Source &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;,
+software stacks aren’t all that hard to write, and I know there are several
+open source stacks that are easy enough to use.  (No, I’ve never written one
+myself …)&lt;/p&gt;
+
+&lt;p&gt;But, let’s dig a little deeper: I want to be able to control and debug the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
+via the same network port.  That means I’ll want to be able to &lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;stop the CPU,
+read its registers, adjust the contents in RAM, and then restart it
+again&lt;/a&gt; all
+over the network.  Put another way, if the CPU software won’t be running at
+all times, then I can’t implement
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;
+in software and still debug the CPU using the same
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;
+stack.  Worse, what if the FPGA firmware can’t be trusted?
+Now things are getting a bit more challenging.  How shall a piece of broken
+FPGA firmware be updated without using software on the FPGA board?&lt;/p&gt;
+
+&lt;p&gt;This, then, is where this problem starts.&lt;/p&gt;
+
+&lt;p&gt;At the most basic level, any FPGA design can be halted and updated via the JTAG
+port.  Most vendor designs will allow for that.  However, in this design, that
+JTAG port will be quite literally underwater.  The only way to access it will
+be to bring the entire unit back out of the water, to dry off the chassis the
+FPGA board sits within, and then to uncap the JTAG port and access it.  This
+is the insurance policy for the project–guaranteeing that the chassis the
+hardware sits within will not need to be opened except in extreme circumstances.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 2. Reconfiguring a running FPGA&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/reconfig-plan.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;That’s not, however, going to be the normal mode of operation.  Normally, upon
+application of power, this design will need to automatically start up and then
+do something to allow itself to be updated.  This can be done via an
+Internal Configuration and Access Port (ICAP) found within the FPGA itself.
+If a second design configuration can be written to the
+&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;,
+the ICAP port can then be told to tell the FPGA to reconfigure itself from
+this second configuration location.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 3. Basic outline of a UART protocol to control a Wishbone Bus&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-ovw.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Normally, I handle this sort of problem within my designs using a &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial
+port&lt;/a&gt;
+together with what I call a “debugging bus”: a protocol, running over
+that &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;,
+that allows me to read from or write to any address on the bus within the FPGA.
+&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;We’ve discussed this protocol
+before&lt;/a&gt;, and for
+reference you can see the basic components of this protocol in Fig. 3 on the
+left: Commands are grouped into words, decompressed, placed into a FIFO, and
+then those commands are used to control the bus.  Bus returns then come back.
+Reset acknowledgments and interrupts get added to the return stream, which is
+then compressed and split back into bytes before being returned across the
+&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;.
+In general, this works great, and I’ve used this approach for years.
+Even better, having full bus access makes it really easy to debug the FPGA–as
+long as you can guarantee that neither the debugging bus protocol nor the bus
+itself will fail on you.&lt;/p&gt;
+
+&lt;p&gt;That’s great for a
+&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt; protocol,
+where character’s aren’t (generally) lost and where messages don’t
+accidentally get repeated.&lt;/p&gt;
+
+&lt;p&gt;But what about a network protocol?&lt;/p&gt;
+
+&lt;p&gt;Today’s discussion, then, will discuss a network protocol which can be used
+to do this same thing, but with an interface simple enough that it can be
+implemented in an FPGA.&lt;/p&gt;
+
+&lt;h2 id=&quot;understanding-the-problem&quot;&gt;Understanding the Problem&lt;/h2&gt;
+
+&lt;p&gt;Let’s back up, therefore, and take a moment to understand the goal and purpose
+of this protocol together with some of what makes the networking environment
+unique.  This will lead us to an understanding of some of the problems
+involved that will need to be handled by this protocol.&lt;/p&gt;
+
+&lt;h3 id=&quot;all-network-traffic-takes-place-in-packets&quot;&gt;All network traffic takes place in packets&lt;/h3&gt;
+
+&lt;p&gt;The first rule of networks is that all communication takes place in packets.
+Even better, since we’ll be using Ethernet, &lt;a href=&quot;https://en.wikipedia.org/wiki/Ethernet_frame&quot;&gt;every Ethernet
+packet&lt;/a&gt;
+ends in a four byte &lt;a href=&quot;https://en.wikipedia.org/wiki/Frame_check_sequence&quot;&gt;Frame Check
+Sequence&lt;/a&gt;
+based upon a &lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;Cyclic Redundancy Check
+(CRC)&lt;/a&gt;.  These four
+bytes are produced by a function applied to the contents of the packet.  Then,
+on reception, the receiving end can also calculate the same function.  If the
+result matches the four-byte frame check sequence found in the packet, then
+you can have some strong assurance that the packet was received across the
+interface without error.&lt;/p&gt;
+
+&lt;h3 id=&quot;packets-may-be-lost&quot;&gt;Packets may be lost&lt;/h3&gt;
+
+&lt;p&gt;Here’s our first problem: if something goes wrong on the network–perhaps
+there’s too much congestion somewhere, perhaps the FPGA is still responding to
+some other packet, then a packet may be dropped.  Indeed, &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;we discussed this
+sort of idea&lt;/a&gt; quite
+recently.  In network implementations, dropped packets are considered a
+“normal” phenomena, and any protocol working across the network needs to be
+able to recover from a lost packet.&lt;/p&gt;
+
+&lt;p&gt;Think this through a bit, since this can be a real problem.  What happens if
+the bus within the FPGA locks up because some peripheral isn’t responding?
+In the worst case, all following packets will be lost–to include any
+packets telling the FPGA to reset itself.  This is a real possibility that
+we’ll need to consider as things go on.&lt;/p&gt;
+
+&lt;h3 id=&quot;packets-may-be-repeated&quot;&gt;Packets may be repeated&lt;/h3&gt;
+
+&lt;p&gt;The next problem is that packets may be repeated.&lt;/p&gt;
+
+&lt;p&gt;At first, I simply poo-pood this idea.  This would never happen in any of &lt;em&gt;my&lt;/em&gt;
+implementations, I told myself, because nothing in the network stack will ever
+repeat a packet.&lt;/p&gt;
+
+&lt;p&gt;Then I got to thinking some more about this.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 4. Request/Reply protocol&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/reqreply.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Imagine you have two computers talking to each other, and one computer (the
+client) makes a request of the second (the server/FPGA).  If the request gets
+dropped, how shall the first computer (the client) know it was dropped except
+if it doesn’t get any response?  Worse, if the client doesn’t get any response,
+does that mean 1) the server didn’t get the request, or 2) that the server did
+get and process the request and the client just didn’t get the reply?  All the
+client can do at this point is to just re-send and re-send its packet until
+it eventually gets a reply.&lt;/p&gt;
+
+&lt;p&gt;Voila, repeated packets.  We’ll need to handle these somehow.&lt;/p&gt;
+
+&lt;p&gt;Now lets make matters even worse: some requests, such as commanding the
+&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;
+device to erase a sector or to program a page, aren’t things you want to do
+twice.  Any network based debugging protocol will therefore, of a necessity,
+need to be able to properly handle duplicated packets.&lt;/p&gt;
+
+&lt;h3 id=&quot;packets-may-arrive-out-of-order&quot;&gt;Packets may arrive out of order&lt;/h3&gt;
+
+&lt;p&gt;Just to make things worse, not only may packets get dropped or repeated, they
+might also arrive out of order.&lt;/p&gt;
+
+&lt;h3 id=&quot;udpip-is-a-fairly-simple-protocol&quot;&gt;UDP/IP is a fairly simple protocol&lt;/h3&gt;
+
+&lt;p&gt;One of the easiest protocols to implement in an FPGA is
+&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;.  1) &lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/6828a9e4ebe9032dbea6a51f1223b30a0fb980d7/sw/host/udpsocket.cpp#L130-L136&quot;&gt;It’s easy
+enough to program most computers to send UDP
+packets&lt;/a&gt;,
+and 2) &lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/6828a9e4ebe9032dbea6a51f1223b30a0fb980d7/sw/host/udpsocket.cpp#L156-L187&quot;&gt;receiving UDP packets is relatively easy as
+well&lt;/a&gt;.
+Even better, if implemented well, the &lt;em&gt;internet&lt;/em&gt;
+(the &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; part) has some remarkable
+capabilities to it: I might even be able to access this piece of underwater
+hardware from the other side of the world if necessary.  On the FPGA side,
+there are some challenges involved in implementing
+&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;,
+but the result is still fairly easy to accomplish.  Some of these challenges
+include:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;The FPGA needs to know the Ethernet MAC address, IP address, and destination
+&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt; port to send the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; packet to.&lt;/p&gt;
+
+    &lt;p&gt;These can often be copied from the source addresses found in the request,
+so that’s not a big problem.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Both &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
+and &lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;
+headers need to know the length of the rest of the
+packet–possibly even before the rest of the packet has been formed.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;If &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; header
+and &lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt; payload
+&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4_header_checksum&quot;&gt;checksums&lt;/a&gt; are
+implemented, these are also placed &lt;em&gt;prior&lt;/em&gt; to the packet data.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;This sort of necessitates that a packet be formed first and placed into
+a temporary buffer, before being forwarded downstream.  Still, this is quite
+doable.&lt;/p&gt;
+
+&lt;p&gt;The problem with &lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;,
+however, is that it offers no protection against the problems listed above:
+packets may still be dropped, duplicated, or arrive out of order.&lt;/p&gt;
+
+&lt;h3 id=&quot;ip-packets-may-be-fragmented&quot;&gt;IP packets may be fragmented&lt;/h3&gt;
+
+&lt;p&gt;If a packet is too big for some portion of the network, then whatever
+intermediate node recognizes this is supposed to be able to split the packet
+into multiple sub-packets (fragments).  These packets will then be reassembled
+on the far end.&lt;/p&gt;
+
+&lt;h3 id=&quot;tcpip-requires-memory&quot;&gt;TCP/IP requires memory&lt;/h3&gt;
+
+&lt;p&gt;I’ve used &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
+in the past.  In general, it’s always been one of my favorite
+protocols to work with: it’s easy and reliable.  However, I’ve never had to
+implement it before, neither have I ever tried to implement it on an FPGA.
+When digging into what it would take to implement the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
+within an FPGA, it doesn’t take long to learn that each connection will require
+some amount of memory to work properly–perhaps as much as 64kB per connection.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;The connection setup defines the maximum and required sizes of this window&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Packet data includes where in the stream the data comes from&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Acknowledgments include the latest received stream position&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Further, &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
+removes packet boundaries in favor of transmitting stream positions.  In many
+ways, though,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
+might be the ideal way of encapsulating what was once a
+&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt; stream.&lt;/p&gt;
+
+&lt;p&gt;Others have made this protocol work on an FPGA, so I know it can be done.
+In my review, however, I ended up balking at the idea of implementing my own
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
+protocol handling stack within FPGA logic.  (I’ll probabbly still place an
+implemention of the &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
+stack within the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
+software before I’m done …)&lt;/p&gt;
+
+&lt;h3 id=&quot;gbe-is-fast&quot;&gt;GbE is fast&lt;/h3&gt;
+
+&lt;p&gt;From my experience, and with the boards I have, a
+&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;
+can typically achieve speeds somewhere between about 100kB/s (1MBaud) and
+400kB/s (4MBaud).  Gigabit Ethernet, on the otherhand, can transfer data at
+125MB/s.  That’s probably faster than I need for this part of the project.
+The biggest impact this is likely to have, though, is that it might keep my
+compression algorithm from working–since that algorithm only tries to
+compress a response value as long as the return pipeline is stalled.  If the
+link is so fast that it never stalls, then it might make sense to remove to
+remove the &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;
+compression from this network re-implementation.&lt;/p&gt;
+
+&lt;h3 id=&quot;the-goal&quot;&gt;The Goal&lt;/h3&gt;
+
+&lt;p&gt;Just to make it clear, my goal is to be able to control the bus within an
+FPGA design from a network interface.  This means I want to be able to read
+from and write both peripheral registers as well as
+&lt;a href=&quot;/zipcpu/2018/07/13/memories.html&quot;&gt;memory&lt;/a&gt; and
+&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;.
+Using this capability, I want to be able to do things like:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Reading, erasing, programming, and verifying &lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash
+memory&lt;/a&gt; contents&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Issuing a warm boot request, so that the FPGA will reload itself from
+a secondary location&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Configuring any application specific hardware from an external host.&lt;/p&gt;
+
+    &lt;p&gt;As one example, I’m hoping to control an &lt;a href=&quot;https://www.analog.com/en/products/adau1761.html&quot;&gt;ADAU1761 audio
+chip&lt;/a&gt;
+on a &lt;a href=&quot;https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications&quot;&gt;Nexys Video board&lt;/a&gt;.
+The network bus should be able to turn this chip on, adjust which
+channel(s) are selected, and any gain associated with the individual
+channels.&lt;/p&gt;
+
+    &lt;p&gt;I expect to use a separate protocol to handle the return audio from such
+a controller.  For now, I just want a dependable network protocol I can use
+to guarantee my ability to configure this controller across the network in
+the first place.&lt;/p&gt;
+
+    &lt;p&gt;This is a test-only capability, to allow an operator to “hear” any
+internal signals while the device is still on the bench.  Once the device
+is sealed up, similar circuitry within the device will be used to route
+from among multiple potential signal sources and sinks to their ultimate
+destinations.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Without access to JTAG, I won’t have any vendor tools available for internal
+logic analysis in order to diagnose any faults.  Instead, I’ll be using my
+own &lt;a href=&quot;/blog/2017/07/08/getting-started-with-wbscope.html&quot;&gt;Wishbone
+scope&lt;/a&gt;
+across this network protocol.&lt;/p&gt;
+
+    &lt;p&gt;This also means that I’ll want to assume only a bare minimum of design
+functionality here.  What happens, for example, if I need to debug the
+DDR3 SDRAM protocol?  In that case, I would need to be able to operate
+this bus without access to any but internal FPGA memory.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;Rebooting, pausing, stepping, and stopping or starting the CPU within the
+design&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;Examining CPU
+registers&lt;/a&gt;
+when the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
+is halted, and perhaps adjusting their contents if necessary.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;That’s my goal, and you now know the problems associated with working with the
+network.  Now, knowing this information, what can we do in order to generate
+some form of protocol that we can use?&lt;/p&gt;
+
+&lt;h2 id=&quot;generating-a-protocol&quot;&gt;Generating a Protocol&lt;/h2&gt;
+
+&lt;p&gt;Let’s take a moment to walk through the design of this new protocol, and the
+various choices I chose along the way to deal with the problems listed above.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. Encapsulating the former serial port protocol&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/netb-encapsulation.svg&quot; alt=&quot;&quot; width=&quot;240&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;My first draft of this protocol, the draft I’ll be discussing today, simply
+involved packetizing the requests I would’ve sent over the
+&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt; in the
+first place.  That means these debugging bus packets simply include an
+additional header on top of the headers already existing, together with a
+set of bytes which would’ve normally been sent across a &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial
+port&lt;/a&gt;.  We’ll call this
+the “NetBus header” and “serial port debugging bus payload” or just “payload”
+for short.&lt;/p&gt;
+
+&lt;p&gt;My second (rather arbitrary) choice was to insist that all protocol
+interactions take place in two parts: 1) the support software sends a request,
+and 2) the FPGA returns a reply.  Moreover, as I alluded to above, &lt;em&gt;every&lt;/em&gt;
+request was to receive a reply.  Should a reply not be returned, that would
+mean that either the FPGA either didn’t receive the request or that the
+response hadn’t been received.  This also meant that the FPGA would never
+initiate a transaction on its own, it would only ever respond to requests.&lt;/p&gt;
+
+&lt;p&gt;Incidentally, this also solves the problems associated with out of order
+packets: if only one request is ever outstanding at a time, then there will
+never be two or more packets to get reversed.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 6. Eight GPIO bits&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/gpio.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;One of the neat features of my serial port protocol was that it had a special
+means of communicating
+&lt;a href=&quot;/zipcpu/2019/04/02/icontrol.html&quot;&gt;interrupts&lt;/a&gt; to the host
+computer.  At one time I used this feature with my &lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;original flash
+controller&lt;/a&gt;
+to notify any programming software of the end of a write transaction.  This
+was cool, but … perhaps we could expand upon it?  For example, it’d be nice
+to get some status bits from the controller.  Such status bits might include
+answers to questions like: Has the buffer within the controller ever suffered
+from an overrun?  Has the controller received any bus error responses?  Is this
+the first packet following a reset?  All of this together necessitated a set of
+general purpose I/O bits that could be controlled via this protocol.  So far,
+I’ve settled upon four of the eight bits shown in Fig. 6.  These would be
+sticky bits when set, and only cleared upon a write from the external host.
+Another four bits remain available for … whatever purpose.&lt;/p&gt;
+
+&lt;p&gt;I created this capability with two parts: a mask and a value.  That way,
+any GPIO bit could be updated whose mask bit was set to the value it was set
+to, allowing independent control of each of these bits.  Further, by setting
+the mask to zero, the FPGA would simply ignore these bits.  Indeed, this I/O
+part of the protocol is very similar to &lt;a href=&quot;/zipcpu/2019/02/09/cpu-blinky.html&quot;&gt;one we’ve discussed
+before&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;My third choice was to place a stream packet ID number into the header of the
+packet.  The FPGA can then use this ID to identify and handle repeated packets.
+This way, should the FPGA ever detect a second request with the same frame
+number, then it would simply repeat the response to the prior packet with
+that frame number.&lt;/p&gt;
+
+&lt;p&gt;One stream ID was designated as special: ID=0.  This indicated a “Sync” packet
+in this protocol.  This would be the ID I would use when initiating a
+communication with the device.  I could then use this packet to record and set
+the Ethernet MAC, IP address, and UDP port of the source, as well as to
+reset the state of the internal compression engine to something that could
+be known within the client program.  This way, upon starting a client program,
+the client could quickly synchronize the two compression engines.&lt;/p&gt;
+
+&lt;p&gt;Further, the design should handle packets with an empty payload, as sort of a
+“keep-alive” packet.&lt;/p&gt;
+
+&lt;h3 id=&quot;request-packet-format&quot;&gt;Request Packet Format&lt;/h3&gt;
+
+&lt;p&gt;These choices led me to the packet design for request packets shown in Fig. 7.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 7. Host to FPGA Packets&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/host-to-fpga.svg&quot; alt=&quot;&quot; width=&quot;760&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In general, the host only added four bytes to any payload.  The first two were
+the packet ID.  This ID could be anything, with zero having the special meaning
+discussed above, and the second requirement being that ID’s shouldn’t be
+repeated in succession.&lt;/p&gt;
+
+&lt;h3 id=&quot;reply-packet-format&quot;&gt;Reply Packet Format&lt;/h3&gt;
+
+&lt;p&gt;The reverse link is very similar, if not almost identical.  There are only
+a couple of differences.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 8. FPGA to Host Reply Packets&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/fpga-to-host.svg&quot; alt=&quot;&quot; width=&quot;760&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;For example, all replies will include the host packet’s ID number so the host
+can know which request is being replied to.  This will allow the host to
+remove duplicate packets from the return stream.&lt;/p&gt;
+
+&lt;p&gt;Further, all replies will include sixteen general purpose I/O bits.  Eight of
+these, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;i_gpio&lt;/code&gt;, are input bits collected from somewhere in the system–such as
+the &lt;a href=&quot;/zipcpu/2019/04/02/icontrol.html&quot;&gt;interrupt&lt;/a&gt;
+bit.  Indeed, we discussed four of these bits above, while the other four
+remain uncommitted.  The other eight bits, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;o_gpio&lt;/code&gt;, are a simply a
+reflection of the current settings as generated by the last packet sent by the
+host controller.&lt;/p&gt;
+
+&lt;p&gt;The next word, however, is generated within the FPGA logic.  The first
+16-bit field of this word is the prior packet ID from the previous packet.  This
+was chosen so that, in high speed situations, I might send two packets to the
+FPGA and then have some assurance the FPGA had received both in case the
+first response was dropped.  The next sixteen bits are simply a one-up packet
+counter from the FPGA.  This counter would be increased on any sends or
+re-sends, allowing the host to identify where, if at all, packets get lost
+in this system.  Is it between the host and the FPGA, or on the return trip
+from the FPGA to the host?&lt;/p&gt;
+
+&lt;h3 id=&quot;building-the-clients-state-machine&quot;&gt;Building the Client’s State Machine&lt;/h3&gt;
+
+&lt;p&gt;Before concluding, let’s take a quick look at what the host control
+software would look like for this.  We’ll base this look upon a
+&lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/6828a9e4ebe9032dbea6a51f1223b30a0fb980d7/sw/host/udpsocket.cpp#L130-L136&quot;&gt;UDPSOCKET&lt;/a&gt;
+implementation that encapsulates any issues of issuing packets to or receiving
+packets from the O/S.&lt;/p&gt;
+
+&lt;p&gt;A couple of other fields will allow us to keep a copy of the last
+received packet, or the packet we are getting ready to send.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt;	&lt;span class=&quot;nc&quot;&gt;NETBUS&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RDBUFLN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TXBUFLEN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;UDPSOCKET&lt;/span&gt;	&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// ...&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;The first step, therefore, in communicating with this new FPGA protocol is
+to establish a connection.  This is done by sending a sync packet.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;NETBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// Make up to MAXTRIES attempts to synchronize&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;MAXTRIES&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Try sending a sync packet&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Clear the 4-byte header, then send a packet of 4bytes only&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Turn this into a UDP packet and send it&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;m_udp-&amp;gt;write&lt;/code&gt; will call the system to actually send this across a UDP
+port we’ve connected ourselves to.&lt;/p&gt;
+
+&lt;p&gt;The purpose of the for loop is so that, in the case that we don’t get any
+response, we can try sending up to MAXTRIES of these packets.&lt;/p&gt;
+
+&lt;p&gt;The next step is to look for the return packet.  We’ll wait &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;PKT_TIMEOUT&lt;/code&gt;
+milliseconds for this return–using the poll() system call to implement this
+timeout.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;read&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RDBUFLN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;PKT_TIMEOUT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Now that we have a return packet, let’s look for and assemble the packet ID.
+If this ID is not zero, then this isn’t a response to our sync request.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;n&quot;&gt;rxframe&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rxframe&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// This is a return from another request&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// Ignore it.&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;If after &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;MAXTRIES&lt;/code&gt; attempts we still don’t get a response, we’ll throw a
+bus error so that the system can deal with this further up in the chain.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;throw&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;BUSERR&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Otherwise, if we do have a good packet, we can look through the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;i_gpio&lt;/code&gt; values
+and record or process them as necessary.  For example, this is where we’d
+mark that we’d received an interrupt of some type.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Mark how long the packet is that's in our buffer&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;handle_gpio_returns&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Sending data to the device is very similar.  First, you’d generate a packet
+header.  Here we choose to use a pseudorandom number algorithm, although you
+can use roughly any algorithm you want–as long as it doesn’t generate a
+zero packet ID.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NETBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;begin&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_packet&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;NETBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BUSW&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Last packet was a sync packet&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Following a sync, the first ID == 1&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;^&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;RANDOMIZER_COEFFICIENTS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+	&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt;     &lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Following the header, we’ll encode the address of the subsequent transaction.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;c1&quot;&gt;// Return a pointer to the packet following the&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// address&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;encode_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;At this point, we can fill our packet with data to be written to the device.&lt;/p&gt;
+
+&lt;p&gt;Once done, we’ll try writing this data to the device &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;MAXTRIES&lt;/code&gt; times, or
+until we get a response.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;MAXTRIES&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Send the request packet&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pktlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Try reading a packet&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;readpkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;PKT_TIMEOUT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// We were successful!&lt;/span&gt;
+			&lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Otherwise we repeat&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;throw&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;BUSERR&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// Search the returned packet for evidence of a bus error.  If we&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// get a bus error, we'll throw an exception as above.&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// ...&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;We’ll then repeat this process until all of the data we need sent has been
+sent.&lt;/p&gt;
+
+&lt;p&gt;As you can see, the protocol is pretty simple from a software standpoint to
+get working reliably.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
+
+&lt;p&gt;It works.&lt;/p&gt;
+
+&lt;p&gt;That’s all that matters, right?&lt;/p&gt;
+
+&lt;p&gt;Well, not quite.  In reality, this is just my first draft of a packet protocol
+of this type.  For example, I haven’t implemented IP defragmentation.  (Nor
+am I really planning on doing so in the FPGA hardware.)  Neither have I
+implemented &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; support beyond version 4,
+or impemented any header option support.  Similarly, I haven’t implemented any
+support for zero length packets beyond the original sync packets.&lt;/p&gt;
+
+&lt;p&gt;You can see a list of potential improvements I’ve been considering in Fig. 9.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 9. Potential upgrades to this protocol&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/upgrades.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;For perspective, I rewrote my original &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;serial port bus
+protocol&lt;/a&gt; about
+three times before finally I arrived at something I liked.  Each version was
+then better than the previous one.  Indeed, even now I have a fourth version of
+that &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;serial port protocol&lt;/a&gt;
+that I’m slowly testing.  However, since this fourth version can only get
+about a 10% speed improvement over the current version for the same baud
+speed, it hasn’t gotten a lot of priority.  Put simply, the speed of the
+&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;
+isn’t really slowing me down significantly.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 10. Learning and rebuilding is to be expected&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/reproofs.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;That in itself is a lesson in any endeavor, and one I learned when working on
+my Ph.D.  I like to sum it up with this advice to students, “Fail early. Fail
+often. Plan for failure.”  Or, alternatively, “Success is measured by the
+number of failures that it takes to achieve it.”  (These quotes are my own …)
+Given that the best design is never the first one, you should plan on
+rebuilding any design once or twice before it will become the best design
+that you want to use and reuse over and over again.&lt;/p&gt;
+
+&lt;p&gt;From a more business perspective, I might argue the advice would be to put
+lots of energy into &lt;a href=&quot;/blog/2020/01/13/reuse.html&quot;&gt;anything you intend to use more than
+once&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;From all these perspectives, this is only a first design and draft of such
+a protocol.  I expect it to get better over time.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Can two walk together, except they be agreed? Amos 3:3&lt;/em&gt;</description>
+        <pubDate>Wed, 24 Aug 2022 00:00:00 -0400</pubDate>
+        <link>https://zipcpu.com/blog/2022/08/24/protocol-design.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/blog/2022/08/24/protocol-design.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>Quiz #21: Verifying all configurations of a design</title>
@@ -3891,529 +4517,6 @@ that can be the next article in this series.&lt;/p&gt;
         
         
         <category>video</category>
-        
-      </item>
-    
-      <item>
-        <title>AXI Stream is broken</title>
-        <description>&lt;p&gt;There, I said it.  One of the simplest and most useful AXI protocols,
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt;, is fundamentally flawed.&lt;/p&gt;
-
-&lt;p&gt;Let’s quickly review AXI Stream, and then I’ll tell you what I mean by saying
-the protocol is broken.  Then I’ll propose a method of fixing at least part
-of the problem.&lt;/p&gt;
-
-&lt;h2 id=&quot;what-is-axi-stream&quot;&gt;What is AXI Stream?&lt;/h2&gt;
-
-&lt;p&gt;We’ve discussed &lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt;s
-a couple of times on this blog already, most recently when discussing the basic
-&lt;a href=&quot;/blog/2021/08/28/axi-rules.html&quot;&gt;AXI handshaking rules&lt;/a&gt;.
-As a quick background, &lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt;
-is a protocol that can be useful for transferring &lt;em&gt;stream&lt;/em&gt; data around within
-a chip.  Unlike &lt;em&gt;memory&lt;/em&gt; data, there’s no address associated with stream
-data–it’s just a stream of information.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. AXI stream signals&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/slave-rules/axis-signals.png&quot; alt=&quot;&quot; width=&quot;302&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;But how fast shall the stream run?  As fast as it can be produced, or as
-fast as it can be consumed?  This is determined by a pair of values:
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt;, indicating that the data in the stream is valid on the current clock
-cycle and produced by the source (master), and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt;, indicating that
-the consumer (slave) is prepared to accept data.  Whenever &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID &lt;/code&gt;and
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; are both true, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TDATA&lt;/code&gt; moves through the stream.&lt;/p&gt;
-
-&lt;p&gt;A third signal is also very useful, and that is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt;.  The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; signal
-can be used to create &lt;em&gt;packets&lt;/em&gt; of data, having beginning and ending.
-The packet ends when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; is true, and begins on the first &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt; signal
-following the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; signal.&lt;/p&gt;
-
-&lt;p&gt;The stream standard also defines such signals as &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TID&lt;/code&gt; (an ID for a packet),
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TDEST&lt;/code&gt; (the packet’s destination), &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TSTRB&lt;/code&gt; (which bytes have valid
-information), and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TKEEP&lt;/code&gt; (which bytes in a stream cannot be removed), but I
-have personally only rarely seen uses for these.  The one exception is the
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TUSER&lt;/code&gt; field which comes nicely into play in video streams–but I digress.&lt;/p&gt;
-
-&lt;p&gt;There’s one other important term you need to know:
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;&lt;em&gt;backpressure&lt;/em&gt;&lt;/a&gt;.
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;Backpressure&lt;/a&gt; is what’s created when
-the source is ready to send data, that is when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt; is true, but the
-consumer isn’t ready to receive it and so &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; is false.  Under the
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt; protocol, there’s no limit
-to how much &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;
-a slave may impose on any stream.&lt;/p&gt;
-
-&lt;p&gt;And herein lies my complaint.&lt;/p&gt;
-
-&lt;h2 id=&quot;whats-wrong-with-axi-stream&quot;&gt;What’s wrong with AXI Stream?&lt;/h2&gt;
-
-&lt;p&gt;There are three basic types of stream components, and realistically
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt; only works for one of
-these three.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2. AXI stream doesn't capture hard real-time requirements well&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/axis-pipeline.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;Sources&lt;/strong&gt;.  Most of the physical data sources I’ve come across produce
-data at a fixed and known rate.  Examples of these sources include:&lt;/p&gt;
-
-    &lt;ul&gt;
-      &lt;li&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Analog-to-digital_converter&quot;&gt;Analog to Digital converters&lt;/a&gt;&lt;/li&gt;
-      &lt;li&gt;Network PHYs&lt;/li&gt;
-      &lt;li&gt;Digital cameras&lt;/li&gt;
-    &lt;/ul&gt;
-
-    &lt;p&gt;In all three of three of these examples, data comes whether you are ready
-for it or not.  What then happens if &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt; is true, from the source, but
-the processing stream isn’t ready to handle it?  i.e. &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; is low?
-Where does the data go?&lt;/p&gt;
-
-    &lt;p&gt;As an example, &lt;a href=&quot;/dsp/dsp.html&quot;&gt;some of the filters we’ve created on this
-blog&lt;/a&gt; can only accept one data sample every
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;N&lt;/code&gt; samples (for some arbitrary &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;N&lt;/code&gt;).  What happens if you choose to feed
-the filter with data arriving at faster than one sample every &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;N&lt;/code&gt; clock
-cycles?&lt;/p&gt;
-
-    &lt;p&gt;Let’s call this the &lt;em&gt;over-energetic source&lt;/em&gt; problem for lack of a better
-term, and it is a problem.  In general, there is no way to detect an
-over-energetic source from within the protocol  As a result, there is no
-protocol compliant way to handle this situation.  Given a sufficient amount
-of &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;,
-data will simply be dropped in a non-protocol compliant fashion.  There’s
-really no other choice.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 3. There are always real-time requirements&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/real-time.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol start=&quot;2&quot;&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;Processing components&lt;/strong&gt;.  These are neither sources nor sinks, and in
-today’s taxonomy, I shall arbitrarily declare that they have no real time
-requirement.  In these cases, the
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt; protocol can be a
-really good fit.&lt;/p&gt;
-
-    &lt;p&gt;A good example of such processing components would include data processing
-engines.  Perhaps some seismic data was recorded a couple of years ago
-and you wish to process it in an FPGA today.  In this case, there’s may be
-neither explicit latency nor throughput requirements.  The data stream can
-move through the system as fast as the hardware algorithm will allow it.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;strong&gt;Sinks&lt;/strong&gt;.  Here you have the second problem: most sinks need to interact
-with physical hardware at a known rate.  Corollaries to the examples above
-form good examples here as well:&lt;/p&gt;
-
-    &lt;ul&gt;
-      &lt;li&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Digital-to-analog_converter&quot;&gt;Digital to analog converters&lt;/a&gt;&lt;/li&gt;
-      &lt;li&gt;Network PHYs&lt;/li&gt;
-      &lt;li&gt;Video monitors&lt;/li&gt;
-    &lt;/ul&gt;
-
-    &lt;p&gt;What happens in these cases if it’s time to produce a sample, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; is
-true to accept that sample, but &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt; is not?  That is, data is required
-but there’s no data to be had?  We might call this the &lt;em&gt;sluggish source&lt;/em&gt;
-problem for the sake of a discussion, although the condition itself is
-often called a &lt;a href=&quot;https://en.wikipedia.org/wiki/Buffer_underrun&quot;&gt;buffer
-underrun&lt;/a&gt;.&lt;/p&gt;
-
-    &lt;p&gt;As with the first situation, there’s really no protocol compliant way of
-handling this situation.&lt;/p&gt;
-
-    &lt;p&gt;Unlike the first situation, however, a sink can often detect this situation
-(!&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID &amp;amp; READY&lt;/code&gt;) and handle it in an application specific manner.  For
-example, a &lt;a href=&quot;https://en.wikipedia.org/wiki/Digital-to-analog_converter&quot;&gt;DAC&lt;/a&gt;
-might replicate the last output value and raise an error flag.  A network
-PHY might simply terminate the packet early–without any
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;, and so cause
-the receiver to drop the packet.  A video stream might blank to black, and
-then wait for the next frame to resynchronize.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;From this list, you can see that two of the three
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt; component types can’t
-handle the raw &lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI Stream&lt;/a&gt; protocol
-very well.  Of these two, the over-energetic source problem is the most
-problematic.&lt;/p&gt;
-
-&lt;p&gt;There’s another, more minor, problem with
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI streams&lt;/a&gt;, and that is the problem
-of recording any metadata associated with the stream.  As an example, let’s
-just consider the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; signal.  What should an
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI streams&lt;/a&gt;
-processing system do with the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; signal when the data needs to be
-recorded to memory?  In general, it’s just dropped.  In many cases, that
-“just works”.  For example, if you are recording video, where every video
-frame has the same length, then you should be able to tell what packet you are
-on by where the write pointer is in memory.  On the other hand, if every
-packet has a different size, then a different format is really needed.&lt;/p&gt;
-
-&lt;p&gt;These are the two problems I’ve come across when working with
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI streams&lt;/a&gt; which I would like to
-address today.&lt;/p&gt;
-
-&lt;h2 id=&quot;motivating-a-solution&quot;&gt;Motivating a Solution&lt;/h2&gt;
-
-&lt;p&gt;Just to motivate a solution a little bit, I’m currently working on building
-a SONAR data capture design for a customer.  This particular design will be
-for an underwater SONAR device, so physical access to the actual device will
-be limited.  We’ve chosen instead to run all access over an Ethernet
-connection.  On top of that, prior experience building designs like this has
-generated some reluctance in the team I’m working with to have a design depend
-upon a CPU.  They would rather have a design that “just works” as soon as power
-is applied.&lt;/p&gt;
-
-&lt;p&gt;Fig. 4 shows a basic outline of this application, where data is collected from
-a number of sensors, serialized, compressed, organized into packets, converted
-to UDP, and then forwarded across a network data link.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. A Basic network data collector&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/sonar-application.svg&quot; alt=&quot;&quot; width=&quot;640&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;My &lt;a href=&quot;/blog/2018/02/09/first-cyclonev.html&quot;&gt;previous approach&lt;/a&gt;
-to network handling didn’t “just work” at the speeds I wanted to work at.  In
-that case, the ARM CPU on the DE10-Nano couldn’t keep up with my data rate
-requirements.  (Okay, &lt;a href=&quot;/blog/2019/04/27/axi-addr.html&quot;&gt;part of the fault was the
-method I was using&lt;/a&gt; to
-transfer data to the CPU …)  Lesson learned?  Automated data processing,
-and in particular network packet handling &lt;em&gt;that approaches the capacity of
-the network link&lt;/em&gt;, should be handled in the fabric, not in the CPU.&lt;/p&gt;
-
-&lt;p&gt;This meant that I needed to rearrange my approach to handling networks.
-I needed something automatic, something that didn’t require a CPU, and
-something that “just worked”.&lt;/p&gt;
-
-&lt;p&gt;I first looked at &lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt;,
-and then came face to face with the problem above: what happens if the stream
-is going to someplace where the buffer is full?  What happens if there’s too
-much &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;
-in the system to handle a new packet?  What happens when an output packet is
-blocked by a collision with another outgoing packet, or when such a collision
-takes so long to resolve that there’s no longer any buffer space to hold the
-outgoing packet?&lt;/p&gt;
-
-&lt;p&gt;In network protocols, the typical answer to this problem is to drop packets.
-Unfortunately, the &lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt;
-protocol offers no native support for dropping packets.&lt;/p&gt;
-
-&lt;p&gt;Let’s fix that.&lt;/p&gt;
-
-&lt;h2 id=&quot;proposing-a-solution-packet-aborts&quot;&gt;Proposing a solution: Packet aborts&lt;/h2&gt;
-
-&lt;p&gt;At this point, I’m now well into the design of this system, and the solution
-I chose was to add an &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal to the
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt; protocol.  The basic
-idea behind this signal is that an AXI master should be able to cancel any
-ongoing packets if the slave generates too much
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt; (holds &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; low
-too long).&lt;/p&gt;
-
-&lt;p&gt;Here are the basic rules to this new &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; may be raised at any time–whether or not &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt; or &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TREADY&lt;/code&gt; are
-true.&lt;/p&gt;
-
-    &lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; may also be raised for any cause.
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;Backpressure&lt;/a&gt;
-is only one potential cause.  Why?  Think about it.  An &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal caused
-by &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt; at one point in a
-processing chain may need to propagate forward to other portions of the
-chain that weren’t suffering
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;.  In other
-words, the protocol needs to allow &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt;’s whether or not
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;
-was currently present on a given link.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Following an abort, the next sample from the
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt;
-will always be the first sample of the next packet.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;If &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT &amp;amp;&amp;amp; !TVALID&lt;/code&gt;, then the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; may be dropped immediately.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;If &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT &amp;amp;&amp;amp; TVALID&lt;/code&gt;, then the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal may not be dropped until
-after &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT &amp;amp;&amp;amp; TVALID &amp;amp;&amp;amp; TREADY&lt;/code&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Once &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID &amp;amp;&amp;amp; TREADY &amp;amp;&amp;amp; TLAST&lt;/code&gt; have been received, the source can no
-longer abort a packet.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal is very similar to a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TUSER&lt;/code&gt; signal, but with a couple
-subtle differences.  First, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TUSER&lt;/code&gt; is only valid if &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt; is also true,
-whereas &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; may be raised at any time.  Second, an &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal may be
-raised &lt;em&gt;while&lt;/em&gt; the channel is stalled with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID &amp;amp;&amp;amp; !TREADY&lt;/code&gt;.  This
-would be a protocol violation if a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TUSER&lt;/code&gt; signal was used to carry an &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt;
-signal.&lt;/p&gt;
-
-&lt;p&gt;Still, that’s the basic protocol.  For lack of a better name, I’ve chosen to
-call this the “AXI network” protocol or AXIN for short.&lt;/p&gt;
-
-&lt;h2 id=&quot;the-drop-signal&quot;&gt;The DROP signal&lt;/h2&gt;
-
-&lt;p&gt;I would be remiss if I didn’t mention
-&lt;a href=&quot;https://twitter.com/joshltyler&quot;&gt;@JoshTyler&lt;/a&gt;’s &lt;a href=&quot;https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv&quot;&gt;prior
-work&lt;/a&gt;
-before going any further.  &lt;a href=&quot;https://twitter.com/joshltyler&quot;&gt;@JoshTyler&lt;/a&gt;
-chose to use a DROP signal, similar to my &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal proposed above.
-Whenever his &lt;a href=&quot;https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv&quot;&gt;Packet
-FIFO&lt;/a&gt;
-encounters a DROP signal, it simply drops the entire packet–much like
-the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal I’ve proposed above would do.&lt;/p&gt;
-
-&lt;p&gt;There are a couple of subtle differences, however, between his DROP signal and
-my proposed &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal.  The biggest difference between the two is that, in
-the AXIN protocol, the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal may arrive without an accompanied
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt;.  &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; may also be raised even if the stream is stalled with
-&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID &amp;amp;&amp;amp; !TREADY&lt;/code&gt;.  From this standpoint, it’s more of an out of band signal
-whereas &lt;a href=&quot;https://twitter.com/joshltyler&quot;&gt;@JoshTyler&lt;/a&gt;’s DROP signal is in band.&lt;/p&gt;
-
-&lt;p&gt;Both approaches are designed to solve this problem, and both could work nicely
-for this purpose.  In general, &lt;a href=&quot;https://twitter.com/joshltyler&quot;&gt;@JoshTyler&lt;/a&gt;’s
-approach looks like it was easier to implement.  However, it also looks like
-&lt;a href=&quot;https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv&quot;&gt;his implementation&lt;/a&gt;
-might hang if ever given a packet larger than the size of &lt;a href=&quot;https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv&quot;&gt;his
-FIFO&lt;/a&gt;.&lt;/p&gt;
-
-&lt;h2 id=&quot;measuring-success-does-it-work&quot;&gt;Measuring success: does it work?&lt;/h2&gt;
-
-&lt;p&gt;Of course, the first question should always be, does my proposed AXIN
-protocol work?  At this point in the development of my own design, I can
-answer that with a resounding &lt;em&gt;yes!&lt;/em&gt;  Not only does this technique work, it
-works quite well.&lt;/p&gt;
-
-&lt;p&gt;Allow me to share some of my experiences working with this protocol, starting
-from the beginning.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. First steps&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/first-steps.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;As with most of the protocols I’ve come to work with, my first step was to
-build a set of formal properties to define the AXIN protocol.  These matched
-the modified AXI stream properties outlined above.&lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;That was the easy part.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding=25px&quot;&gt;&lt;caption&gt;Fig 6. The AXIN FIFO&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/netfifo.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol start=&quot;2&quot;&gt;
-  &lt;li&gt;
-    &lt;p&gt;The next piece I built was a basic &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; enabled FIFO, shown in Fig. 6 on
-the left.  This FIFO had two AXIN ports: an AXIN slave port and an AXIN
-master port.  The simple goal of the FIFO was to provide some buffer room
-between a packet source and a destination.&lt;/p&gt;
-
-    &lt;p&gt;Here I came across the first problem with the protocol: the FIFO turned out
-to be a real challenge to build.  (&lt;a href=&quot;https://github.com/joshtyler/hdl_common/synth/axis/axis_packet_fifo.sv&quot;&gt;Josh’s
-implementation&lt;/a&gt;
-looks easy in comparison.) What happens, for example, if two packets are in
-a FIFO and the third packet aborts?  The first two packets, which now have
-allocated memory within the FIFO must go through.  What happens if the FIFO
-is completely full with less than a packet and the source aborts?  The FIFO
-output must abort as well, and the FIFO should then flush the incoming
-packet until its end–even though the source will know nothing of the packet
-getting dropped.  All of these new conditions made this AXIN protocol a
-challenge to build a design for.  Today, however, the task is now done and
-the FIFO works.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Once I had a FIFO in place, things started getting easier.  I then built an
-AXIN payload to UDP converter, an AXIN multiplexer to select from multiple
-packet sources, an AXIN broadcast element to broadcast packets to multiple
-separate packet handlers, and more.  With each new component, the protocol
-became easier and easier to use.&lt;/p&gt;
-
-&lt;p&gt;Two recent examples might help illustrate the utility of this approach.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;First, on startup, the network PHY is given a long reset.  (It might be
-too long …)  During this time, however, packets are still generated–they
-just need to be dropped internally because the network controller is holding
-the PHY in reset.  Sure enough, the FIFO that I had put so much time and
-energy into worked like a champ!  It dropped these packets, and recovered
-immediately once the controller brought the PHY out of reset and started
-accepting packets.  Even better, I haven’t found any bugs in it since the
-formal verification work I went through.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The second example I have is one of data packet generation.  As you may
-recall, one of the primary design goals was to broadcasting data packets,
-each containing an internal time stamp.  The problem is that this data packet
-includes in its header a time stamp associated with the data–something not
-known until the data is available.  In other words, the header cannot be
-formed until the both the data and its associated time stamp are available.
-Once that first data sample is available, though, the data must now wait for
-the header to be formed and forwarded downstream.  The problem then replicates
-itself again in the next processing stage: the payload to UDP packet
-converter.&lt;/p&gt;
-
-    &lt;p&gt;My first approach to data packet generation was to try and schedule the
-packet header generation between the time when the data entered the
-data compression pipeline stage and when it came out to go into the payload
-generator (See Fig. 4 above), but then I came across a simulation trace in
-which the last data sample of one packet was immediately followed by the
-first data sample of the next packet.  That left no time cycles for header
-generation between the last data sample of the one packet and the first
-sample of the next.  When I went back to the drawing board to look for another
-solution, I found my AXIN FIFO.  Placing this FIFO between the data source
-and the packet generator solved this problem nicely, and I haven’t had a
-reason to look back since.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Indeed, the ease of building these subsequent data handling components has
-easily repaid the time I have put into building the original FIFO a couple
-times over.&lt;/p&gt;
-
-&lt;p&gt;No, this new protocol isn’t perfect.  I still needed a way to transition
-from a packet that can be dropped to one that has been fully accepted.
-In particular, I wanted to generate a DMA engine that could store a packet
-into memory.  Indeed, this brings up the next problem: how shall packet
-boundaries be preserved once the packet is stored in memory?&lt;/p&gt;
-
-&lt;p&gt;I’ve seen two solutions to this problem.  One solution is to record &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt;
-along with the packet data, so the boundary can be rediscovered at a later
-time.  This works, as long as you have room for the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; bit.  A second
-solution I’ve found in a vendor design is to capture &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; data in a
-separate memory.  This works until you discover one memory becoming full
-before the other one.  Indeed, I seem to recall a bug report having to do
-with the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; buffer suffering from an overrun while the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TDATA&lt;/code&gt; buffer
-still had plenty of room in it …&lt;/p&gt;
-
-&lt;p&gt;But I digress.&lt;/p&gt;
-
-&lt;p&gt;Just as a quick reminder, most data buses have a power of two width.  That
-means they are 8b, 16b, 32b, 64b, 128b, etc. wide.  At this width, there’s no
-room for an extra bit of information to hold the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt; bit indicating the end
-of a packet once it has been placed into memory.  I wanted another solution
-to this problem therefore.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 7. Converting from AXIN to AXI Stream&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/pkt2stream.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;ol start=&quot;3&quot;&gt;
-  &lt;li&gt;
-    &lt;p&gt;This leads to the third main component I built: A bridge from AXIN to a
-proper &lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt; with no &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt;.
-I then embed into this stream, in the first 32’bit word of packet data, the
-length of the packet in bytes.  Then, once converted to this format, basic
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt;
-tasks become easy again, since I could now use regular
-&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt; components.  Similarly, I
-could now write packets to memory and maintain the packet boundaries at the
-same time.&lt;/p&gt;
-
-    &lt;p&gt;As with the FIFO, however, this component was a real challenge to build.
-Just so we are clear, the challenge wasn’t so much the challenge of writing
-Verilog to handle the task.  That part was easy.  The real challenge was
-writing Verilog that would work under all conditions.  Sure enough, the formal
-solver kept finding condition after condition that my AXIN to stream bridge
-wasn’t handling properly.  For example, what should happen if the incoming
-packet is longer than the slave’s packet buffer?  The slave should drop the
-packet–not the master.  All of these and more had to go into this protocol
-converter.&lt;/p&gt;
-
-    &lt;p&gt;One reality of my current version of the bridge, however, is that it limits
-the size of a packet to what can be stored within the block RAM found within
-the bridge.  Given time, I’ll probably remove this limitation by adding an
-external memory interface–but that’s a project still to come.&lt;/p&gt;
-
-    &lt;p&gt;However, being able to capture a full packet in block RAM has the advantage
-of guaranteeing that any locally generated packets can be guaranteed to be
-complete packets before they are sent to the PHY.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Once the whole packet processing chain was put together, it looked roughly
-like Fig. 8 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 8. Network processing chain&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/net-stream-blocks.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;First, the packet would be formed by grouping raw data samples together with
-a time stamp and a frame number.  In general, this involved a series of stages,
-almost all with small FIFOs, as various headers were applied.  The result was
-typically an &lt;a href=&quot;https://en.wikipedia.org/wiki/Ethernet_frame&quot;&gt;Ethernet packet&lt;/a&gt;
-encapsulating an &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IPv4 packet&lt;/a&gt;
-encapsulating a &lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP
-packet&lt;/a&gt; with an
-application specific payload.  This generated packet had the basic structure
-shown in Fig. 9.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 9. Final packet structure&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/axis-abort/datapacket.svg&quot; alt=&quot;&quot; width=&quot;180&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Going back to Fig. 8, this packet was then buffered, converted to
-AXI stream proper (without &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TLAST&lt;/code&gt;), and then sent through an
-&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt;.  On the
-other side of the FIFO, the packet was converted back to the AXIN
-protocol, albeit with the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal now held low, and a single packet
-source was selected to feed the network controller.  Because every packet
-source had its own buffer, and because the &lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous
-FIFO&lt;/a&gt; operated on
-32-bit data using a clock speed that was faster than one quarter the network
-speed, there was never a chance that the network controller would run dry
-prior between starting and completing a packet.&lt;/p&gt;
-
-&lt;p&gt;Further, in spite of all the resources used by this approach, the Artix
-A7-200T I am using still has plenty of LUTs and LUT RAMs (over 80%+) remaining
-for a lot more design work.&lt;/p&gt;
-
-&lt;p&gt;Perhaps the proverb that describes this work the best is, “In all labour
-there is profit,” since my original work to generate the formal AXIN
-properties, the following network FIFO, and then AXIN to stream converter,
-has now all been repaid in spades via reuse.
-(&lt;a href=&quot;https://www.blueletterbible.org/kjv/pro/14/23&quot;&gt;Prov 14:23&lt;/a&gt;)&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
-
-&lt;p&gt;&lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt; remains a simple and
-easy to use protocol.  Indeed, it is ideal for any application where you can
-guarantee your design will match any needed rates before using it.  Yes,
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt; is a great feature,
-but it is also important to recognize that all systems have a limit of how
-much &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt; they can handle
-before breaking any real time requirements.  Once the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt; limit of any design
-has been reached, some &lt;a href=&quot;/doc/axi-stream.pdf&quot;&gt;AXI stream&lt;/a&gt;
-sources may need to be able to control what happens next.  Others simply need
-to be able to flag the existence of the data loss.  Either way, apart from
-careful extra-protocol engineering and rate management, data loss becomes
-inevitable.&lt;/p&gt;
-
-&lt;p&gt;So, just how should dropped data be handled in your application?&lt;/p&gt;
-
-&lt;p&gt;In the case of network packet data that I’ve been working with, the easy
-answer is to drop a whole packet whenever on-chip packet congestion becomes too
-much to deal with.  The &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ABORT&lt;/code&gt; signal has worked nicely for this purpose, in
-spite of the initial challenges I had in working with it.&lt;/p&gt;
-
-&lt;p&gt;In many ways, this only pushes the problem up a level in the stack.
-In my case, that’s okay:  Most network protocols are robust enough to be
-able to handle some amount of packet loss.  Packet loss can be detected
-via packet frame counters, time stamps or both.  Packet loss can also be
-detected in client-server relationships whenever a reply to a given request is
-not received in a timely manner.  In those cases, requests can be retried or
-eventually abandoned.  This is all quite doable, and doing it in a controlled
-manner is key to success.&lt;/p&gt;
-
-&lt;p&gt;Indeed, this technique has worked so well that I’ve started applying something
-similar to video streams as well.  Have you noticed, for example, that many
-video IPs are very sensitive to which IPs get reset first?  That, however, may
-need to remain a topic for another day.&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Why do the heathen rage, and the people imagine a vain thing? (Ps 2:1)&lt;/em&gt;</description>
-        <pubDate>Wed, 23 Feb 2022 00:00:00 -0500</pubDate>
-        <link>https://zipcpu.com/blog/2022/02/23/axis-abort.html</link>
-        <guid isPermaLink="true">https://zipcpu.com/blog/2022/02/23/axis-abort.html</guid>
-        
-        
-        <category>blog</category>
         
       </item>
     
