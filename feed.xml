@@ -6,14 +6,672 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Tue, 30 Aug 2022 21:51:23 -0400</pubDate>
-    <lastBuildDate>Tue, 30 Aug 2022 21:51:23 -0400</lastBuildDate>
+    <pubDate>Wed, 21 Sep 2022 10:25:58 -0400</pubDate>
+    <lastBuildDate>Wed, 21 Sep 2022 10:25:58 -0400</lastBuildDate>
     <generator>Jekyll v4.2.0</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Assignment delay's and Verilog's wait statement</title>
+        <description>&lt;p&gt;I’ve now spent more time than I want to admit to debugging simulation issues
+when using Verilog’s simulation semantics.  Let me therefore share some
+problems I’ve come across, together with my proposed solution for them.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-problems&quot;&gt;The Problems&lt;/h2&gt;
+
+&lt;p&gt;Today’s problem stems from logic like the following:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;trigger_condition&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;some_other_condition_determining_relevance&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;state_variable&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;complex_expression&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// This then continues for another 50 lines or so&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In general, this comes to me in “working” simulation code that’s been handed
+down to me to maintain.  The simulations that use this logic often take hours
+to run, and so debugging this sort of thing can be very time consuming.
+(Costly too–my hourly rate isn’t cheap.)&lt;/p&gt;
+
+&lt;p&gt;Let’s walk through this logic for a moment–before tearing it apart.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 1. Avoid assignment delays&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/phys-delays.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In this example the first condition, the one I’ve called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;trigger_condition&lt;/code&gt;
+above, is simply some form of data change condition.  Sometimes its a
+reference to a clock edge, sometimes its a reference to a particular piece of
+data changing.  This isn’t the problem.&lt;/p&gt;
+
+&lt;p&gt;The second condition, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;some_other_condition_determining_relevance&lt;/code&gt;, is used
+to weed out all the times the always block might get triggered when you don’t
+want it to be.  For example, it might be triggered during reset or when the
+slave device being modeled is currently responsive to some other
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;trigger_condition&lt;/code&gt;.  This is natural.  This is not (yet) a problem either.&lt;/p&gt;
+
+&lt;p&gt;So what’s the problem with the logic above?  Well, let’s start with the
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;#1&lt;/code&gt; assignment delay.  In this case, it’s not representing a true hardware
+delay.  No, the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;#1&lt;/code&gt; is there in order to &lt;em&gt;schedule&lt;/em&gt; Verilog simulation
+statement execution.  Part of the reason why it’s there is because the rest
+of the block uses &lt;em&gt;blocking&lt;/em&gt; logic (i.e. via the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;=&lt;/code&gt;).  Hence, if this block
+was triggered off of a clock edge, the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;#1&lt;/code&gt; allows us to reason about what
+follows the clock edge but before the next edge.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 2. Recipe for trouble&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/always-disaster.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Now, let me ask, what happens five years from now when clock speeds get faster?
+Some poor soul (like me) will be hired to maintain this logic, and that poor
+soul will look at the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;#1&lt;/code&gt; and ask, why is this here?  Maybe it was a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;1ns&lt;/code&gt;
+delay, and they are now trying to run a clock at 500MHz instead of 100MHz.
+That &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;1ns&lt;/code&gt; delay will need to be understood, and replaced–&lt;em&gt;everywhere&lt;/em&gt;
+it was used.  It doesn’t help that the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;1ns&lt;/code&gt; doesn’t come with any explanations,
+but that may be specific to the examples I’m debugging.&lt;/p&gt;
+
+&lt;p&gt;Here’s a second problem, illustrated in Fig. 2: what happens when you use this
+one nanosecond delay in multiple always blocks, similar to this one, all
+depending on each other?  Which one will execute first?&lt;/p&gt;
+
+&lt;p&gt;The third problem often follows this one, and it involves a wait statement
+of some type.  To illustrate this, let me modify the example above a bit more.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;trigger_condition&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;some_other_condition_determining_relevance&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;state_variable&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;complex_expression&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Continue for a while ...&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;wait&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;negedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;output_value&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;other_complex_expression&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;In this case, the user wants to make certain his logic is constant across
+the clock edge, and so he sets all his values on the negative edge of the
+clock.  This leads to two problems: what happens when the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;#1&lt;/code&gt;
+delay conflicts with the clock edge?  And what happens when the output value
+depends upon other inputs that are set on the negative clock edge?&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3. Giant case statement dispatching tasks&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/buried-tasks.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Fig. 3 shows another problem, this time when using a case statement.  In this
+case, it’s an attempt to implement a command structure within a modeled device.
+The device can handle one of many commands, so depending on which one is
+received you go and process that command.  The actual example this is drawn
+from was worse, since it depended not only on commands but rather command
+sequences, and the command sequences were found within case statements within
+case statements.&lt;/p&gt;
+
+&lt;p&gt;What’s wrong with this?  Well, what happens when the original trigger takes
+place a second time, but the logic in the always block hasn’t finished
+executing?  Perhaps this is erroneous.  Perhaps it finishes just barely on
+the wrong side of the next clock edge.  In my case, I find the bug four hours
+later–on a good day.  It doesn’t help that simulations tend to run rather slow.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 4. FSMs are often easier to debug than long-running tasks&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/appfsm.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;A better approach would’ve been to use a state machine rather than embedded
+tasks.  Why is this better?  Well, if for no other reason, a case statement
+would contain state variables which could be seen in the trace file.  That
+means that you could then find and debug what would (or should) happen when/if
+the new command trigger shows up before a prior command completes.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. Repeat LLC logic&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/appllc.svg&quot; alt=&quot;&quot; width=&quot;280&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;These problems are only compounded when this logic is copied.  For example,
+imagine a device that can do tasks A, B, and C, but requires one of two IO
+protocols to accomplish task A, B, or C.  Now, if that IO protocol logic is
+copied and embedded into each of the protocol tasks, then all three will need
+to be updated when the IO protocol is upgraded.  (I2C becomes I3C, SPI becomes
+Quad SPI, etc.)&lt;/p&gt;
+
+&lt;p&gt;While some of these problems are specific to hardware, many are not. 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Magic_number_(programming)&quot;&gt;Magic numbers&lt;/a&gt;
+are a bad idea in both RTL and software.  Design reuse and software
+reuse are both very real things.  Even a carpenter will build a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/jig_(tool)&quot;&gt;custom jig of some type&lt;/a&gt; when he
+has to make fifty copies of the same item.&lt;/p&gt;
+
+&lt;p&gt;The good news is that better approaches exist.&lt;/p&gt;
+
+&lt;h2 id=&quot;defining-terms&quot;&gt;Defining terms&lt;/h2&gt;
+
+&lt;p&gt;Before diving into some better approaches, let me take just a couple of moments
+to introduce the terms I will be using.  In general, a test bench has three
+basic (types of) components, as illustrated in Fig. 6.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 6. Test bench components&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/gencomponents.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;The Device Under Test (DUT)&lt;/strong&gt;:  The is the hardware component that’s being
+designed, and for which the test has been generated.&lt;/p&gt;
+
+    &lt;p&gt;Since the DUT is intended to be synthesizable, Verilog delay statements are
+inappropriate here.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;The Hardware Device Model, or just model&lt;/strong&gt;: Our hardware component is being
+designed to interact with an external piece of hardware.  This component is
+often off-chip, and so our “model” is a simulation component designed to
+interact with our IP in the same way the actual hardware would.&lt;/p&gt;
+
+    &lt;p&gt;Although I’ve called these “models” “emulators” in the past, these aren’t
+truly “emulators”.  An “emulator” would imply a description of the actual
+hardware existed, such as an RTL description, yielding an additional level
+of realism in simulation.  Barring sufficient information from the external
+device’s manufacturer to actually and truly “emulate” the device, the test
+designer often settles for a “model” instead.&lt;/p&gt;
+
+    &lt;p&gt;Hardware models may naturally require Verilog delays in order to model
+the interfaces they are designed for.  For example, a signal may take some
+time to transition from a known value to an unknown one following a clock
+transition.  As another example, a hardware device may become busy following
+a command of some kind.  The good news is that Verilog can model both of
+these behaviors nicely.&lt;/p&gt;
+
+    &lt;p&gt;How to handle these delays “properly” will become part of the discussion
+below.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;The Test Script, or driver&lt;/strong&gt;: This is the component of the design that
+interacts with the device under test, sequencing commands to given to it
+to make sure all of the capabilities of the DUT are properly tested.&lt;/p&gt;
+
+    &lt;p&gt;This component of the Verilog test script often reads more like it is
+software than hardware.  Indeed, we’ve &lt;a href=&quot;/2021/07/23/cpusim.html&quot;&gt;already discussed the idea of
+replacing the test script with a piece of software compiled for a soft-core
+CPU existing in the test environment, and then emulating that CPU as part
+of the simulation model&lt;/a&gt;.  The
+benefit of this approach is that it can test and verify the software that
+will be used to drive the hardware under test.  The downside is that
+simulation’s are slow, and adding a CPU to the simulation environment can
+only slow it down further.&lt;/p&gt;
+
+    &lt;p&gt;For the purposes of our discussion today I’ll simply note that the test
+script commonly interacts with the design in a &lt;em&gt;synchronous&lt;/em&gt; manner.
+Any delays, therefore, need to be synchronized with the clock.&lt;/p&gt;
+
+    &lt;p&gt;There is another problem with the driver that we won’t be discussing today.
+This is the simple reality that there’s no way to test all possible
+driver delays.  Will a test driver accurately test if your DUT can handle
+back to back requests, requests separated by a single clock cycle, by two
+clock cycles, by &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;N&lt;/code&gt; clock cycles?  You can’t simulate all of these
+possible delays, but you can catch them using formal methods.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Not shown in Fig. 6, but also relevant is the &lt;strong&gt;Simulation Environment&lt;/strong&gt;: 
+While the DUT and model are both necessary components of any simulation
+environment, the environment might also contains such additional components
+as an &lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;AXI interconnect&lt;/a&gt;,
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;CPU&lt;/a&gt;, DMA,
+and/or &lt;a href=&quot;/zipcpu/2018/07/13/memories.html&quot;&gt;RAM&lt;/a&gt;,
+all of which are neither the test script, DUT, or model.&lt;/p&gt;
+
+    &lt;p&gt;Ideally these extra components will have been tested and verified in other
+projects prior to the current one, although this isn’t always the case.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;Now that we’ve taken a moment to define our terms, we can now return to the
+simulation modeling problem we began.&lt;/p&gt;
+
+&lt;h2 id=&quot;better-practices&quot;&gt;Better practices&lt;/h2&gt;
+
+&lt;p&gt;The good news is that Verilog was originally written as a language for
+driving simulations.&lt;/p&gt;
+
+&lt;p&gt;Even better, subsets of Verilog exist which can do a good job of modeling
+synthesizable logic.  This applies to both asynchronous and synchronous logic.
+The assignment delay problems that I’ve outlined above, however, arise from
+trying to use Verilog to model a mix of logic and software when the goal was
+to create a hardware device model.&lt;/p&gt;
+
+&lt;p&gt;Here are some tips, therefore, for using delays in Verilog:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Write synthesizable simulation logic where possible.&lt;/p&gt;
+
+    &lt;p&gt;This is really only an issue for test bench or modeling logic.  It’s not
+really an issue for logic that was meant to be synthesizable in the first
+place.&lt;/p&gt;
+
+    &lt;p&gt;The good news about writing test bench logic in a synthesizable fashion
+is that you might gain the ability to synthesize your model in hardware,
+and then run tests on it just that much faster.  You could then
+also get a second benefit by formally verifying your device model–it’d
+save you that much time later when running integrated simulations.&lt;/p&gt;
+
+    &lt;p&gt;As an example, compare the following two approaches for verifying a test
+chip:&lt;/p&gt;
+
+    &lt;p&gt;ASIC Test chip #1: Has an SPI port capable of driving internal registers.
+This is actually a really good idea, since you can reduce the number of 
+wires necessary to connect to such a test chip.  The problem, however, was
+that the SPI driver came from encrypted vendor IP.  Why was this a problem?
+It became a problem when the test team tried to connect to the device
+once it had been realized in hardware.  They tried to connect their CPU to
+this same SPI port to drive it–and then didn’t drive it according to
+protocol properly.&lt;/p&gt;
+
+    &lt;p&gt;The result of testing ASIC test chip #1?  I got a panic’d call from a
+client, complaining that the SPI interface to the test chip wasn’t working
+and asking if I could find the bugs in it.&lt;/p&gt;
+
+    &lt;p&gt;ASIC Test chip #2: Also has a SPI port for reading and writing internal
+registers.  In this chip, however, the SPI port was formally verified
+as a composition of both the writer and the reader–much as Fig. 7 shows
+below.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 7. Sometimes, you'll have both RTL pieces available to you&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/excontrol.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;I say “much as Fig. 7 shows” because the verification of this port wasn’t
+   done with using the CPU as part of the test script.  However, because
+   both the SPI master and SPI slave were verified together, and even better
+   because they were &lt;em&gt;formally&lt;/em&gt; verified in an environment containing both
+   components, the test team can begin it’s work with a verified RTL interface.&lt;/p&gt;
+
+&lt;p&gt;You can even go one step farther by using a soft-core CPU to &lt;a href=&quot;/2021/07/23/cpusim.html&quot;&gt;verify the
+   software driver&lt;/a&gt; at the same
+   time.  This is the full extent of what’s shown in Fig. 7.  As I mentioned
+   above, the formal verification for ASIC test chip #2 stopped at the AXI-lite
+   control port for the SPI master.  When testing this chip as part of an
+   integrated test, a test script was used to drive a Bus Functional Model
+   (BFM), rather than actual CPU software.  However, if you just read the
+   test script’s calls to the BFM, you would have the information necessary
+   to build a verified software driver.&lt;/p&gt;
+
+&lt;ol start=&quot;2&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Use &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;always @(*)&lt;/code&gt; for combinatorial blocks, and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;always @(posedge clk)&lt;/code&gt;
+(or negedge) or &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;always @(posedge clk or negedge reset_n)&lt;/code&gt; for synchronous
+logic.&lt;/p&gt;
+
+    &lt;p&gt;While I like using the positive edge of a clock for everything, the actual
+edge you need to use will likely be determined by the device and protocol
+you are modeling.  The same is true of the reset.&lt;/p&gt;
+
+    &lt;p&gt;I would discourage the use of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;always @(trigger)&lt;/code&gt;, where &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;trigger&lt;/code&gt; is some
+combinatorial signal–lest you forget some required trigger component.  I
+would also discourage the use of any &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;always @(posedge trigger)&lt;/code&gt; blocks where
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;trigger&lt;/code&gt; wasn’t a true clock–lest you create a race condition within your
+logic.  I use the word &lt;em&gt;discourage&lt;/em&gt;, however, because some modeling contexts
+require triggering on non-clocked logic.  If there’s no way around it,
+then you do what you have to do to get the job done.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Synchronous (clocked) logic should use &lt;em&gt;non-blocking&lt;/em&gt; assignments (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;&amp;lt;=&lt;/code&gt;),
+and combinatorial logic should use &lt;em&gt;blocking&lt;/em&gt; assignments (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;=&lt;/code&gt;).&lt;/p&gt;
+
+    &lt;p&gt;It seems like my debugging problems began when the prior designer used
+a delay instead of proper blocking assignments.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;		&lt;span class=&quot;c1&quot;&gt;// SYNCHRONOUS block&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;			&lt;span class=&quot;c1&quot;&gt;// MAGIC NUMBER, doesn't model H/W, etc&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;value&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;expression&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// BLOCKING LOGIC!&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// ...&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Just … don’t do this.  When you start doing things like this, you’ll
+   never know if (whatever) &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;expression&lt;/code&gt; had finished evaluating, or be able
+   to keep track of when the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;#1&lt;/code&gt; delay needs to be updated.&lt;/p&gt;
+
+&lt;ol start=&quot;4&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Device models aren’t test drivers.  Avoid consuming time within them–such
+as with a wait statement of any type.  Let the time be driven elsewhere by
+external events.&lt;/p&gt;
+
+    &lt;p&gt;This applies to both delays and wait conditions within &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;always&lt;/code&gt; blocks, as
+well as any tasks that might be called from within them.  Non-blocking
+assignment delays work well for this purpose.&lt;/p&gt;
+
+    &lt;p&gt;Ideally, device models should use finite state machines, as in Fig. 4,
+to model the passing of time if necessary, rather than consuming time
+with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;wait&lt;/code&gt; statements or ill defined assignment delays, as in Fig. 3.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;When driving synchronous logic from a test script, &lt;em&gt;synchronize&lt;/em&gt; any
+test driven signals using &lt;em&gt;non-blocking&lt;/em&gt; assignments.&lt;/p&gt;
+
+    &lt;p&gt;I have now found the following simulation construct several times over:&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;initial&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ARESETN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;ARVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;ARVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// the problem continues on ...&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Sometimes the author uses the negative edge of the clock instead of the
+positive edge here to try to “schedule” things away from the clock edge.
+Indeed, I’ve been &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;somewhat guilty of this
+myself&lt;/a&gt;.
+Sadly, this causes no end of confusion when trying to analyze a resulting
+trace file.&lt;/p&gt;
+
+&lt;p&gt;A better approach would be to synchronize this logic with non-blocking
+assignments.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;initial&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;ARVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;			&lt;span class=&quot;c1&quot;&gt;// Any initial value&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Other initial AR* values may be reset here as well&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;negedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ARESETN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+		&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;ARVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// Set the rest of the AR* values&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+
+		&lt;span class=&quot;k&quot;&gt;while&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ARVALID&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+			&lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ACLK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ARREADY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+				&lt;span class=&quot;n&quot;&gt;ARVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Script continues further&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This will avoid any delta-time cycle issues that would otherwise be
+   very difficult to find and debug.  Note that this also works because this
+   block is the only block controlling &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ARVALID&lt;/code&gt; from within the test bench.
+   Should you wish to control &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ARVALID&lt;/code&gt; from multiple test bench clocks, you
+   may run into other concurrency problems.&lt;/p&gt;
+
+&lt;p&gt;While you can still do this sort of thing with Verilator, I’ll reserve
+   my solution for how to do it for another post.&lt;/p&gt;
+
+&lt;ol start=&quot;6&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Pick a clock edge and use it.  Don’t transition on both edges–unless the
+hardware protocol requires it.&lt;/p&gt;
+
+    &lt;p&gt;As I alluded to above, I’ve seen a lot of AXI modeling that attempts to set
+the various AXI signals on the &lt;em&gt;negative&lt;/em&gt; edge of the clock so that any and
+all logic inputs will be stable later when the positive edge comes around.
+This approach is all well and good until someone wants to do post–layout
+timing analysis, or some other part of your design also wants to use the
+negative edge, and then pain ensues.&lt;/p&gt;
+
+    &lt;p&gt;Sadly, this means that the project may be turned in and then rest in a
+“working” state for years before the problem reveals itself.&lt;/p&gt;
+
+    &lt;p&gt;In a similar fashion, what happens when you have two always blocks, both
+using a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;#1&lt;/code&gt; delay as illustrated in Fig. 2 above?  Or, alternatively, what
+happens when you want the tools to put real post place-and-route delays into
+your design for a timing simulation?  You may find you’ve already lost your
+timing slack due to a poor simulation test bench or model.  Need I say that
+it would be embarrassing to have to own up to a timing failure in simulation,
+due to your own simulation constructs?&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;There is a time for using multiple always blocks–particularly when modeling
+DDR devices.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 8. Example DDR simulation logic&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/ddrsim.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In today’s high speed devices, I’ve often found the need for multiple
+   always blocks, triggered off of different conditions, to capture the
+   various triggers and describe the behavior I want.  One, for example,
+   might trigger off the positive edge, and another off the negative edge.
+   This is all fine, well, and good for &lt;em&gt;simulation&lt;/em&gt; (i.e. &lt;em&gt;test bench&lt;/em&gt;)
+   logic.  While this would never work in hardware, it can easily be used to 
+   accurately model behavior in simulation.&lt;/p&gt;
+
+&lt;ol start=&quot;8&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Use assignment delays to model &lt;em&gt;physical&lt;/em&gt; hardware delays &lt;em&gt;only&lt;/em&gt;.&lt;/p&gt;
+
+    &lt;p&gt;For example, if some event will cause the ready line to go low for 50
+microseconds, then you might write:&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;parameter&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;tWAIT&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;50_000&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;event_and_not_reset&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ready&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;ready&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;ready&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tWAIT&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Notice how I’ve carefully chosen not to consume any time within this
+   always block, yet I’ve still managed to create something that will capture
+   the passage of time.  In this case, I’ve used the Verilog &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;&amp;lt;=&lt;/code&gt; together
+   with a delay statement to schedule the transition of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ready&lt;/code&gt; from zero
+   back to one by #tWAIT ns.&lt;/p&gt;
+
+&lt;p&gt;I’ve now used this approach on high speed IO lines as well, with a lot
+   of success.  For example, if the data will be valid &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;tDVH&lt;/code&gt; after the
+   clock goes high and remain valid for &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;tDV&lt;/code&gt; nanoseconds, then you might
+   write:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;chip_enable&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;pre_output_value&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;some_expression&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;output_valid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tDVH&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;output_valid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;#(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tDVH&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tDV&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;assign&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;output_value&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;output_valid&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;?&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pre_output_value&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'bz&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;I’ve even gone so far in some cases to model the ‘x values in this fashion
+   as well.  That way the output is properly ‘x while the voltage is swinging
+   from one value to the next.&lt;/p&gt;
+
+&lt;ol start=&quot;9&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;No &lt;a href=&quot;https://en.wikipedia.org/wiki/Magic_number_(programming)&quot;&gt;magic numbers&lt;/a&gt;!
+Capture hardware delays in &lt;em&gt;named&lt;/em&gt; parameters, specparams, and registers,
+rather than using numeric assignment delays.&lt;/p&gt;
+
+    &lt;p&gt;For example, were I modeling a flash memory, I might do something like the
+following to model an erase:&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;&lt;span class=&quot;cp&quot;&gt;`timestep&lt;/span&gt;	&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ns&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;/&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ns&lt;/span&gt;
+&lt;span class=&quot;c1&quot;&gt;// ...&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;parameter&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;real&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;tERASE&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;500_000&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// 500 microseconds&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// Decode the SPI interface.  We start by counting clocks&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;//  from the negative edge of CSN&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SCK&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;or&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;CSN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;CSN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;clock_counts&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clock_counts&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;])&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Count clock ticks&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;clock_counts&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clock_counts&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Once clock_counts[5], we're past 32.  We&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// can keep counting, but the results will be&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// irrelevant for this example.&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;clock_counts&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clock_counts&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// With each new clock tick, we capture one more bit&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// from the interface.&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SCK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;sreg&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sreg&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;MOSI&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// An erase command takes place after 32 SCK clock edges: the&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// first 8 contain the command, the next 24 contain the address&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// for the command.  Yes, this assumes 24-bit addressing.&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;erase_command&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;CSN&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clock_counts&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;31&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+				&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sreg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;30&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;23&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;CMD_ERASE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;erase_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sreg&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;22&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;11&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;12'h0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+
+	&lt;span class=&quot;c1&quot;&gt;// We only issue and act on the command once we get to the final&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// SCK clock edge of the command sequence--the 32nd clock edge after&lt;/span&gt;
+	&lt;span class=&quot;c1&quot;&gt;// CSn activates (lowers)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SCK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;erase_command&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;busy&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Set an internal busy bit.  We'll remain busy for&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// tERASE ns.&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;busy&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;busy&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tERASE&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Actually erase the memory in question&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;BLOCK_SIZE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;mem&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;erase_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;8'hff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Notice the use of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;tERASE&lt;/code&gt; rather than some arbitrary erase time buried among
+the logic.  Placing all such device dependent times in one location (at the
+top of the file) will then make it easier to upgrade this logic for a new
+and faster device at a later time.&lt;/p&gt;
+
+&lt;p&gt;We can also argue about when the actual erase should take place.  As long
+as the user can’t interact with the device while it’s &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;busy&lt;/code&gt;, this probably
+doesn’t make a difference.  Alternatively, we could register the erase
+address and set a time for later when the erase should take place.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;initial&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;erase_memory_flag&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;SCK&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;erase_command&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;busy&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;busy&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;busy&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tERASE&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;erase_memory_flag&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;r_erase_address&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;erase_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Render the memory in question unknown&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;BLOCK_SIZE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;mem&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;erase_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;'&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;hx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;negedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;busy&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;erase_memory_flag&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Actually erase the memory in question&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;BLOCK_SIZE&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;mem&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;r_erase_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;8'hff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Clear the flag&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;erase_memory_flag&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;#&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tCK&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Even this isn’t perfect, however, since we now have a transition taking place
+on something other than a clock.  Given that the interface clock isn’t
+continuous, this may still be the best option to create a reliable edge.&lt;/p&gt;
+
+&lt;ol start=&quot;10&quot;&gt;
+  &lt;li&gt;The &lt;a href=&quot;https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)&quot;&gt;rule of
+   3&lt;/a&gt;
+   applies to hardware as well as software: if you have to write the same
+   logic more than twice, then you are doing something wrong.  Refactor it.
+   Encapsulate it.  Make a module to describe it, and then reuse that module.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 9. If you have to build it more than twice, refactor it&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/better-appllc.svg&quot; alt=&quot;&quot; width=&quot;280&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Remember our example from Fig. 5 above?  Fig. 9 shows a better approach to
+   handling three separate device tasks, each with two separate protocols that
+   might be used to implement them.&lt;/p&gt;
+
+&lt;p&gt;For protocols that separate themselves nicely between the link layer
+   control (LLC) protocol and a media access control (MAC) layer, this works
+   nicely to rearrange the logic so that each layer only needs to be written
+   once, rather than duplicated within structures implementing both MAC and
+   LLC layers together.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 10. The rule of Gold&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vlog-wait/rule-of-gold.svg&quot; alt=&quot;&quot; width=&quot;280&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Remember: fully verified, well tested, well written logic is pure
+&lt;a href=&quot;/blog/2020/01/13/reuse.html&quot;&gt;re-usable gold&lt;/a&gt; in this
+business.  Do the job right the first time, and you’ll reap dividends for years
+to come.&lt;/p&gt;
+
+&lt;h2 id=&quot;todays-story&quot;&gt;Today’s story&lt;/h2&gt;
+
+&lt;p&gt;A client recently called me to ask if I could modify an IP I had written
+so that it would be responsive on an APB slave input with a different
+clock frequency from the one the rest of the device model used.&lt;/p&gt;
+
+&lt;p&gt;The update required inserting an APB cross clock domain bridge into the IP.
+This wasn’t hard, since I’d built (and formally verified) such a bridge two
+months prior–I just needed to connect the wires and do a bit of signal
+renaming for the case when the bridge wasn’t required.&lt;/p&gt;
+
+&lt;p&gt;That was the easy part.&lt;/p&gt;
+
+&lt;p&gt;But, how shall this new capability be tested?  It would need an updated test
+script and more.&lt;/p&gt;
+
+&lt;p&gt;Thankfully, this was also easy.&lt;/p&gt;
+
+&lt;p&gt;Because I had built the top level simulation construct using parameters, which
+&lt;a href=&quot;/zipcpu/2022/07/04/zipsim.html&quot;&gt;could easily be overridden by the test
+driver&lt;/a&gt;, the test suite
+was easy to update: I just had to set an asynchronous clock parameter,
+create a new parameter for the clock speed, adjust the clock speed itself,
+and away I went.  Thankfully, I had already (over time) gotten rid of any
+inappropriate delays, so the update went smoothly.&lt;/p&gt;
+
+&lt;p&gt;Smoothly?  Indeed, the whole update took less than a half an hour.  (This
+doesn’t include the time it took to originally build and verify a generic
+APB cross-clock domain bridge.)&lt;/p&gt;
+
+&lt;p&gt;… and that’s what you would hope for from well written logic.&lt;/p&gt;
+
+&lt;p&gt;Well, okay, it’s not all roses–I still have to go back and update the user
+guide, update the repository, increment the IP version, update the change log,
+and then bill for the task.  Those tasks will take longer than the actual
+update, but such is the business we are in.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;Let’s face it, this article is a rant.  I know it.  Perhaps you’ll learn
+something from it.  Perhaps I’ll learn something from any debate that will
+ensue.  (Feel free to comment on &lt;a href=&quot;https://reddit.com/r/ZipCPU&quot;&gt;Reddit&lt;/a&gt; …)&lt;/p&gt;
+
+&lt;p&gt;Yes, I charge by the hour.  Yes, messes like these will keep me gainfully
+employed and my family well fed for years to come.  However, I’d rather charge
+for doing the useful work of adding new capabilities to a design rather than
+fixing up someone else’s mess.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;For the vision is yet for an appointed time, but at the end it shall speak, and not lie: though it tarry, wait for it; because it will surely come, it will not tarry. (Habakkuk 2:3)&lt;/em&gt;</description>
+        <pubDate>Wed, 21 Sep 2022 00:00:00 -0400</pubDate>
+        <link>https://zipcpu.com/blog/2022/09/21/vlog-wait.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/blog/2022/09/21/vlog-wait.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>It's not my fault!  Your code is broken.</title>

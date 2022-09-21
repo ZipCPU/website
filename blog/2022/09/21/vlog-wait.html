@@ -1,0 +1,797 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Assignment delay's and Verilog's wait statement</title>
+  <meta name="description" content="I’ve now spent more time than I want to admit to debugging simulation issueswhen using Verilog’s simulation semantics.  Let me therefore share someproblems I...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2022/09/21/vlog-wait.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-102570964-1', 'auto');
+  ga('send', 'pageview');
+
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Assignment delay's and Verilog's wait statement</h1>
+    <p class="post-meta"><time datetime="2022-09-21T00:00:00-04:00" itemprop="datePublished">Sep 21, 2022</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>I’ve now spent more time than I want to admit to debugging simulation issues
+when using Verilog’s simulation semantics.  Let me therefore share some
+problems I’ve come across, together with my proposed solution for them.</p>
+
+<h2 id="the-problems">The Problems</h2>
+
+<p>Today’s problem stems from logic like the following:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="n">trigger_condition</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">some_other_condition_determining_relevance</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="p">#</span><span class="mi">1</span><span class="p">;</span>
+		<span class="n">state_variable</span> <span class="o">=</span> <span class="n">complex_expression</span><span class="p">;</span>
+		<span class="c1">// This then continues for another 50 lines or so</span>
+	<span class="k">end</span>
+<span class="k">end</span></code></pre></figure>
+
+<p>In general, this comes to me in “working” simulation code that’s been handed
+down to me to maintain.  The simulations that use this logic often take hours
+to run, and so debugging this sort of thing can be very time consuming.
+(Costly too–my hourly rate isn’t cheap.)</p>
+
+<p>Let’s walk through this logic for a moment–before tearing it apart.</p>
+
+<table align="center" style="float: right"><caption>Fig 1. Avoid assignment delays</caption><tr><td><img src="/img/vlog-wait/phys-delays.svg" alt="" width="360" /></td></tr></table>
+
+<p>In this example the first condition, the one I’ve called <code class="language-plaintext highlighter-rouge">trigger_condition</code>
+above, is simply some form of data change condition.  Sometimes its a
+reference to a clock edge, sometimes its a reference to a particular piece of
+data changing.  This isn’t the problem.</p>
+
+<p>The second condition, <code class="language-plaintext highlighter-rouge">some_other_condition_determining_relevance</code>, is used
+to weed out all the times the always block might get triggered when you don’t
+want it to be.  For example, it might be triggered during reset or when the
+slave device being modeled is currently responsive to some other
+<code class="language-plaintext highlighter-rouge">trigger_condition</code>.  This is natural.  This is not (yet) a problem either.</p>
+
+<p>So what’s the problem with the logic above?  Well, let’s start with the
+<code class="language-plaintext highlighter-rouge">#1</code> assignment delay.  In this case, it’s not representing a true hardware
+delay.  No, the <code class="language-plaintext highlighter-rouge">#1</code> is there in order to <em>schedule</em> Verilog simulation
+statement execution.  Part of the reason why it’s there is because the rest
+of the block uses <em>blocking</em> logic (i.e. via the <code class="language-plaintext highlighter-rouge">=</code>).  Hence, if this block
+was triggered off of a clock edge, the <code class="language-plaintext highlighter-rouge">#1</code> allows us to reason about what
+follows the clock edge but before the next edge.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 2. Recipe for trouble</caption><tr><td><img src="/img/vlog-wait/always-disaster.svg" alt="" width="360" /></td></tr></table>
+
+<p>Now, let me ask, what happens five years from now when clock speeds get faster?
+Some poor soul (like me) will be hired to maintain this logic, and that poor
+soul will look at the <code class="language-plaintext highlighter-rouge">#1</code> and ask, why is this here?  Maybe it was a <code class="language-plaintext highlighter-rouge">1ns</code>
+delay, and they are now trying to run a clock at 500MHz instead of 100MHz.
+That <code class="language-plaintext highlighter-rouge">1ns</code> delay will need to be understood, and replaced–<em>everywhere</em>
+it was used.  It doesn’t help that the <code class="language-plaintext highlighter-rouge">1ns</code> doesn’t come with any explanations,
+but that may be specific to the examples I’m debugging.</p>
+
+<p>Here’s a second problem, illustrated in Fig. 2: what happens when you use this
+one nanosecond delay in multiple always blocks, similar to this one, all
+depending on each other?  Which one will execute first?</p>
+
+<p>The third problem often follows this one, and it involves a wait statement
+of some type.  To illustrate this, let me modify the example above a bit more.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="n">trigger_condition</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">some_other_condition_determining_relevance</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="p">#</span><span class="mi">1</span><span class="p">;</span>
+		<span class="n">state_variable</span> <span class="o">=</span> <span class="n">complex_expression</span><span class="p">;</span>
+		<span class="c1">// Continue for a while ...</span>
+		<span class="k">wait</span><span class="p">(</span><span class="kt">negedge</span> <span class="n">clk</span><span class="p">);</span>
+		<span class="n">output_value</span> <span class="o">=</span> <span class="n">other_complex_expression</span><span class="p">;</span>
+	<span class="k">end</span>
+<span class="k">end</span></code></pre></figure>
+
+<p>In this case, the user wants to make certain his logic is constant across
+the clock edge, and so he sets all his values on the negative edge of the
+clock.  This leads to two problems: what happens when the <code class="language-plaintext highlighter-rouge">#1</code>
+delay conflicts with the clock edge?  And what happens when the output value
+depends upon other inputs that are set on the negative clock edge?</p>
+
+<table align="center" style="float: right"><caption>Fig 3. Giant case statement dispatching tasks</caption><tr><td><img src="/img/vlog-wait/buried-tasks.svg" alt="" width="360" /></td></tr></table>
+
+<p>Fig. 3 shows another problem, this time when using a case statement.  In this
+case, it’s an attempt to implement a command structure within a modeled device.
+The device can handle one of many commands, so depending on which one is
+received you go and process that command.  The actual example this is drawn
+from was worse, since it depended not only on commands but rather command
+sequences, and the command sequences were found within case statements within
+case statements.</p>
+
+<p>What’s wrong with this?  Well, what happens when the original trigger takes
+place a second time, but the logic in the always block hasn’t finished
+executing?  Perhaps this is erroneous.  Perhaps it finishes just barely on
+the wrong side of the next clock edge.  In my case, I find the bug four hours
+later–on a good day.  It doesn’t help that simulations tend to run rather slow.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 4. FSMs are often easier to debug than long-running tasks</caption><tr><td><img src="/img/vlog-wait/appfsm.svg" alt="" width="360" /></td></tr></table>
+
+<p>A better approach would’ve been to use a state machine rather than embedded
+tasks.  Why is this better?  Well, if for no other reason, a case statement
+would contain state variables which could be seen in the trace file.  That
+means that you could then find and debug what would (or should) happen when/if
+the new command trigger shows up before a prior command completes.</p>
+
+<table align="center" style="float: right"><caption>Fig 5. Repeat LLC logic</caption><tr><td><img src="/img/vlog-wait/appllc.svg" alt="" width="280" /></td></tr></table>
+
+<p>These problems are only compounded when this logic is copied.  For example,
+imagine a device that can do tasks A, B, and C, but requires one of two IO
+protocols to accomplish task A, B, or C.  Now, if that IO protocol logic is
+copied and embedded into each of the protocol tasks, then all three will need
+to be updated when the IO protocol is upgraded.  (I2C becomes I3C, SPI becomes
+Quad SPI, etc.)</p>
+
+<p>While some of these problems are specific to hardware, many are not. 
+<a href="https://en.wikipedia.org/wiki/Magic_number_(programming)">Magic numbers</a>
+are a bad idea in both RTL and software.  Design reuse and software
+reuse are both very real things.  Even a carpenter will build a
+<a href="https://en.wikipedia.org/wiki/jig_(tool)">custom jig of some type</a> when he
+has to make fifty copies of the same item.</p>
+
+<p>The good news is that better approaches exist.</p>
+
+<h2 id="defining-terms">Defining terms</h2>
+
+<p>Before diving into some better approaches, let me take just a couple of moments
+to introduce the terms I will be using.  In general, a test bench has three
+basic (types of) components, as illustrated in Fig. 6.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 6. Test bench components</caption><tr><td><img src="/img/vlog-wait/gencomponents.svg" alt="" width="480" /></td></tr></table>
+
+<ul>
+  <li>
+    <p><strong>The Device Under Test (DUT)</strong>:  The is the hardware component that’s being
+designed, and for which the test has been generated.</p>
+
+    <p>Since the DUT is intended to be synthesizable, Verilog delay statements are
+inappropriate here.</p>
+  </li>
+  <li>
+    <p><strong>The Hardware Device Model, or just model</strong>: Our hardware component is being
+designed to interact with an external piece of hardware.  This component is
+often off-chip, and so our “model” is a simulation component designed to
+interact with our IP in the same way the actual hardware would.</p>
+
+    <p>Although I’ve called these “models” “emulators” in the past, these aren’t
+truly “emulators”.  An “emulator” would imply a description of the actual
+hardware existed, such as an RTL description, yielding an additional level
+of realism in simulation.  Barring sufficient information from the external
+device’s manufacturer to actually and truly “emulate” the device, the test
+designer often settles for a “model” instead.</p>
+
+    <p>Hardware models may naturally require Verilog delays in order to model
+the interfaces they are designed for.  For example, a signal may take some
+time to transition from a known value to an unknown one following a clock
+transition.  As another example, a hardware device may become busy following
+a command of some kind.  The good news is that Verilog can model both of
+these behaviors nicely.</p>
+
+    <p>How to handle these delays “properly” will become part of the discussion
+below.</p>
+  </li>
+  <li>
+    <p><strong>The Test Script, or driver</strong>: This is the component of the design that
+interacts with the device under test, sequencing commands to given to it
+to make sure all of the capabilities of the DUT are properly tested.</p>
+
+    <p>This component of the Verilog test script often reads more like it is
+software than hardware.  Indeed, we’ve <a href="/2021/07/23/cpusim.html">already discussed the idea of
+replacing the test script with a piece of software compiled for a soft-core
+CPU existing in the test environment, and then emulating that CPU as part
+of the simulation model</a>.  The
+benefit of this approach is that it can test and verify the software that
+will be used to drive the hardware under test.  The downside is that
+simulation’s are slow, and adding a CPU to the simulation environment can
+only slow it down further.</p>
+
+    <p>For the purposes of our discussion today I’ll simply note that the test
+script commonly interacts with the design in a <em>synchronous</em> manner.
+Any delays, therefore, need to be synchronized with the clock.</p>
+
+    <p>There is another problem with the driver that we won’t be discussing today.
+This is the simple reality that there’s no way to test all possible
+driver delays.  Will a test driver accurately test if your DUT can handle
+back to back requests, requests separated by a single clock cycle, by two
+clock cycles, by <code class="language-plaintext highlighter-rouge">N</code> clock cycles?  You can’t simulate all of these
+possible delays, but you can catch them using formal methods.</p>
+  </li>
+  <li>
+    <p>Not shown in Fig. 6, but also relevant is the <strong>Simulation Environment</strong>: 
+While the DUT and model are both necessary components of any simulation
+environment, the environment might also contains such additional components
+as an <a href="/blog/2019/07/17/crossbar.html">AXI interconnect</a>,
+<a href="/zipcpu/2018/01/01/zipcpu-isa.html">CPU</a>, DMA,
+and/or <a href="/zipcpu/2018/07/13/memories.html">RAM</a>,
+all of which are neither the test script, DUT, or model.</p>
+
+    <p>Ideally these extra components will have been tested and verified in other
+projects prior to the current one, although this isn’t always the case.</p>
+  </li>
+</ul>
+
+<p>Now that we’ve taken a moment to define our terms, we can now return to the
+simulation modeling problem we began.</p>
+
+<h2 id="better-practices">Better practices</h2>
+
+<p>The good news is that Verilog was originally written as a language for
+driving simulations.</p>
+
+<p>Even better, subsets of Verilog exist which can do a good job of modeling
+synthesizable logic.  This applies to both asynchronous and synchronous logic.
+The assignment delay problems that I’ve outlined above, however, arise from
+trying to use Verilog to model a mix of logic and software when the goal was
+to create a hardware device model.</p>
+
+<p>Here are some tips, therefore, for using delays in Verilog:</p>
+
+<ol>
+  <li>
+    <p>Write synthesizable simulation logic where possible.</p>
+
+    <p>This is really only an issue for test bench or modeling logic.  It’s not
+really an issue for logic that was meant to be synthesizable in the first
+place.</p>
+
+    <p>The good news about writing test bench logic in a synthesizable fashion
+is that you might gain the ability to synthesize your model in hardware,
+and then run tests on it just that much faster.  You could then
+also get a second benefit by formally verifying your device model–it’d
+save you that much time later when running integrated simulations.</p>
+
+    <p>As an example, compare the following two approaches for verifying a test
+chip:</p>
+
+    <p>ASIC Test chip #1: Has an SPI port capable of driving internal registers.
+This is actually a really good idea, since you can reduce the number of 
+wires necessary to connect to such a test chip.  The problem, however, was
+that the SPI driver came from encrypted vendor IP.  Why was this a problem?
+It became a problem when the test team tried to connect to the device
+once it had been realized in hardware.  They tried to connect their CPU to
+this same SPI port to drive it–and then didn’t drive it according to
+protocol properly.</p>
+
+    <p>The result of testing ASIC test chip #1?  I got a panic’d call from a
+client, complaining that the SPI interface to the test chip wasn’t working
+and asking if I could find the bugs in it.</p>
+
+    <p>ASIC Test chip #2: Also has a SPI port for reading and writing internal
+registers.  In this chip, however, the SPI port was formally verified
+as a composition of both the writer and the reader–much as Fig. 7 shows
+below.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><caption>Fig 7. Sometimes, you'll have both RTL pieces available to you</caption><tr><td><img src="/img/vlog-wait/excontrol.svg" alt="" width="480" /></td></tr></table>
+
+<p>I say “much as Fig. 7 shows” because the verification of this port wasn’t
+   done with using the CPU as part of the test script.  However, because
+   both the SPI master and SPI slave were verified together, and even better
+   because they were <em>formally</em> verified in an environment containing both
+   components, the test team can begin it’s work with a verified RTL interface.</p>
+
+<p>You can even go one step farther by using a soft-core CPU to <a href="/2021/07/23/cpusim.html">verify the
+   software driver</a> at the same
+   time.  This is the full extent of what’s shown in Fig. 7.  As I mentioned
+   above, the formal verification for ASIC test chip #2 stopped at the AXI-lite
+   control port for the SPI master.  When testing this chip as part of an
+   integrated test, a test script was used to drive a Bus Functional Model
+   (BFM), rather than actual CPU software.  However, if you just read the
+   test script’s calls to the BFM, you would have the information necessary
+   to build a verified software driver.</p>
+
+<ol start="2">
+  <li>
+    <p>Use <code class="language-plaintext highlighter-rouge">always @(*)</code> for combinatorial blocks, and <code class="language-plaintext highlighter-rouge">always @(posedge clk)</code>
+(or negedge) or <code class="language-plaintext highlighter-rouge">always @(posedge clk or negedge reset_n)</code> for synchronous
+logic.</p>
+
+    <p>While I like using the positive edge of a clock for everything, the actual
+edge you need to use will likely be determined by the device and protocol
+you are modeling.  The same is true of the reset.</p>
+
+    <p>I would discourage the use of <code class="language-plaintext highlighter-rouge">always @(trigger)</code>, where <code class="language-plaintext highlighter-rouge">trigger</code> is some
+combinatorial signal–lest you forget some required trigger component.  I
+would also discourage the use of any <code class="language-plaintext highlighter-rouge">always @(posedge trigger)</code> blocks where
+<code class="language-plaintext highlighter-rouge">trigger</code> wasn’t a true clock–lest you create a race condition within your
+logic.  I use the word <em>discourage</em>, however, because some modeling contexts
+require triggering on non-clocked logic.  If there’s no way around it,
+then you do what you have to do to get the job done.</p>
+  </li>
+  <li>
+    <p>Synchronous (clocked) logic should use <em>non-blocking</em> assignments (<code class="language-plaintext highlighter-rouge">&lt;=</code>),
+and combinatorial logic should use <em>blocking</em> assignments (<code class="language-plaintext highlighter-rouge">=</code>).</p>
+
+    <p>It seems like my debugging problems began when the prior designer used
+a delay instead of proper blocking assignments.</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>		<span class="c1">// SYNCHRONOUS block</span>
+	<span class="k">begin</span>
+		<span class="p">#</span><span class="mi">1</span><span class="p">;</span>			<span class="c1">// MAGIC NUMBER, doesn't model H/W, etc</span>
+		<span class="n">value</span> <span class="o">=</span> <span class="n">expression</span><span class="p">;</span>	<span class="c1">// BLOCKING LOGIC!</span>
+		<span class="c1">// ...</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Just … don’t do this.  When you start doing things like this, you’ll
+   never know if (whatever) <code class="language-plaintext highlighter-rouge">expression</code> had finished evaluating, or be able
+   to keep track of when the <code class="language-plaintext highlighter-rouge">#1</code> delay needs to be updated.</p>
+
+<ol start="4">
+  <li>
+    <p>Device models aren’t test drivers.  Avoid consuming time within them–such
+as with a wait statement of any type.  Let the time be driven elsewhere by
+external events.</p>
+
+    <p>This applies to both delays and wait conditions within <code class="language-plaintext highlighter-rouge">always</code> blocks, as
+well as any tasks that might be called from within them.  Non-blocking
+assignment delays work well for this purpose.</p>
+
+    <p>Ideally, device models should use finite state machines, as in Fig. 4,
+to model the passing of time if necessary, rather than consuming time
+with <code class="language-plaintext highlighter-rouge">wait</code> statements or ill defined assignment delays, as in Fig. 3.</p>
+  </li>
+  <li>
+    <p>When driving synchronous logic from a test script, <em>synchronize</em> any
+test driven signals using <em>non-blocking</em> assignments.</p>
+
+    <p>I have now found the following simulation construct several times over:</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="k">begin</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ARESETN</span><span class="p">);</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">);</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">);</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">);</span>
+
+		<span class="n">ARVALID</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">);</span>
+		<span class="n">ARVALID</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="c1">// the problem continues on ...</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Sometimes the author uses the negative edge of the clock instead of the
+positive edge here to try to “schedule” things away from the clock edge.
+Indeed, I’ve been <a href="/blog/2017/06/21/looking-at-verilator.html">somewhat guilty of this
+myself</a>.
+Sadly, this causes no end of confusion when trying to analyze a resulting
+trace file.</p>
+
+<p>A better approach would be to synchronize this logic with non-blocking
+assignments.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="k">begin</span>
+		<span class="n">ARVALID</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>			<span class="c1">// Any initial value</span>
+		<span class="c1">// Other initial AR* values may be reset here as well</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">negedge</span> <span class="n">ARESETN</span><span class="p">);</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">);</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">);</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">);</span>
+
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">ARVALID</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+			<span class="c1">// Set the rest of the AR* values</span>
+		<span class="k">end</span>
+
+		<span class="k">while</span><span class="p">(</span><span class="n">ARVALID</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">ACLK</span><span class="p">)</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">ARREADY</span><span class="p">)</span>
+				<span class="n">ARVALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">end</span>
+
+		<span class="c1">// Script continues further</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This will avoid any delta-time cycle issues that would otherwise be
+   very difficult to find and debug.  Note that this also works because this
+   block is the only block controlling <code class="language-plaintext highlighter-rouge">ARVALID</code> from within the test bench.
+   Should you wish to control <code class="language-plaintext highlighter-rouge">ARVALID</code> from multiple test bench clocks, you
+   may run into other concurrency problems.</p>
+
+<p>While you can still do this sort of thing with Verilator, I’ll reserve
+   my solution for how to do it for another post.</p>
+
+<ol start="6">
+  <li>
+    <p>Pick a clock edge and use it.  Don’t transition on both edges–unless the
+hardware protocol requires it.</p>
+
+    <p>As I alluded to above, I’ve seen a lot of AXI modeling that attempts to set
+the various AXI signals on the <em>negative</em> edge of the clock so that any and
+all logic inputs will be stable later when the positive edge comes around.
+This approach is all well and good until someone wants to do post–layout
+timing analysis, or some other part of your design also wants to use the
+negative edge, and then pain ensues.</p>
+
+    <p>Sadly, this means that the project may be turned in and then rest in a
+“working” state for years before the problem reveals itself.</p>
+
+    <p>In a similar fashion, what happens when you have two always blocks, both
+using a <code class="language-plaintext highlighter-rouge">#1</code> delay as illustrated in Fig. 2 above?  Or, alternatively, what
+happens when you want the tools to put real post place-and-route delays into
+your design for a timing simulation?  You may find you’ve already lost your
+timing slack due to a poor simulation test bench or model.  Need I say that
+it would be embarrassing to have to own up to a timing failure in simulation,
+due to your own simulation constructs?</p>
+  </li>
+  <li>
+    <p>There is a time for using multiple always blocks–particularly when modeling
+DDR devices.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: right"><caption>Fig 8. Example DDR simulation logic</caption><tr><td><img src="/img/vlog-wait/ddrsim.svg" alt="" width="360" /></td></tr></table>
+
+<p>In today’s high speed devices, I’ve often found the need for multiple
+   always blocks, triggered off of different conditions, to capture the
+   various triggers and describe the behavior I want.  One, for example,
+   might trigger off the positive edge, and another off the negative edge.
+   This is all fine, well, and good for <em>simulation</em> (i.e. <em>test bench</em>)
+   logic.  While this would never work in hardware, it can easily be used to 
+   accurately model behavior in simulation.</p>
+
+<ol start="8">
+  <li>
+    <p>Use assignment delays to model <em>physical</em> hardware delays <em>only</em>.</p>
+
+    <p>For example, if some event will cause the ready line to go low for 50
+microseconds, then you might write:</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">parameter</span>	<span class="n">tWAIT</span> <span class="o">=</span> <span class="mi">50_000</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">event_and_not_reset</span> <span class="o">&amp;&amp;</span> <span class="n">ready</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">ready</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+		<span class="n">ready</span> <span class="o">&lt;=</span> <span class="p">#</span><span class="n">tWAIT</span> <span class="mb">1'b1</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Notice how I’ve carefully chosen not to consume any time within this
+   always block, yet I’ve still managed to create something that will capture
+   the passage of time.  In this case, I’ve used the Verilog <code class="language-plaintext highlighter-rouge">&lt;=</code> together
+   with a delay statement to schedule the transition of <code class="language-plaintext highlighter-rouge">ready</code> from zero
+   back to one by #tWAIT ns.</p>
+
+<p>I’ve now used this approach on high speed IO lines as well, with a lot
+   of success.  For example, if the data will be valid <code class="language-plaintext highlighter-rouge">tDVH</code> after the
+   clock goes high and remain valid for <code class="language-plaintext highlighter-rouge">tDV</code> nanoseconds, then you might
+   write:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">chip_enable</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">pre_output_value</span> <span class="o">&lt;=</span> <span class="n">some_expression</span><span class="p">;</span>
+
+		<span class="n">output_valid</span> <span class="o">&lt;=</span> <span class="p">#</span><span class="n">tDVH</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="n">output_valid</span> <span class="o">&lt;=</span> <span class="p">#(</span><span class="n">tDVH</span><span class="o">+</span><span class="n">tDV</span><span class="p">)</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">end</span>
+
+	<span class="k">assign</span>	<span class="n">output_value</span> <span class="o">=</span> <span class="p">(</span><span class="n">output_valid</span><span class="p">)</span> <span class="o">?</span> <span class="n">pre_output_value</span> <span class="o">:</span> <span class="mb">1'bz</span><span class="p">;</span></code></pre></figure>
+
+<p>I’ve even gone so far in some cases to model the ‘x values in this fashion
+   as well.  That way the output is properly ‘x while the voltage is swinging
+   from one value to the next.</p>
+
+<ol start="9">
+  <li>
+    <p>No <a href="https://en.wikipedia.org/wiki/Magic_number_(programming)">magic numbers</a>!
+Capture hardware delays in <em>named</em> parameters, specparams, and registers,
+rather than using numeric assignment delays.</p>
+
+    <p>For example, were I modeling a flash memory, I might do something like the
+following to model an erase:</p>
+  </li>
+</ol>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`timestep</span>	<span class="mi">1</span><span class="n">ns</span> <span class="o">/</span> <span class="mi">1</span><span class="n">ns</span>
+<span class="c1">// ...</span>
+	<span class="k">parameter</span> <span class="kt">real</span>	<span class="n">tERASE</span> <span class="o">=</span> <span class="mi">500_000</span><span class="p">;</span>	<span class="c1">// 500 microseconds</span>
+
+	<span class="c1">// Decode the SPI interface.  We start by counting clocks</span>
+	<span class="c1">//  from the negative edge of CSN</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">SCK</span> <span class="kt">or</span> <span class="kt">posedge</span> <span class="n">CSN</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">CSN</span><span class="p">)</span>
+		<span class="n">clock_counts</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">clock_counts</span><span class="p">[</span><span class="mi">5</span><span class="p">])</span>
+		<span class="c1">// Count clock ticks</span>
+		<span class="n">clock_counts</span> <span class="o">&lt;=</span> <span class="n">clock_counts</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">else</span>
+		<span class="c1">// Once clock_counts[5], we're past 32.  We</span>
+		<span class="c1">// can keep counting, but the results will be</span>
+		<span class="c1">// irrelevant for this example.</span>
+		<span class="n">clock_counts</span><span class="p">[</span><span class="mi">4</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">clock_counts</span><span class="p">[</span><span class="mi">4</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+
+	<span class="c1">// With each new clock tick, we capture one more bit</span>
+	<span class="c1">// from the interface.</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">SCK</span><span class="p">)</span>
+		<span class="n">sreg</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">sreg</span> <span class="o">&lt;&lt;</span> <span class="mi">1</span><span class="p">)</span> <span class="o">|</span> <span class="n">MOSI</span><span class="p">;</span>
+
+	<span class="c1">// An erase command takes place after 32 SCK clock edges: the</span>
+	<span class="c1">// first 8 contain the command, the next 24 contain the address</span>
+	<span class="c1">// for the command.  Yes, this assumes 24-bit addressing.</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">erase_command</span> <span class="o">=</span> <span class="n">CSN</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">clock_counts</span> <span class="o">==</span> <span class="mi">31</span><span class="p">)</span>
+				<span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">sreg</span><span class="p">[</span><span class="mi">30</span><span class="o">:</span><span class="mi">23</span><span class="p">]</span> <span class="o">==</span> <span class="n">CMD_ERASE</span><span class="p">);</span>
+		<span class="n">erase_address</span> <span class="o">=</span> <span class="o">{</span> <span class="n">sreg</span><span class="p">[</span><span class="mi">22</span><span class="o">:</span><span class="mi">11</span><span class="p">],</span> <span class="mh">12'h0</span> <span class="o">}</span><span class="p">;</span>
+	<span class="k">end</span>
+
+	<span class="c1">// We only issue and act on the command once we get to the final</span>
+	<span class="c1">// SCK clock edge of the command sequence--the 32nd clock edge after</span>
+	<span class="c1">// CSn activates (lowers)</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">SCK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">erase_command</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">busy</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Set an internal busy bit.  We'll remain busy for</span>
+		<span class="c1">// tERASE ns.</span>
+		<span class="n">busy</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">busy</span> <span class="o">&lt;=</span> <span class="p">#</span><span class="n">tERASE</span> <span class="mb">1'b0</span><span class="p">;</span>
+
+		<span class="c1">// Actually erase the memory in question</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span> <span class="o">&lt;</span> <span class="n">BLOCK_SIZE</span><span class="p">;</span> <span class="n">k</span><span class="o">=</span><span class="n">k</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="n">mem</span><span class="p">[</span><span class="n">k</span> <span class="o">+</span> <span class="n">erase_address</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mh">8'hff</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Notice the use of <code class="language-plaintext highlighter-rouge">tERASE</code> rather than some arbitrary erase time buried among
+the logic.  Placing all such device dependent times in one location (at the
+top of the file) will then make it easier to upgrade this logic for a new
+and faster device at a later time.</p>
+
+<p>We can also argue about when the actual erase should take place.  As long
+as the user can’t interact with the device while it’s <code class="language-plaintext highlighter-rouge">busy</code>, this probably
+doesn’t make a difference.  Alternatively, we could register the erase
+address and set a time for later when the erase should take place.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">erase_memory_flag</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">SCK</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">erase_command</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">busy</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">busy</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">busy</span> <span class="o">&lt;=</span> <span class="p">#</span><span class="n">tERASE</span> <span class="mb">1'b0</span><span class="p">;</span>
+
+		<span class="n">erase_memory_flag</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="n">r_erase_address</span> <span class="o">&lt;=</span> <span class="n">erase_address</span><span class="p">;</span>
+
+		<span class="c1">// Render the memory in question unknown</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span> <span class="o">&lt;</span> <span class="n">BLOCK_SIZE</span><span class="p">;</span> <span class="n">k</span><span class="o">=</span><span class="n">k</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="n">mem</span><span class="p">[</span><span class="n">k</span> <span class="o">+</span> <span class="n">erase_address</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mi">8</span><span class="err">'</span><span class="n">hx</span><span class="p">;</span>
+	<span class="k">end</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">negedge</span> <span class="n">busy</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">erase_memory_flag</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Actually erase the memory in question</span>
+		<span class="k">for</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span> <span class="n">k</span> <span class="o">&lt;</span> <span class="n">BLOCK_SIZE</span><span class="p">;</span> <span class="n">k</span><span class="o">=</span><span class="n">k</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span>
+			<span class="n">mem</span><span class="p">[</span><span class="n">k</span> <span class="o">+</span> <span class="n">r_erase_address</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="mh">8'hff</span><span class="p">;</span>
+
+		<span class="c1">// Clear the flag</span>
+		<span class="n">erase_memory_flag</span> <span class="o">&lt;=</span> <span class="p">#</span><span class="n">tCK</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Even this isn’t perfect, however, since we now have a transition taking place
+on something other than a clock.  Given that the interface clock isn’t
+continuous, this may still be the best option to create a reliable edge.</p>
+
+<ol start="10">
+  <li>The <a href="https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)">rule of
+   3</a>
+   applies to hardware as well as software: if you have to write the same
+   logic more than twice, then you are doing something wrong.  Refactor it.
+   Encapsulate it.  Make a module to describe it, and then reuse that module.</li>
+</ol>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 9. If you have to build it more than twice, refactor it</caption><tr><td><img src="/img/vlog-wait/better-appllc.svg" alt="" width="280" /></td></tr></table>
+
+<p>Remember our example from Fig. 5 above?  Fig. 9 shows a better approach to
+   handling three separate device tasks, each with two separate protocols that
+   might be used to implement them.</p>
+
+<p>For protocols that separate themselves nicely between the link layer
+   control (LLC) protocol and a media access control (MAC) layer, this works
+   nicely to rearrange the logic so that each layer only needs to be written
+   once, rather than duplicated within structures implementing both MAC and
+   LLC layers together.</p>
+
+<table align="center" style="float: right"><caption>Fig 10. The rule of Gold</caption><tr><td><img src="/img/vlog-wait/rule-of-gold.svg" alt="" width="280" /></td></tr></table>
+
+<p>Remember: fully verified, well tested, well written logic is pure
+<a href="/blog/2020/01/13/reuse.html">re-usable gold</a> in this
+business.  Do the job right the first time, and you’ll reap dividends for years
+to come.</p>
+
+<h2 id="todays-story">Today’s story</h2>
+
+<p>A client recently called me to ask if I could modify an IP I had written
+so that it would be responsive on an APB slave input with a different
+clock frequency from the one the rest of the device model used.</p>
+
+<p>The update required inserting an APB cross clock domain bridge into the IP.
+This wasn’t hard, since I’d built (and formally verified) such a bridge two
+months prior–I just needed to connect the wires and do a bit of signal
+renaming for the case when the bridge wasn’t required.</p>
+
+<p>That was the easy part.</p>
+
+<p>But, how shall this new capability be tested?  It would need an updated test
+script and more.</p>
+
+<p>Thankfully, this was also easy.</p>
+
+<p>Because I had built the top level simulation construct using parameters, which
+<a href="/zipcpu/2022/07/04/zipsim.html">could easily be overridden by the test
+driver</a>, the test suite
+was easy to update: I just had to set an asynchronous clock parameter,
+create a new parameter for the clock speed, adjust the clock speed itself,
+and away I went.  Thankfully, I had already (over time) gotten rid of any
+inappropriate delays, so the update went smoothly.</p>
+
+<p>Smoothly?  Indeed, the whole update took less than a half an hour.  (This
+doesn’t include the time it took to originally build and verify a generic
+APB cross-clock domain bridge.)</p>
+
+<p>… and that’s what you would hope for from well written logic.</p>
+
+<p>Well, okay, it’s not all roses–I still have to go back and update the user
+guide, update the repository, increment the IP version, update the change log,
+and then bill for the task.  Those tasks will take longer than the actual
+update, but such is the business we are in.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Let’s face it, this article is a rant.  I know it.  Perhaps you’ll learn
+something from it.  Perhaps I’ll learn something from any debate that will
+ensue.  (Feel free to comment on <a href="https://reddit.com/r/ZipCPU">Reddit</a> …)</p>
+
+<p>Yes, I charge by the hour.  Yes, messes like these will keep me gainfully
+employed and my family well fed for years to come.  However, I’d rather charge
+for doing the useful work of adding new capabilities to a design rather than
+fixing up someone else’s mess.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>For the vision is yet for an appointed time, but at the end it shall speak, and not lie: though it tarry, wait for it; because it will surely come, it will not tarry. (Habakkuk 2:3)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
