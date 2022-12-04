@@ -6,14 +6,904 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Fri, 25 Nov 2022 11:58:19 -0500</pubDate>
-    <lastBuildDate>Fri, 25 Nov 2022 11:58:19 -0500</lastBuildDate>
+    <pubDate>Sat, 03 Dec 2022 20:53:07 -0500</pubDate>
+    <lastBuildDate>Sat, 03 Dec 2022 20:53:07 -0500</lastBuildDate>
     <generator>Jekyll v4.2.0</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Your soft-core CPU won't boot.  Where should you start debugging?</title>
+        <description>&lt;p&gt;When I first decided to start &lt;a href=&quot;/about/gisselquist-technology.html&quot;&gt;Gisselquist
+Technology&lt;/a&gt;, one of my
+first internal projects was to see if I could get the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Linux&quot;&gt;Linux&lt;/a&gt; kernel to boot from a read-only
+file system–to promote longevity on a flash device, using a kernel that I
+could swap out remotely at a later time via a call to
+&lt;a href=&quot;https://wiki.archlinux.org/title/kexec&quot;&gt;kexec()&lt;/a&gt;.  I intended to
+do this using a &lt;a href=&quot;https://beagleboard.org/black&quot;&gt;Beagle Board Black&lt;/a&gt;, and then
+to sell the capability to a customer as something they could do with their
+own internally developed boards.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/blank-screen.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;So, I made a bunch of kernel configuration changes, and then tried to boot
+my newly configured kernel.&lt;/p&gt;
+
+&lt;p&gt;Nothing happened.&lt;/p&gt;
+
+&lt;p&gt;I just stared at a blank screen.&lt;/p&gt;
+
+&lt;p&gt;At the time, I had no idea where to start.&lt;/p&gt;
+
+&lt;p&gt;Since that time, I’ve gone on to build &lt;a href=&quot;/about/zipcpu.html&quot;&gt;my own
+CPU&lt;/a&gt;.  In other words, I’ve now had
+to deal with this problem many times over, where I “start” my CPU and
+nothing happens.  No, I haven’t gone back to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Linux&quot;&gt;Linux&lt;/a&gt;
+kernel, but I’ve
+still had the same basic problem.&lt;/p&gt;
+
+&lt;p&gt;There is one key difference, however: with a soft-core CPU, 1) I know my
+hardware (I never knew the ARM that well), and 2) I can run a
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+of that hardware and &lt;a href=&quot;/blog/2017/07/08/getting-started-with-wbscope.html&quot;&gt;get a
+trace&lt;/a&gt;
+leading me straight to the problem.  (Yes, this is a
+painful approach, but it is a reliable one.)&lt;/p&gt;
+
+&lt;p&gt;So, let me offer you some of the lessons I’ve learned while trying to debug
+the startup of the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.
+Specifically, how shall the CPU be debugged between when it is released from
+reset and the first (successful) call to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;printf()&lt;/code&gt;?&lt;/p&gt;
+
+&lt;h2 id=&quot;how-to-debug-a-boot-failure&quot;&gt;How to debug a boot failure&lt;/h2&gt;
+
+&lt;p&gt;So, let’s look into how one might debug a “boot failure”.  In this case, by
+“boot failure”, I mean that you’ve “loaded” both your soft-core CPU either
+into &lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+or onto an FPGA, and your program onto your memory device
+and then something goes wrong between &lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;releasing the CPU from
+reset&lt;/a&gt;
+and the first console output.  The question here and now is, how do you
+debug that?  I mean, a CPU represents a lot of logic to dig through, and
+there’s a lot of software between reset and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt;.  How do you go about
+narrowing down the problem to find the bug?&lt;/p&gt;
+
+&lt;p&gt;Here’s some of the approaches I’ve found valuable.&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Start at the &lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;instruction
+fetch&lt;/a&gt;&lt;/p&gt;
+
+    &lt;p&gt;My first step is almost always to look at a
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+trace of the &lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;instruction
+fetch&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;For this, you’ll first need a hex dump of the program you are trying to run.
+I usually get this from &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;objdump -S -D &amp;lt;program&amp;gt;&lt;/code&gt;.  Indeed, I use this
+command so often, I have a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/board/Makefile#L80-L81&quot;&gt;common “make”
+target&lt;/a&gt;
+that I will use to produce this dump file.&lt;/p&gt;
+
+    &lt;p&gt;Now, looking at the dump file, open a &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;simulation
+trace&lt;/a&gt; and look at the
+address and value of the first several instructions coming from the
+&lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;instruction fetch&lt;/a&gt;
+and going to the CPU’s core.  These address/value pairs
+should match a dump of your executable file.&lt;/p&gt;
+
+    &lt;p&gt;If they don’t match, that should tell you where to look next:&lt;/p&gt;
+
+    &lt;ul&gt;
+      &lt;li&gt;
+        &lt;p&gt;Reset problems&lt;/p&gt;
+
+        &lt;p&gt;Are you getting any instructions from the
+&lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;instruction fetch&lt;/a&gt;
+at all?  If not, you might have a bug in your &lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;reset
+control&lt;/a&gt;.
+Does the CPU come out of reset at all?  If it does, does it come out
+of reset reading from the right address?&lt;/p&gt;
+
+        &lt;p&gt;It can be a challenge to get a CPU, configured to boot from a
+&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash memory&lt;/a&gt;
+address, to start from a different address describing some other memory
+that might be easier to work with–such as block RAM.  I often do this to
+initially verify the CPU, before verifying the
+&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash memory&lt;/a&gt;, but
+getting a program to load and start properly from somewhere other than the
+reset address can be a true test of both the loader and the &lt;a href=&quot;/zipcpu/2017/07/26/cpu-sim-debugger.html&quot;&gt;CPU’s
+debugging port&lt;/a&gt;.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;Loader&lt;/p&gt;
+
+        &lt;p&gt;Did your software get loaded into the right place?  That is, if the CPU
+is coming out of reset properly, and if it is reading from the right
+addresses, is it getting the right values?  If not, then this is worth
+chasing down through the
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD trace&lt;/a&gt;.
+You might find that you haven’t loaded the right values into memory in
+the first place.  (Or … you might also find that either your
+&lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;instruction fetch&lt;/a&gt;
+unit, your
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;interconnect&lt;/a&gt;, or
+your memory controller are broken ….)&lt;/p&gt;
+
+        &lt;p&gt;In my case, I often need to be reminded that the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; is a &lt;a href=&quot;https://en.wikipedia.org/wiki/Endianness&quot;&gt;big 
+endian&lt;/a&gt; machine while my host
+computer is a x86 type of &lt;a href=&quot;https://en.wikipedia.org/wiki/Endianness&quot;&gt;little
+endian&lt;/a&gt; machine.  Sometimes
+a translation is required between the two.&lt;/p&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/nfs.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Memory controller problems&lt;/p&gt;
+
+    &lt;p&gt;Before you start your CPU, it’s often worth double checking the load
+interface.  After writing to address XYZ, for example, can you read the
+same value back from address XYZ that you have just written to it?  This
+problem may be indistinguishable from a loader problem.  In both cases,
+values will be read from memory, but they won’t be the right values.&lt;/p&gt;
+
+    &lt;p&gt;To tell the difference between loader and memory controller problems, pick
+one address that the
+&lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;fetch&lt;/a&gt;
+returns in error and track what’s written to it.
+If the loader puts the right value into it, but the memory controller
+returns something else, then you know to look into your memory controller
+for the bug.  We’ll come back to this again in a moment.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/financial.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;You can often dig into this bug using a &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging
+  bus&lt;/a&gt;: While &lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;holding
+  the CPU in
+  reset&lt;/a&gt;,
+  write to the memory that will hold it’s program and then
+  read the memory values back out.  They should match.  This doesn’t always
+  work, however, since the CPU might use types of accesses to the memory
+  that the &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debug bus&lt;/a&gt;
+  &lt;a href=&quot;/2021/12/30/dbgaxil.html&quot;&gt;doesn’t support–things like
+  &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ARLEN&amp;gt;0&lt;/code&gt; or &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ARBURST=WRAP&lt;/code&gt;&lt;/a&gt;–but
+  it’s at least a good start.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/why-auto.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Bus addressing&lt;/p&gt;
+
+    &lt;p&gt;There’s always the possibility that you have an error in how the
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;bus interconnect&lt;/a&gt;
+was set up.  Perhaps the
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;bus interconnect&lt;/a&gt;
+is routing the CPU’s reset address to the wrong slave, perhaps you have
+the wrong number of address wires driving the slave.  Either way, you’ll
+see this problem when tracing the instruction request from the CPU back
+to the bus slave responding to it.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;ol start=&quot;2&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; is just a bunch of memory copies.  Look for the loops.&lt;/p&gt;
+
+    &lt;p&gt;The first piece of software any CPU starts is often known as
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;.  This
+is the software that sits between reset and main().  This is the software
+responsible for placing your &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt; program into memory.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 1. CRT0 is primarily a bunch of memory copies&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/crt0.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The first thing
+   &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;
+   needs to do is to configure your RAM or ROM controllers.  The next step
+   is usually a series of memory copies.&lt;/p&gt;
+
+&lt;p&gt;On many computers, &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;
+   is written in assembler.  While I tried to avoid that with the
+   &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;, there’s still &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/bc3ced1d51c975b20877d39aac0a578a461835f5/sim/zipsw/zlib/crt0.c#L165-L219&quot;&gt;a small
+   assembly routine required&lt;/a&gt;
+   before I can transition to the C function that performs the actual
+   memory copies–&lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/bc3ced1d51c975b20877d39aac0a578a461835f5/sim/zipsw/zlib/crt0.c#L266&quot;&gt;a function I’ve named &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_bootloader&lt;/code&gt;&lt;/a&gt;.
+   The small assembler script is responsible for any hardware configurations
+   necessary to get the RAM running, for then setting the
+   &lt;a href=&quot;https://en.wikipedia.org/wiki/Stack_register&quot;&gt;stack pointer&lt;/a&gt;,
+   and finally for calling the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_bootloader&lt;/code&gt; function.  This is marked
+   as step 1 in Fig. 1 above.  Because this step is so small, typically
+   less than 20 instructions, it can easily be debugged using the
+   &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD trace file&lt;/a&gt; if necessary.&lt;/p&gt;
+
+&lt;p&gt;This is not the case with the step that follows.&lt;/p&gt;
+
+&lt;p&gt;The first step of the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_bootloader&lt;/code&gt; function, marked as step 2 in Fig. 1,
+   is a big memory copy.  It will &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/zlib/crt0.c#L324-L333&quot;&gt;copy instruction memory from ROM to RAM&lt;/a&gt;,
+   and then again to &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/zlib/crt0.c#L324-L333&quot;&gt;copy any pre-initialized global variables from ROM to
+   RAM&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Debugging this memory copy can be a challenge.&lt;/p&gt;
+
+&lt;p&gt;So how do you go about debugging a
+   &lt;a href=&quot;https://cplusplus.com/reference/cstring/memcpy/&quot;&gt;memcpy()&lt;/a&gt;?
+   That piece of software 
+   is just a huge loop!  The CPU may be copying millions of bytes, and
+   so staring at this trace can quickly get frustrating.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/zippc.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Here’s the trick: instruct your
+   &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD&lt;/a&gt;
+   &lt;a href=&quot;https://gtkwave.sourceforge.net&quot;&gt;viewer&lt;/a&gt;
+   (I use &lt;a href=&quot;http://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt;)
+   to display the CPU instruction address register, often called the &lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;program
+   counter or PC (for short)&lt;/a&gt;,
+   as an “analog” waveform.  Then zoom out.  Watch how this waveform changes,
+   and you’ll quickly find where the loop begins and ends.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Make sure the bus doesn’t freeze up while reading.  This is often a sign
+that you didn’t formally verify a bus component.  It could be either
+&lt;a href=&quot;https://zipcpu.com/zipcpu/2021/04/17/axilops.html&quot;&gt;CPU’s memory
+controller&lt;/a&gt;, the
+hardware memory controller, or the
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;interconnect&lt;/a&gt; between
+the two.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Look for loops that do not end.  This is often a sign that either the
+CPU can’t execute the instructions you think it can, or that the CPU
+is reading the wrong data from memory.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Now debug the beginning and ending of these loops&lt;/p&gt;
+
+    &lt;p&gt;If the first word is correctly copied into memory but the last word is not,
+then bisect the loop as many times as necessary to find the bug.  Perhaps
+you are copying from a device that isn’t as big as you think it is?
+Perhaps you have an incorrect copy size?&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;One problem I’ve often had here can be traced to trying to use one
+   &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;
+   routine for many hardware situations.  For example, sometimes I’ll have a
+   high speed (block RAM) address range to copy memory to in addition to a
+   (slower speed) SDRAM address range.  To tell the difference, I need to
+   check this block RAM address against NULL &lt;em&gt;after linking&lt;/em&gt;.  However, GCC
+   will often &lt;em&gt;assume&lt;/em&gt; the address is not NULL (because of how I’ve declared
+   it), and so skip this comparison.  In this case, the CPU didn’t run all the
+   &lt;a href=&quot;https://cplusplus.com/reference/cstring/memcpy/&quot;&gt;memcpy()&lt;/a&gt;’s I had
+   requested.  Looking over how
+   &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/zlib/crt0.c&quot;&gt;CRT0&lt;/a&gt;
+   got translated to assembly should show you if the NULL checks were removed
+   by the compiler or not.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/know-assembly.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;After copying program memory and initial variables, the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_bootloader&lt;/code&gt;
+   routine then needs to &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/zlib/crt0.c#L335-L343&quot;&gt;zero
+   out&lt;/a&gt;.
+   the &lt;a href=&quot;https://en.wikipedia.org/wiki/.bss&quot;&gt;BSS data segment&lt;/a&gt;.  This basically
+   requires a glorified
+   &lt;a href=&quot;https://cplusplus.com/reference/cstring/memset/&quot;&gt;memset()&lt;/a&gt;,
+   which can be debugged in the same fashion as the
+   &lt;a href=&quot;https://cplusplus.com/reference/cstring/memcpy/&quot;&gt;memcpy()&lt;/a&gt; above.&lt;/p&gt;
+
+&lt;ol start=&quot;3&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Verify the &lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;instruction
+fetch&lt;/a&gt; following the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; routine&lt;/p&gt;
+
+    &lt;p&gt;Once &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/zlib/crt0.c&quot;&gt;CRT0&lt;/a&gt;
+completes, that is once both the (alternative)
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memcpy/&quot;&gt;memcpy()&lt;/a&gt; and
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memset/&quot;&gt;memset()&lt;/a&gt;
+functions complete, the CPU should jump to the beginning of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt;.
+This is illustrated as step 4 in Fig. 1 above, and shown in Fig. 2 below.
+Therefore, let’s go back to the &lt;a href=&quot;/zipcpu/2018/03/21/dblfetch.html&quot;&gt;instruction
+fetch&lt;/a&gt;
+and see that it does so.&lt;/p&gt;
+
+    &lt;p&gt;Does the CPU return from the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_bootloader&lt;/code&gt; properly?  Or did
+the return address get overwritten somehow?&lt;/p&gt;
+
+    &lt;p&gt;Are the instructions provided to the CPU the correct ones?&lt;/p&gt;
+
+    &lt;p&gt;In one case, I used the DMA to copy data from the
+&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;
+to a DDR3 SDRAM via Xilinx’s DDR3 controller.  When I struggled to get the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; software to work, I called
+a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/zlib/syscalls.c#L54-L68&quot;&gt;software serial port output
+routine&lt;/a&gt;
+from within &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; to help me debug what
+was going on.  In that case, the serial port output routine
+I used wanted to insert carriage return characters before newlines, and
+so it needed to know if the last character was a carriage return.  This
+value was supposed to be kept in SDRAM memory–the very memory I
+was trying to use and load.  This shouldn’t be a problem, I reasoned,
+since at most I might output an extra carriage return, and the
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memcpy/&quot;&gt;memcpy()&lt;/a&gt;
+routine would eventually overwrite this value with the correct one anyway.&lt;/p&gt;
+
+    &lt;p&gt;The problem, however, was that using this memory region caused the CPU
+to read memory &lt;em&gt;into the data cache before&lt;/em&gt; the DMA completed.  This
+left me with with a corrupt copy of data memory in the cache once the
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_bootloader&lt;/code&gt; completed.  In other words, don’t forget to clear the
+cache once the DMA completes any memory copies.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;ol start=&quot;4&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;SIM instructions&lt;/p&gt;
+
+    &lt;p&gt;Many CPU’s, to include both &lt;a href=&quot;https://openrisc.io&quot;&gt;OpenRISC&lt;/a&gt; and the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;, have special simulation
+only instructions.  These are basically &lt;a href=&quot;https://en.wikipedia.org/wiki/NOP_(code)&quot;&gt;NOOP
+instructions&lt;/a&gt; that will cause
+the CPU to perform a special task in simulation only.  In the case of the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;, the instruction
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NOUT&lt;/code&gt; can be used to dump a character to the simulation console.  The
+instruction &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NDUMP&lt;/code&gt; can be used to dump a register’s value to the console.
+The &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; assembler also
+understands &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NSTR&lt;/code&gt;, which can be used to create a series of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NOUT&lt;/code&gt;
+instructions to send a more readable string to the simulation console.
+If these instructions are left in the code when it runs in actual hardware,
+then they will simply be ignored like any other
+&lt;a href=&quot;https://en.wikipedia.org/wiki/NOP_(code)&quot;&gt;NOOP instruction&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;How can you use these?  You can use them to pepper your
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; function with these
+instructions, and therefore know how far your CPU got in the
+bootup process before it died.&lt;/p&gt;
+
+    &lt;p&gt;In my case, I’ve done this often enough that the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dc132be3af68e430bf6f915880d1d7256e0f307f/sw/zlib/crt0.c&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;_bootloader&lt;/code&gt;
+function&lt;/a&gt;
+has the appropriate &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NSTR&lt;/code&gt; commands (commented) throughout, so I can
+uncomment these if necessary to tell how far it got in the loading process.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;ol start=&quot;5&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Use the &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging
+bus&lt;/a&gt; to your advantage&lt;/p&gt;
+
+    &lt;p&gt;I recently had the opportunity to test both a
+&lt;a href=&quot;https://www.apmemory.com/products/psram-iot-ram/&quot;&gt;PSRAM&lt;/a&gt; and a
+&lt;a href=&quot;https://1bitsquared.com/products/pmod-hyperram&quot;&gt;HyperRAM&lt;/a&gt; driver
+with the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.  In both cases,
+however, the memory needed to be configured properly before it could be
+used.  This meant that I needed to modify the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; function so that it
+first configured the memory, and the memory controller, before attempting
+to copy the CPU software to memory.&lt;/p&gt;
+
+    &lt;p&gt;To get this right, I first fired up the hardware and used the &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debug
+bus&lt;/a&gt; to read and
+write hardware memory controller configurations.  Any problems were
+debugged using the &lt;a href=&quot;/blog/2017/07/08/getting-started-with-wbscope.html&quot;&gt;WBSCOPE&lt;/a&gt;
+until the memory fully worked.  Then, with the same
+&lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging bus&lt;/a&gt;,
+I verified that I could read and write values to this memory using the
+configuration I was testing.  Only after I tested these memory
+configurations did I then tell the CPU to invoke them from its
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; function.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/config-flash.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The problem was actually a bit worse, though, since I wanted to reconfigure
+   the flash memory controller that was responsible for reading the initial
+   &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; software.  This controller
+   naturally started in SPI mode, but I wanted to reconfigure it to run using
+   XiP in QSPI mode.  (Normally, my flash controller does this on startup,
+   but I was testing an ASIC controller that day that didn’t have such an
+   option.)  That meant I needed to:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Configure the external RAM&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Copy a small subroutine to the external RAM.  This got copied to the
+same RAM location that &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt; would run from later.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Using that small subroutine, take the flash driver off-line and
+reconfigure it&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Return to the original &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;
+function, to now perform the
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memcpy/&quot;&gt;memcpy()&lt;/a&gt;s as
+normal, but this time with a flash running in QSPI XiP mode&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Make sure I flushed the instruction cache, now that my (own) program
+memory had changed.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Debugging this was a bit of a pain, but still it was all quite doable.
+   The trick was figuring out how to debug the small subroutine, running in
+   RAM, that was reconfiguring the flash driver.  For that, I used the
+   &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s BREAK instruction to force
+   it to halt mid-run, where I could &lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;inspect what the CPU had
+   accomplished&lt;/a&gt;.&lt;/p&gt;
+
+&lt;ol start=&quot;6&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;CPU Break instructions&lt;/p&gt;
+
+    &lt;p&gt;The &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; has a &lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK
+instruction&lt;/a&gt;.
+Other CPU’s often have something similar.  Sometimes an
+illegal instruction gets repurposed to accomplish the same thing.  The
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; uses its
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;
+for debugging.  When/if the CPU hits a
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;,
+it will halt and wait for the debugger.  At this point, I can &lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;step in and
+check&lt;/a&gt; the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s register values and any
+hardware configurations.  This is really powerful.  For example, you
+might:&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/fundamental.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;Make the first instruction of &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;
+a &lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;.
+If the CPU hits the break, you know it managed to 1) boot from the right
+address, and 2) read the right instruction at that address.  (While
+it’s possible you might still read the right instruction in spite of
+these being in error, this would break the fundamental assumption of all
+debugging.)&lt;/p&gt;
+
+    &lt;p&gt;This is a big help, especially if you are stuck debugging the CPU
+from hardware.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Place a second
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;
+after configuring memory.  Now go in and check: was the memory configured
+correctly?  Can you still read and write your memory via a
+&lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging bus&lt;/a&gt;?
+If not, then back up and fix your bug.&lt;/p&gt;
+
+    &lt;p&gt;In the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s case, the
+debugger isn’t (yet) smart enough to handle more than one
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;.
+I will therefore recompile the software without the first
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;,
+but now including the second one.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Place another
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;
+after each of the various
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memcpy/&quot;&gt;memcpy()&lt;/a&gt;
+functions within &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;.  Are each
+of these
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instructions&lt;/a&gt;
+getting hit?
+When they are hit, has the memory that was supposed to be copied been
+copied properly?  I usually just check a couple of addresses: the first
+three and the last three.  I tend not to check the middle unless these
+first and last ones are too repetitive to provide me with any confidence
+that the copy was done properly.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Make the first instruction of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt; a
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instruction&lt;/a&gt;.
+Does the CPU get that far?&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Let’s back up to our original list and keep going.  For example …&lt;/p&gt;
+
+&lt;ol start=&quot;7&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;What if your CPU doesn’t have a break instruction?&lt;/p&gt;
+
+    &lt;p&gt;If your CPU doesn’t have a break instruction, sometimes you can get away
+with a “branch to the current address” instruction, and so create a very
+tight loop.  While it’s not quite the same thing, it can still work for this
+purpose.&lt;/p&gt;
+
+    &lt;p&gt;If your CPU doesn’t have a &lt;a href=&quot;/zipcpu/2017/08/25/hw-debugging.html&quot;&gt;debug access port to read and write registers
+from&lt;/a&gt;,
+then you may need to spend a lot of time doing the same thing with
+LEDs.  While slower, it’s still doable.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/clib-printf.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ol start=&quot;8&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Console output, but without the console device driver&lt;/p&gt;
+
+    &lt;p&gt;If you can get to the BREAK instruction at the beginning of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt;,
+then you are almost there.  Once you get this far, if you are still not
+there then the problem must exist between &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt; and the first console
+output.&lt;/p&gt;
+
+    &lt;p&gt;The next check, therefore, is to make sure the console even works.&lt;/p&gt;
+
+    &lt;p&gt;There are a couple of problems you might have here.  For example, is the
+console port properly connected to the bus?  Is it at the right address?&lt;/p&gt;
+
+    &lt;p&gt;For this, you can again use the
+&lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging bus&lt;/a&gt;.
+Use it to write to the console device while the CPU is halted.  Do the
+values you write get written to the CPU’s console?  If not, then pull
+it up in the
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulator&lt;/a&gt;
+and figure out why not.&lt;/p&gt;
+
+    &lt;p&gt;If it fails in the
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulator&lt;/a&gt;,
+then you should have all the information you need to know how to fix it.&lt;/p&gt;
+
+    &lt;p&gt;If it works in the
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulator&lt;/a&gt;,
+but not in actual hardware, then check that
+the &lt;a href=&quot;/blog/2017/05/24/serial-port.html&quot;&gt;right IO pin is connected, and that the serial port is configured for
+the baud right rate&lt;/a&gt;.
+(You can read about &lt;a href=&quot;https://zipcpu.com/blog/2018/08/04/sim-mismatch.html&quot;&gt;other reasons why a design might work in simulation,
+but not in real hardware,
+here&lt;/a&gt;.)&lt;/p&gt;
+
+    &lt;p&gt;This particular bug is actually a fairly rare bug for me, since I typically
+use the serial port for the &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging
+bus&lt;/a&gt;.  So, in my
+case, if I have the &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging
+bus&lt;/a&gt;
+running in the first place then I’ve already &lt;a href=&quot;/blog/2017/05/24/serial-port.html&quot;&gt;debugged the serial port’s
+hardware&lt;/a&gt;.
+I know, for example, that I have the right IO pin, the right
+baud rate, the right parity, the right number of bits per character, etc.&lt;/p&gt;
+
+    &lt;p&gt;Once the raw serial port works, in
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+first and then hardware,
+and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;printf()&lt;/code&gt; still doesn’t, then it’s time to debug the standard library.
+For this, I’ve been known to add more SIM instructions, either &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NSTR&lt;/code&gt; or
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NDUMP&lt;/code&gt;, into the library to trace it through it’s operation and find out
+where it’s failing.&lt;/p&gt;
+
+    &lt;p&gt;Once the &lt;a href=&quot;https://en.wikipedia.org/wiki/C_file_input/output&quot;&gt;stdio library&lt;/a&gt;
+works (in
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;),
+but still fails in hardware, the next step would be
+to add serial port accesses to your design that bypass the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/C_file_input/output&quot;&gt;stdio&lt;/a&gt;
+see where the design is failing.  I have a &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/board/txfns.h&quot;&gt;special set of functions, I
+call them
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;txfns&lt;/code&gt;&lt;/a&gt;, that
+I use for this purpose.  They’re designed to be as light and as simple
+as possible, while writing outputs to the serial port.  Using them, I can
+output strings and hexadecimal numbers directly to the serial port.  That’s
+usually enough to debug the &lt;a href=&quot;https://en.wikipedia.org/wiki/C_file_input/output&quot;&gt;stdio
+library&lt;/a&gt;.  You can think
+of these functions as hardware replacements to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NSTR&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;NDUMP&lt;/code&gt;, since
+that’s how I typically use them.&lt;/p&gt;
+
+    &lt;p&gt;You could also use
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;BREAK instructions&lt;/a&gt;
+here.  Again, the goal is to both figure out where the software is going
+as it works its way through &lt;a href=&quot;https://en.wikipedia.org/wiki/C_file_input/output&quot;&gt;the
+library&lt;/a&gt;,
+as well as to dump enough values at any particular point along
+the way so that you can “see” what’s going on.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/stupid-murphy.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ol start=&quot;9&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once you get to the console output, things get easier&lt;/p&gt;
+
+    &lt;p&gt;Debug by printf is a thing.  It may not be ideal, but it does work.
+When compared to debugging a blank cursor, debug by printf() will feel like
+cooking with gas.&lt;/p&gt;
+
+    &lt;p&gt;The task of this article, however, has been to illustrate how to
+this far in the first place.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;h2 id=&quot;crt0-example&quot;&gt;CRT0 Example&lt;/h2&gt;
+
+&lt;p&gt;Just for understanding, let’s walk through this process by examining how
+the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; would go about running
+&lt;a href=&quot;https://en.wikipedia.org/wiki/%22Hello,_World!%22_program&quot;&gt;Hello World&lt;/a&gt;.
+We’ll look at this from
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;traces&lt;/a&gt;, all drawn from the
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/tree/dev&quot;&gt;ZBasic&lt;/a&gt;
+(&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt; only)
+distribution, and I’ll show you some valuable things you can notice from these
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;traces&lt;/a&gt; alone.&lt;/p&gt;
+
+&lt;p&gt;Our first &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt; shows an
+overview of what &lt;a href=&quot;https://en.wikipedia.org/wiki/%22Hello,_World!%22_program&quot;&gt;Hello
+World&lt;/a&gt;
+would look like from a &lt;a href=&quot;http://gtkwave.sourceforge.net&quot;&gt;GTKWave&lt;/a&gt;
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt;
+standpoint.  It shows the CPU from after reset, through loading &lt;a href=&quot;https://en.wikipedia.org/wiki/%22Hello,_World!%22_program&quot;&gt;Hello
+World&lt;/a&gt;, running
+&lt;a href=&quot;https://en.wikipedia.org/wiki/%22Hello,_World!%22_program&quot;&gt;Hello World&lt;/a&gt;,
+and then cleaning up and closing the
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;.
+In this case, “cleanup” is another way of saying, “waiting for the serial
+port to finish its writes.”&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2. An overview of running Hello World on the ZipCPU&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/overview-annotated.png&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Let me walk you quickly through the
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;traces&lt;/a&gt; shown in Fig. 2.&lt;/p&gt;
+
+&lt;p&gt;The first two &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;traces&lt;/a&gt;
+are either the &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial
+port&lt;/a&gt;’s input or its
+output.  As you may &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;recall, serial
+port&lt;/a&gt;s idle high, so here
+you can see that the outgoing serial port wire is idle for most of the
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt;, until it finally sends
+the “&lt;a href=&quot;https://en.wikipedia.org/wiki/%22Hello,_World!%22_program&quot;&gt;Hello, World!&lt;/a&gt;”
+output out.&lt;/p&gt;
+
+&lt;p&gt;In the particular configuration shown here, the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; has been configured to drive the
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone bus&lt;/a&gt; from
+either its instruction or its data cache.  An arbiter has already selected
+one of these two, but you may watch it change from one to the other in
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;traces&lt;/a&gt; to follow.
+AutoFPGA has labeled the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s bus
+signals with a &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;bus_component_*&lt;/code&gt; prefix, in this case &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;wb_zip_&lt;/code&gt;. As you
+might expect, the first access, following reset, is to read the first
+instruction.  This is where our figure starts.  This access has been held up,
+however, until the &lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;Quad SPI flash
+controller&lt;/a&gt;
+finishes configuring the external flash device (model) for eXecute in
+Place (XiP) Quad SPI mode.&lt;/p&gt;
+
+&lt;p&gt;The “ipc” &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt; shows the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;Program Counter (PC)&lt;/a&gt;,
+or more specifically the
+&lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;supervisor&lt;/a&gt;’s
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt; within the
+&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;.  (Another register, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;upc&lt;/code&gt;,
+captures the &lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;user&lt;/a&gt;
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt;.)
+I’ve also added the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ipc&lt;/code&gt; register to this display twice.  The first
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt;
+shows it in its default hexadecimal display setting.  A quick glance will
+illustrate this trace is generally unreadable unless you zoom in so far you
+lose all of the surrounding context.  The second &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ipc&lt;/code&gt; trace is set to analog
+mode.  Here you can see very distinctly where the CPU jumps from flash memory
+to the block RAM used by the &lt;a href=&quot;https://github.com/ZipCPU/zbasic/tree/dev&quot;&gt;ZBasic
+distro&lt;/a&gt; for most of its operation.
+This is the indication that the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;
+has just began running
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/board/hello.c&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt;&lt;/a&gt;.
+(If you look closely, you’ll also see where
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/master/sw/board/hello.c&quot;&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()&lt;/code&gt;&lt;/a&gt;
+completes and returns control to &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;The final &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt; is that of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Stack_register&quot;&gt;stack pointer&lt;/a&gt;.  Since the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Stack_register&quot;&gt;stack pointer&lt;/a&gt;
+is just a generic &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; &lt;a href=&quot;/zipcpu/2018/01/01/zipcpu-isa.html&quot;&gt;register, and
+specifically register 13&lt;/a&gt;,
+that’s why it’s listed as &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;regset[13][31:0]&lt;/code&gt; on the trace.  The big thing to
+notice here is where the &lt;a href=&quot;https://en.wikipedia.org/wiki/Stack_register&quot;&gt;stack
+pointer&lt;/a&gt; first changes.  This is
+your indication that the CPU has &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/dev/sw/zlib/crt0.c#L168&quot;&gt;started running
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CRT0&lt;/code&gt;&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;To see more, however, we’ll need to zoom in a bit.&lt;/p&gt;
+
+&lt;p&gt;Let’s start by zooming into the first section of the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt; area.
+In this case, we’ll zoom in a lot.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3. CRT0 first copies instructions from flash to RAM&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/crt0insn-annotated.png&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The first thing you’ll notice is that the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ipc&lt;/code&gt; register shows clear looping.
+This is to be expected of a memory copy loop.  It is a loop, after all.&lt;/p&gt;
+
+&lt;p&gt;The next thing you’ll notice is that this loop takes place in sections
+followed by pauses.  This is caused by the data cache.  Every pause you see
+is a cache miss, where the data cache reads another cache line from the
+&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;.
+The &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; then writes the cache
+line to RAM.  Since the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s
+data cache implementations are all &lt;em&gt;write-through&lt;/em&gt; caches, writes to memory
+also go immediately to the bus.  These are the busy portions of the loop.&lt;/p&gt;
+
+&lt;p&gt;Finally, you’ll notice that the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Stack_register&quot;&gt;stack pointer&lt;/a&gt;
+is constant throughout this whole section.  That’s an indication that it’s
+all taking place within a single function.&lt;/p&gt;
+
+&lt;p&gt;The second big section of this &lt;a href=&quot;https://en.wikipedia.org/wiki/Crt0&quot;&gt;CRT0&lt;/a&gt;
+operation where where the &lt;a href=&quot;https://en.wikipedia.org/wiki/.bss&quot;&gt;BSS segment&lt;/a&gt;
+is cleared to zero.  You can see this in Fig. 4 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. CRT0 next clears uninitialized global (BSS) memory&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/bss-annotated.png&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In this case, I’ve zoomed in around the transition from the instruction copy
+to where the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt; starts zeroing
+the &lt;a href=&quot;https://en.wikipedia.org/wiki/.bss&quot;&gt;BSS segment&lt;/a&gt;.  The first thing I’d
+like you to notice is how easy this transition is to see from the 
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;ipc&lt;/a&gt; trace.  Indeed, the
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt; suddenly changes shape.
+Sure, the rest of the &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt;
+changes shape as well, but if we zoomed out any more you might miss this and
+only see the &lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;ipc&lt;/a&gt; change.&lt;/p&gt;
+
+&lt;p&gt;As with the last section, the shape of this section is primarily driven by
+the data cache.  This &lt;a href=&quot;https://en.wikipedia.org/wiki/.bss&quot;&gt;BSS&lt;/a&gt;
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memset/&quot;&gt;memset()&lt;/a&gt;
+loop just writes to one value of memory after another, with each value
+passing straight through the cache to memory.&lt;/p&gt;
+
+&lt;p&gt;What you may not notice is that there haven’t been any requests of the
+bus for instructions.  If you look closer, however, you’ll see that’s not
+quite true.  Just before the
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memset/&quot;&gt;memset()&lt;/a&gt;
+loop, there’s a cache request–this
+time from the &lt;em&gt;instruction&lt;/em&gt; cache, to get the next eight instructions.  These
+are sufficient to then run the
+&lt;a href=&quot;https://cplusplus.com/reference/cstring/memset/&quot;&gt;memset()&lt;/a&gt;
+function from cache alone.  Hence,
+there are no more instruction requests of the bus until this loop exits.&lt;/p&gt;
+
+&lt;p&gt;Just to show one final example of looping in
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;traces&lt;/a&gt;,
+Fig. 5 below shows the activity on the bus associated with the serial port
+while the design finally sends
+“&lt;a href=&quot;https://en.wikipedia.org/wiki/%22Hello,_World!%22_program&quot;&gt;Hello, World!&lt;/a&gt;”
+to the console.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 5. Sending Hello World to the console&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/no-boot/console-annotated.png&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Now, if you look at the bus ports for the console, shown with the prefix
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;wb_uart_&lt;/code&gt;, you’ll see a repeating pattern of two requests.  The first is
+a read request, to verify that there’s room in the
+&lt;a href=&quot;https://github.com/ZipCPU/wbuart32&quot;&gt;serial port&lt;/a&gt;’s buffer
+for another byte of data.  The second is a write request, sending the next
+byte to the buffer.&lt;/p&gt;
+
+&lt;p&gt;The big thing to learn here, if nothing else, is the utility of displaying
+the &lt;a href=&quot;https://en.wikipedia.org/wiki/Program_counter&quot;&gt;PC&lt;/a&gt; as an analog signal.&lt;/p&gt;
+
+&lt;h2 id=&quot;debugging-a-memory-value&quot;&gt;Debugging a memory value&lt;/h2&gt;
+
+&lt;p&gt;One common problem I’ve run into is where you get deep into the standard
+library (i.e. into someone else’s software), and you see the CPU read some
+value from memory and then do the wrong thing.  Or, rather, it does the right
+thing but with the wrong value.  That leads to the question, why was that
+value wrong?  When did it become wrong?  These are both things you may
+need to answer.&lt;/p&gt;
+
+&lt;p&gt;I discussed how to find a bug like this in
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;.
+in a previous post.&lt;/p&gt;
+
+&lt;p&gt;What if you need to find this value while running from hardware?&lt;/p&gt;
+
+&lt;p&gt;Ouch.  That’s harder.  Still, the same approach applies: pick the address of
+interest, and track its value.&lt;/p&gt;
+
+&lt;p&gt;In hardware, this often means that you’ll need to create a bus monitor
+peripheral.  That monitor peripheral will then look to find &lt;em&gt;every&lt;/em&gt; time you
+write to a given address, and keep track of what the value at that address
+becomes when you write to it.  Beware, inserting such a peripheral into your
+design might change your address map, so you might need to do a bit of
+rework, but the basic idea applies.&lt;/p&gt;
+
+&lt;p&gt;If your monitor detects a “wrong value” being written to the address of
+interest, then it should be able to halt the CPU–so you can see what just
+happened.  Or, perhaps, you might wish to simply &lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;trigger a
+trace&lt;/a&gt;
+of the CPU to see what’s going on there.&lt;/p&gt;
+
+&lt;p&gt;If, on the other hand, you never write a “wrong value” to the address of
+interest, and yet still read a “wrong” value–then you know where to look: the
+memory controller for the memory you are writing to.  You may need to
+initiate reads of this address at various other times–at least enough to
+narrow down and find when the value is changing.  Is it changing via a bus
+write to some other address?  That would be important to know.  Is it not
+changing when it’s being written to?  That would also be important.  Finding
+out when, and the circumstances around it will be key to figuring this out.&lt;/p&gt;
+
+&lt;p&gt;Your eventual goal here will be to encapsulate the basic
+&lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;bug-triggering sequence&lt;/a&gt;
+so that you can &lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;trigger&lt;/a&gt;
+it in a much simplified setting–either with
+the &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debugging bus&lt;/a&gt;
+and not the CPU, or perhaps in
+&lt;a href=&quot;/blog/2018/08/22/what-is-simulation.html&quot;&gt;simulation&lt;/a&gt;.
+From there, you should (hopefully) be able to get a
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;trace&lt;/a&gt;
+in order to narrow it down further.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
+
+&lt;p&gt;The big challenge with all of the above tasks is that you are likely going to
+be debugging someone else’s work: either their design or their software
+library.  In my case, it’s my CPU but Xilins’x MIG controller is not my
+RTL, neither are &lt;a href=&quot;https://sourceware.org/newlib/&quot;&gt;newlib&lt;/a&gt; nor
+&lt;a href=&quot;http://elm-chan.org/fsw/ff/00index_e.html&quot;&gt;FATFS&lt;/a&gt; my software.  Sure,
+it’s &lt;a href=&quot;/about/zipcpu.html&quot;&gt;my CPU&lt;/a&gt;, but I didn’t
+design any of the other components on the circuit board, nor have I designed
+the external memory.  If I want all of these components to work together in
+my project and for my purpose, then I need to know how to handle debugging
+them.  This will often mean tracing through someone else’s software just
+to find the bugs in my own stuff.&lt;/p&gt;
+
+&lt;p&gt;What about &lt;a href=&quot;https://en.wikipedia.org/wiki/Linux&quot;&gt;Linux&lt;/a&gt;?&lt;/p&gt;
+
+&lt;p&gt;No, I haven’t gone back to the
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Linux&quot;&gt;Linux&lt;/a&gt;
+operating system I tried to boot on the
+&lt;a href=&quot;https://beagleboard.org/black&quot;&gt;Beagle Bone&lt;/a&gt;.  I’ve just had too many other
+paying opportunities to do something else, and I’ve now lost touch with the
+potential customer who may have wanted that system.&lt;/p&gt;
+
+&lt;p&gt;Still, if I needed to debug &lt;a href=&quot;https://en.wikipedia.org/wiki/Linux&quot;&gt;Linux&lt;/a&gt;,
+I think I’d use this same approach.  The
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Linux&quot;&gt;Linux&lt;/a&gt;
+kernel contains within it several simplified console output functions
+that can be used for debugging the kernel prior to the entire operating system
+being up and running.  While I haven’t tried using these personally (yet), I’ve
+seen others do it to great success.  Similarly, my
+&lt;a href=&quot;https://beagleboard.org/black&quot;&gt;Beagle Bone&lt;/a&gt;
+has a JTAG port that I could use instead of the &lt;a href=&quot;/2017/06/05/wb-bridge-overview.html&quot;&gt;debug
+bus&lt;/a&gt;.  It’s not a
+one to one replacement, but my bet is that it will still be good enough.&lt;/p&gt;
+
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;In the beginning was the Word, and the Word was with God, and the Word was God. (John 1:1)&lt;/em&gt;</description>
+        <pubDate>Sat, 03 Dec 2022 00:00:00 -0500</pubDate>
+        <link>https://zipcpu.com/zipcpu/2022/12/03/no-boot.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/zipcpu/2022/12/03/no-boot.html</guid>
+        
+        
+        <category>zipcpu</category>
+        
+      </item>
     
       <item>
         <title>Thanksgiving!  I have much to be thankful for</title>
@@ -2136,632 +3026,6 @@ reader of this blog.&lt;/p&gt;
         
         
         <category>zipcpu</category>
-        
-      </item>
-    
-      <item>
-        <title>Protocol Design for Network Debugging</title>
-        <description>&lt;p&gt;What do you do when you need
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;,
-but don’t have it?&lt;/p&gt;
-
-&lt;p&gt;Let me back up and set the stage a bit more.  I’m working with what will be
-an underwater design, as shown in Fig. 1.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1. Controlling an Underwater FPGA&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/sysdesign.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;For those who haven’t figured it out, this will (eventually) form the basis of
-a SONAR device.&lt;/p&gt;
-
-&lt;p&gt;At first, this problem seems simple enough: there will be an FPGA device
-controlled via a network port.  Easy, got it.  Better yet, what’s the easiest
-network protocol to use?
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;.  Open
-Source &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;,
-software stacks aren’t all that hard to write, and I know there are several
-open source stacks that are easy enough to use.  (No, I’ve never written one
-myself …)&lt;/p&gt;
-
-&lt;p&gt;But, let’s dig a little deeper: I want to be able to control and debug the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-via the same network port.  That means I’ll want to be able to &lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;stop the CPU,
-read its registers, adjust the contents in RAM, and then restart it
-again&lt;/a&gt; all
-over the network.  Put another way, if the CPU software won’t be running at
-all times, then I can’t implement
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;
-in software and still debug the CPU using the same
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;
-stack.  Worse, what if the FPGA firmware can’t be trusted?
-Now things are getting a bit more challenging.  How shall a piece of broken
-FPGA firmware be updated without using software on the FPGA board?&lt;/p&gt;
-
-&lt;p&gt;This, then, is where this problem starts.&lt;/p&gt;
-
-&lt;p&gt;At the most basic level, any FPGA design can be halted and updated via the JTAG
-port.  Most vendor designs will allow for that.  However, in this design, that
-JTAG port will be quite literally underwater.  The only way to access it will
-be to bring the entire unit back out of the water, to dry off the chassis the
-FPGA board sits within, and then to uncap the JTAG port and access it.  This
-is the insurance policy for the project–guaranteeing that the chassis the
-hardware sits within will not need to be opened except in extreme circumstances.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 2. Reconfiguring a running FPGA&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/reconfig-plan.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;That’s not, however, going to be the normal mode of operation.  Normally, upon
-application of power, this design will need to automatically start up and then
-do something to allow itself to be updated.  This can be done via an
-Internal Configuration and Access Port (ICAP) found within the FPGA itself.
-If a second design configuration can be written to the
-&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;,
-the ICAP port can then be told to tell the FPGA to reconfigure itself from
-this second configuration location.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 3. Basic outline of a UART protocol to control a Wishbone Bus&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/wb-uart-ovw.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Normally, I handle this sort of problem within my designs using a &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial
-port&lt;/a&gt;
-together with what I call a “debugging bus”: a protocol, running over
-that &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;,
-that allows me to read from or write to any address on the bus within the FPGA.
-&lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;We’ve discussed this protocol
-before&lt;/a&gt;, and for
-reference you can see the basic components of this protocol in Fig. 3 on the
-left: Commands are grouped into words, decompressed, placed into a FIFO, and
-then those commands are used to control the bus.  Bus returns then come back.
-Reset acknowledgments and interrupts get added to the return stream, which is
-then compressed and split back into bytes before being returned across the
-&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;.
-In general, this works great, and I’ve used this approach for years.
-Even better, having full bus access makes it really easy to debug the FPGA–as
-long as you can guarantee that neither the debugging bus protocol nor the bus
-itself will fail on you.&lt;/p&gt;
-
-&lt;p&gt;That’s great for a
-&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt; protocol,
-where character’s aren’t (generally) lost and where messages don’t
-accidentally get repeated.&lt;/p&gt;
-
-&lt;p&gt;But what about a network protocol?&lt;/p&gt;
-
-&lt;p&gt;Today’s discussion, then, will discuss a network protocol which can be used
-to do this same thing, but with an interface simple enough that it can be
-implemented in an FPGA.&lt;/p&gt;
-
-&lt;h2 id=&quot;understanding-the-problem&quot;&gt;Understanding the Problem&lt;/h2&gt;
-
-&lt;p&gt;Let’s back up, therefore, and take a moment to understand the goal and purpose
-of this protocol together with some of what makes the networking environment
-unique.  This will lead us to an understanding of some of the problems
-involved that will need to be handled by this protocol.&lt;/p&gt;
-
-&lt;h3 id=&quot;all-network-traffic-takes-place-in-packets&quot;&gt;All network traffic takes place in packets&lt;/h3&gt;
-
-&lt;p&gt;The first rule of networks is that all communication takes place in packets.
-Even better, since we’ll be using Ethernet, &lt;a href=&quot;https://en.wikipedia.org/wiki/Ethernet_frame&quot;&gt;every Ethernet
-packet&lt;/a&gt;
-ends in a four byte &lt;a href=&quot;https://en.wikipedia.org/wiki/Frame_check_sequence&quot;&gt;Frame Check
-Sequence&lt;/a&gt;
-based upon a &lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;Cyclic Redundancy Check
-(CRC)&lt;/a&gt;.  These four
-bytes are produced by a function applied to the contents of the packet.  Then,
-on reception, the receiving end can also calculate the same function.  If the
-result matches the four-byte frame check sequence found in the packet, then
-you can have some strong assurance that the packet was received across the
-interface without error.&lt;/p&gt;
-
-&lt;h3 id=&quot;packets-may-be-lost&quot;&gt;Packets may be lost&lt;/h3&gt;
-
-&lt;p&gt;Here’s our first problem: if something goes wrong on the network–perhaps
-there’s too much congestion somewhere, perhaps the FPGA is still responding to
-some other packet, then a packet may be dropped.  Indeed, &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;we discussed this
-sort of idea&lt;/a&gt; quite
-recently.  In network implementations, dropped packets are considered a
-“normal” phenomena, and any protocol working across the network needs to be
-able to recover from a lost packet.&lt;/p&gt;
-
-&lt;p&gt;Think this through a bit, since this can be a real problem.  What happens if
-the bus within the FPGA locks up because some peripheral isn’t responding?
-In the worst case, all following packets will be lost–to include any
-packets telling the FPGA to reset itself.  This is a real possibility that
-we’ll need to consider as things go on.&lt;/p&gt;
-
-&lt;h3 id=&quot;packets-may-be-repeated&quot;&gt;Packets may be repeated&lt;/h3&gt;
-
-&lt;p&gt;The next problem is that packets may be repeated.&lt;/p&gt;
-
-&lt;p&gt;At first, I simply poo-pood this idea.  This would never happen in any of &lt;em&gt;my&lt;/em&gt;
-implementations, I told myself, because nothing in the network stack will ever
-repeat a packet.&lt;/p&gt;
-
-&lt;p&gt;Then I got to thinking some more about this.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 4. Request/Reply protocol&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/reqreply.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Imagine you have two computers talking to each other, and one computer (the
-client) makes a request of the second (the server/FPGA).  If the request gets
-dropped, how shall the first computer (the client) know it was dropped except
-if it doesn’t get any response?  Worse, if the client doesn’t get any response,
-does that mean 1) the server didn’t get the request, or 2) that the server did
-get and process the request and the client just didn’t get the reply?  All the
-client can do at this point is to just re-send and re-send its packet until
-it eventually gets a reply.&lt;/p&gt;
-
-&lt;p&gt;Voila, repeated packets.  We’ll need to handle these somehow.&lt;/p&gt;
-
-&lt;p&gt;Now lets make matters even worse: some requests, such as commanding the
-&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;
-device to erase a sector or to program a page, aren’t things you want to do
-twice.  Any network based debugging protocol will therefore, of a necessity,
-need to be able to properly handle duplicated packets.&lt;/p&gt;
-
-&lt;h3 id=&quot;packets-may-arrive-out-of-order&quot;&gt;Packets may arrive out of order&lt;/h3&gt;
-
-&lt;p&gt;Just to make things worse, not only may packets get dropped or repeated, they
-might also arrive out of order.&lt;/p&gt;
-
-&lt;h3 id=&quot;udpip-is-a-fairly-simple-protocol&quot;&gt;UDP/IP is a fairly simple protocol&lt;/h3&gt;
-
-&lt;p&gt;One of the easiest protocols to implement in an FPGA is
-&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;.  1) &lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/6828a9e4ebe9032dbea6a51f1223b30a0fb980d7/sw/host/udpsocket.cpp#L130-L136&quot;&gt;It’s easy
-enough to program most computers to send UDP
-packets&lt;/a&gt;,
-and 2) &lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/6828a9e4ebe9032dbea6a51f1223b30a0fb980d7/sw/host/udpsocket.cpp#L156-L187&quot;&gt;receiving UDP packets is relatively easy as
-well&lt;/a&gt;.
-Even better, if implemented well, the &lt;em&gt;internet&lt;/em&gt;
-(the &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; part) has some remarkable
-capabilities to it: I might even be able to access this piece of underwater
-hardware from the other side of the world if necessary.  On the FPGA side,
-there are some challenges involved in implementing
-&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;,
-but the result is still fairly easy to accomplish.  Some of these challenges
-include:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;The FPGA needs to know the Ethernet MAC address, IP address, and destination
-&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt; port to send the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; packet to.&lt;/p&gt;
-
-    &lt;p&gt;These can often be copied from the source addresses found in the request,
-so that’s not a big problem.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Both &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
-and &lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;
-headers need to know the length of the rest of the
-packet–possibly even before the rest of the packet has been formed.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;If &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; header
-and &lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt; payload
-&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4_header_checksum&quot;&gt;checksums&lt;/a&gt; are
-implemented, these are also placed &lt;em&gt;prior&lt;/em&gt; to the packet data.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;This sort of necessitates that a packet be formed first and placed into
-a temporary buffer, before being forwarded downstream.  Still, this is quite
-doable.&lt;/p&gt;
-
-&lt;p&gt;The problem with &lt;a href=&quot;https://en.wikipedia.org/wiki/User_Datagram_Protocol&quot;&gt;UDP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;,
-however, is that it offers no protection against the problems listed above:
-packets may still be dropped, duplicated, or arrive out of order.&lt;/p&gt;
-
-&lt;h3 id=&quot;ip-packets-may-be-fragmented&quot;&gt;IP packets may be fragmented&lt;/h3&gt;
-
-&lt;p&gt;If a packet is too big for some portion of the network, then whatever
-intermediate node recognizes this is supposed to be able to split the packet
-into multiple sub-packets (fragments).  These packets will then be reassembled
-on the far end.&lt;/p&gt;
-
-&lt;h3 id=&quot;tcpip-requires-memory&quot;&gt;TCP/IP requires memory&lt;/h3&gt;
-
-&lt;p&gt;I’ve used &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
-in the past.  In general, it’s always been one of my favorite
-protocols to work with: it’s easy and reliable.  However, I’ve never had to
-implement it before, neither have I ever tried to implement it on an FPGA.
-When digging into what it would take to implement the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
-within an FPGA, it doesn’t take long to learn that each connection will require
-some amount of memory to work properly–perhaps as much as 64kB per connection.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;The connection setup defines the maximum and required sizes of this window&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Packet data includes where in the stream the data comes from&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Acknowledgments include the latest received stream position&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Further, &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
-removes packet boundaries in favor of transmitting stream positions.  In many
-ways, though,
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
-might be the ideal way of encapsulating what was once a
-&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt; stream.&lt;/p&gt;
-
-&lt;p&gt;Others have made this protocol work on an FPGA, so I know it can be done.
-In my review, however, I ended up balking at the idea of implementing my own
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
-protocol handling stack within FPGA logic.  (I’ll probabbly still place an
-implemention of the &lt;a href=&quot;https://en.wikipedia.org/wiki/Transmission_Control_Protocol&quot;&gt;TCP&lt;/a&gt;/&lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt;
-stack within the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-software before I’m done …)&lt;/p&gt;
-
-&lt;h3 id=&quot;gbe-is-fast&quot;&gt;GbE is fast&lt;/h3&gt;
-
-&lt;p&gt;From my experience, and with the boards I have, a
-&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;
-can typically achieve speeds somewhere between about 100kB/s (1MBaud) and
-400kB/s (4MBaud).  Gigabit Ethernet, on the otherhand, can transfer data at
-125MB/s.  That’s probably faster than I need for this part of the project.
-The biggest impact this is likely to have, though, is that it might keep my
-compression algorithm from working–since that algorithm only tries to
-compress a response value as long as the return pipeline is stalled.  If the
-link is so fast that it never stalls, then it might make sense to remove to
-remove the &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;
-compression from this network re-implementation.&lt;/p&gt;
-
-&lt;h3 id=&quot;the-goal&quot;&gt;The Goal&lt;/h3&gt;
-
-&lt;p&gt;Just to make it clear, my goal is to be able to control the bus within an
-FPGA design from a network interface.  This means I want to be able to read
-from and write both peripheral registers as well as
-&lt;a href=&quot;/zipcpu/2018/07/13/memories.html&quot;&gt;memory&lt;/a&gt; and
-&lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;flash&lt;/a&gt;.
-Using this capability, I want to be able to do things like:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Reading, erasing, programming, and verifying &lt;a href=&quot;https://en.wikipedia.org/wiki/Flash_memory&quot;&gt;flash
-memory&lt;/a&gt; contents&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Issuing a warm boot request, so that the FPGA will reload itself from
-a secondary location&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Configuring any application specific hardware from an external host.&lt;/p&gt;
-
-    &lt;p&gt;As one example, I’m hoping to control an &lt;a href=&quot;https://www.analog.com/en/products/adau1761.html&quot;&gt;ADAU1761 audio
-chip&lt;/a&gt;
-on a &lt;a href=&quot;https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications&quot;&gt;Nexys Video board&lt;/a&gt;.
-The network bus should be able to turn this chip on, adjust which
-channel(s) are selected, and any gain associated with the individual
-channels.&lt;/p&gt;
-
-    &lt;p&gt;I expect to use a separate protocol to handle the return audio from such
-a controller.  For now, I just want a dependable network protocol I can use
-to guarantee my ability to configure this controller across the network in
-the first place.&lt;/p&gt;
-
-    &lt;p&gt;This is a test-only capability, to allow an operator to “hear” any
-internal signals while the device is still on the bench.  Once the device
-is sealed up, similar circuitry within the device will be used to route
-from among multiple potential signal sources and sinks to their ultimate
-destinations.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Without access to JTAG, I won’t have any vendor tools available for internal
-logic analysis in order to diagnose any faults.  Instead, I’ll be using my
-own &lt;a href=&quot;/blog/2017/07/08/getting-started-with-wbscope.html&quot;&gt;Wishbone
-scope&lt;/a&gt;
-across this network protocol.&lt;/p&gt;
-
-    &lt;p&gt;This also means that I’ll want to assume only a bare minimum of design
-functionality here.  What happens, for example, if I need to debug the
-DDR3 SDRAM protocol?  In that case, I would need to be able to operate
-this bus without access to any but internal FPGA memory.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;Rebooting, pausing, stepping, and stopping or starting the CPU within the
-design&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;&lt;a href=&quot;/zipcpu/2017/07/14/cpu-debugging-needs.html&quot;&gt;Examining CPU
-registers&lt;/a&gt;
-when the &lt;a href=&quot;/about/zipcpu.html&quot;&gt;CPU&lt;/a&gt;
-is halted, and perhaps adjusting their contents if necessary.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;That’s my goal, and you now know the problems associated with working with the
-network.  Now, knowing this information, what can we do in order to generate
-some form of protocol that we can use?&lt;/p&gt;
-
-&lt;h2 id=&quot;generating-a-protocol&quot;&gt;Generating a Protocol&lt;/h2&gt;
-
-&lt;p&gt;Let’s take a moment to walk through the design of this new protocol, and the
-various choices I chose along the way to deal with the problems listed above.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. Encapsulating the former serial port protocol&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/netb-encapsulation.svg&quot; alt=&quot;&quot; width=&quot;240&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;My first draft of this protocol, the draft I’ll be discussing today, simply
-involved packetizing the requests I would’ve sent over the
-&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt; in the
-first place.  That means these debugging bus packets simply include an
-additional header on top of the headers already existing, together with a
-set of bytes which would’ve normally been sent across a &lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial
-port&lt;/a&gt;.  We’ll call this
-the “NetBus header” and “serial port debugging bus payload” or just “payload”
-for short.&lt;/p&gt;
-
-&lt;p&gt;My second (rather arbitrary) choice was to insist that all protocol
-interactions take place in two parts: 1) the support software sends a request,
-and 2) the FPGA returns a reply.  Moreover, as I alluded to above, &lt;em&gt;every&lt;/em&gt;
-request was to receive a reply.  Should a reply not be returned, that would
-mean that either the FPGA either didn’t receive the request or that the
-response hadn’t been received.  This also meant that the FPGA would never
-initiate a transaction on its own, it would only ever respond to requests.&lt;/p&gt;
-
-&lt;p&gt;Incidentally, this also solves the problems associated with out of order
-packets: if only one request is ever outstanding at a time, then there will
-never be two or more packets to get reversed.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 6. Eight GPIO bits&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/gpio.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;One of the neat features of my serial port protocol was that it had a special
-means of communicating
-&lt;a href=&quot;/zipcpu/2019/04/02/icontrol.html&quot;&gt;interrupts&lt;/a&gt; to the host
-computer.  At one time I used this feature with my &lt;a href=&quot;/blog/2019/03/27/qflexpress.html&quot;&gt;original flash
-controller&lt;/a&gt;
-to notify any programming software of the end of a write transaction.  This
-was cool, but … perhaps we could expand upon it?  For example, it’d be nice
-to get some status bits from the controller.  Such status bits might include
-answers to questions like: Has the buffer within the controller ever suffered
-from an overrun?  Has the controller received any bus error responses?  Is this
-the first packet following a reset?  All of this together necessitated a set of
-general purpose I/O bits that could be controlled via this protocol.  So far,
-I’ve settled upon four of the eight bits shown in Fig. 6.  These would be
-sticky bits when set, and only cleared upon a write from the external host.
-Another four bits remain available for … whatever purpose.&lt;/p&gt;
-
-&lt;p&gt;I created this capability with two parts: a mask and a value.  That way,
-any GPIO bit could be updated whose mask bit was set to the value it was set
-to, allowing independent control of each of these bits.  Further, by setting
-the mask to zero, the FPGA would simply ignore these bits.  Indeed, this I/O
-part of the protocol is very similar to &lt;a href=&quot;/zipcpu/2019/02/09/cpu-blinky.html&quot;&gt;one we’ve discussed
-before&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;My third choice was to place a stream packet ID number into the header of the
-packet.  The FPGA can then use this ID to identify and handle repeated packets.
-This way, should the FPGA ever detect a second request with the same frame
-number, then it would simply repeat the response to the prior packet with
-that frame number.&lt;/p&gt;
-
-&lt;p&gt;One stream ID was designated as special: ID=0.  This indicated a “Sync” packet
-in this protocol.  This would be the ID I would use when initiating a
-communication with the device.  I could then use this packet to record and set
-the Ethernet MAC, IP address, and UDP port of the source, as well as to
-reset the state of the internal compression engine to something that could
-be known within the client program.  This way, upon starting a client program,
-the client could quickly synchronize the two compression engines.&lt;/p&gt;
-
-&lt;p&gt;Further, the design should handle packets with an empty payload, as sort of a
-“keep-alive” packet.&lt;/p&gt;
-
-&lt;h3 id=&quot;request-packet-format&quot;&gt;Request Packet Format&lt;/h3&gt;
-
-&lt;p&gt;These choices led me to the packet design for request packets shown in Fig. 7.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 20px&quot;&gt;&lt;caption&gt;Fig 7. Host to FPGA Packets&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/host-to-fpga.svg&quot; alt=&quot;&quot; width=&quot;760&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;In general, the host only added four bytes to any payload.  The first two were
-the packet ID.  This ID could be anything, with zero having the special meaning
-discussed above, and the second requirement being that ID’s shouldn’t be
-repeated in succession.&lt;/p&gt;
-
-&lt;h3 id=&quot;reply-packet-format&quot;&gt;Reply Packet Format&lt;/h3&gt;
-
-&lt;p&gt;The reverse link is very similar, if not almost identical.  There are only
-a couple of differences.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 8. FPGA to Host Reply Packets&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/fpga-to-host.svg&quot; alt=&quot;&quot; width=&quot;760&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;For example, all replies will include the host packet’s ID number so the host
-can know which request is being replied to.  This will allow the host to
-remove duplicate packets from the return stream.&lt;/p&gt;
-
-&lt;p&gt;Further, all replies will include sixteen general purpose I/O bits.  Eight of
-these, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;i_gpio&lt;/code&gt;, are input bits collected from somewhere in the system–such as
-the &lt;a href=&quot;/zipcpu/2019/04/02/icontrol.html&quot;&gt;interrupt&lt;/a&gt;
-bit.  Indeed, we discussed four of these bits above, while the other four
-remain uncommitted.  The other eight bits, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;o_gpio&lt;/code&gt;, are a simply a
-reflection of the current settings as generated by the last packet sent by the
-host controller.&lt;/p&gt;
-
-&lt;p&gt;The next word, however, is generated within the FPGA logic.  The first
-16-bit field of this word is the prior packet ID from the previous packet.  This
-was chosen so that, in high speed situations, I might send two packets to the
-FPGA and then have some assurance the FPGA had received both in case the
-first response was dropped.  The next sixteen bits are simply a one-up packet
-counter from the FPGA.  This counter would be increased on any sends or
-re-sends, allowing the host to identify where, if at all, packets get lost
-in this system.  Is it between the host and the FPGA, or on the return trip
-from the FPGA to the host?&lt;/p&gt;
-
-&lt;h3 id=&quot;building-the-clients-state-machine&quot;&gt;Building the Client’s State Machine&lt;/h3&gt;
-
-&lt;p&gt;Before concluding, let’s take a quick look at what the host control
-software would look like for this.  We’ll base this look upon a
-&lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/6828a9e4ebe9032dbea6a51f1223b30a0fb980d7/sw/host/udpsocket.cpp#L130-L136&quot;&gt;UDPSOCKET&lt;/a&gt;
-implementation that encapsulates any issues of issuing packets to or receiving
-packets from the O/S.&lt;/p&gt;
-
-&lt;p&gt;A couple of other fields will allow us to keep a copy of the last
-received packet, or the packet we are getting ready to send.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt;	&lt;span class=&quot;nc&quot;&gt;NETBUS&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-	&lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt;		&lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RDBUFLN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;TXBUFLEN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;];&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;UDPSOCKET&lt;/span&gt;	&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-	&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-	&lt;span class=&quot;c1&quot;&gt;// ...&lt;/span&gt;
-&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;The first step, therefore, in communicating with this new FPGA protocol is
-to establish a connection.  This is done by sending a sync packet.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;NETBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sync&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-	&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-	&lt;span class=&quot;c1&quot;&gt;// Make up to MAXTRIES attempts to synchronize&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;MAXTRIES&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-		&lt;span class=&quot;c1&quot;&gt;// Try sending a sync packet&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Clear the 4-byte header, then send a packet of 4bytes only&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;k&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Turn this into a UDP packet and send it&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;4&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;m_udp-&amp;gt;write&lt;/code&gt; will call the system to actually send this across a UDP
-port we’ve connected ourselves to.&lt;/p&gt;
-
-&lt;p&gt;The purpose of the for loop is so that, in the case that we don’t get any
-response, we can try sending up to MAXTRIES of these packets.&lt;/p&gt;
-
-&lt;p&gt;The next step is to look for the return packet.  We’ll wait &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;PKT_TIMEOUT&lt;/code&gt;
-milliseconds for this return–using the poll() system call to implement this
-timeout.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;read&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;RDBUFLN&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;PKT_TIMEOUT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Now that we have a return packet, let’s look for and assemble the packet ID.
-If this ID is not zero, then this isn’t a response to our sync request.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;		&lt;span class=&quot;n&quot;&gt;rxframe&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;|&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rdbuf&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rxframe&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-			&lt;span class=&quot;c1&quot;&gt;// This is a return from another request&lt;/span&gt;
-			&lt;span class=&quot;c1&quot;&gt;// Ignore it.&lt;/span&gt;
-			&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-		&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;If after &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;MAXTRIES&lt;/code&gt; attempts we still don’t get a response, we’ll throw a
-bus error so that the system can deal with this further up in the chain.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;throw&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;BUSERR&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Otherwise, if we do have a good packet, we can look through the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;i_gpio&lt;/code&gt; values
-and record or process them as necessary.  For example, this is where we’d
-mark that we’d received an interrupt of some type.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;nrd&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Mark how long the packet is that's in our buffer&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;handle_gpio_returns&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
-&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Sending data to the device is very similar.  First, you’d generate a packet
-header.  Here we choose to use a pseudorandom number algorithm, although you
-can use roughly any algorithm you want–as long as it doesn’t generate a
-zero packet ID.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;&lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt; &lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;NETBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;begin&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;\&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;_packet&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;NETBUS&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BUSW&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Last packet was a sync packet&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;	&lt;span class=&quot;c1&quot;&gt;// Following a sync, the first ID == 1&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;^&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;RANDOMIZER_COEFFICIENTS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-
-	&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_frameid&lt;/span&gt;     &lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x0ff&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-	&lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;3&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;Following the header, we’ll encode the address of the subsequent transaction.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;c1&quot;&gt;// Return a pointer to the packet following the&lt;/span&gt;
-	&lt;span class=&quot;c1&quot;&gt;// address&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;encode_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;At this point, we can fill our packet with data to be written to the device.&lt;/p&gt;
-
-&lt;p&gt;Once done, we’ll try writing this data to the device &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;MAXTRIES&lt;/code&gt; times, or
-until we get a response.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-c--&quot; data-lang=&quot;c++&quot;&gt;	&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;MAXTRIES&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tries&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;++&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
-		&lt;span class=&quot;c1&quot;&gt;// Send the request packet&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;m_udp&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pktlen&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;m_pkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Try reading a packet&lt;/span&gt;
-		&lt;span class=&quot;n&quot;&gt;readpkt&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;PKT_TIMEOUT&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;c1&quot;&gt;// We were successful!&lt;/span&gt;
-			&lt;span class=&quot;k&quot;&gt;break&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-		&lt;span class=&quot;c1&quot;&gt;// Otherwise we repeat&lt;/span&gt;
-	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_rxlen&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;throw&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;BUSERR&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-
-	&lt;span class=&quot;c1&quot;&gt;// Search the returned packet for evidence of a bus error.  If we&lt;/span&gt;
-	&lt;span class=&quot;c1&quot;&gt;// get a bus error, we'll throw an exception as above.&lt;/span&gt;
-	&lt;span class=&quot;c1&quot;&gt;// ...&lt;/span&gt;
-&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We’ll then repeat this process until all of the data we need sent has been
-sent.&lt;/p&gt;
-
-&lt;p&gt;As you can see, the protocol is pretty simple from a software standpoint to
-get working reliably.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
-
-&lt;p&gt;It works.&lt;/p&gt;
-
-&lt;p&gt;That’s all that matters, right?&lt;/p&gt;
-
-&lt;p&gt;Well, not quite.  In reality, this is just my first draft of a packet protocol
-of this type.  For example, I haven’t implemented IP defragmentation.  (Nor
-am I really planning on doing so in the FPGA hardware.)  Neither have I
-implemented &lt;a href=&quot;https://en.wikipedia.org/wiki/IPv4&quot;&gt;IP&lt;/a&gt; support beyond version 4,
-or impemented any header option support.  Similarly, I haven’t implemented any
-support for zero length packets beyond the original sync packets.&lt;/p&gt;
-
-&lt;p&gt;You can see a list of potential improvements I’ve been considering in Fig. 9.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 9. Potential upgrades to this protocol&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/upgrades.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;For perspective, I rewrote my original &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;serial port bus
-protocol&lt;/a&gt; about
-three times before finally I arrived at something I liked.  Each version was
-then better than the previous one.  Indeed, even now I have a fourth version of
-that &lt;a href=&quot;/blog/2017/06/05/wb-bridge-overview.html&quot;&gt;serial port protocol&lt;/a&gt;
-that I’m slowly testing.  However, since this fourth version can only get
-about a 10% speed improvement over the current version for the same baud
-speed, it hasn’t gotten a lot of priority.  Put simply, the speed of the
-&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;serial port&lt;/a&gt;
-isn’t really slowing me down significantly.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 10. Learning and rebuilding is to be expected&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/reproofs.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;That in itself is a lesson in any endeavor, and one I learned when working on
-my Ph.D.  I like to sum it up with this advice to students, “Fail early. Fail
-often. Plan for failure.”  Or, alternatively, “Success is measured by the
-number of failures that it takes to achieve it.”  (These quotes are my own …)
-Given that the best design is never the first one, you should plan on
-rebuilding any design once or twice before it will become the best design
-that you want to use and reuse over and over again.&lt;/p&gt;
-
-&lt;p&gt;From a more business perspective, I might argue the advice would be to put
-lots of energy into &lt;a href=&quot;/blog/2020/01/13/reuse.html&quot;&gt;anything you intend to use more than
-once&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;From all these perspectives, this is only a first design and draft of such
-a protocol.  I expect it to get better over time.&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Can two walk together, except they be agreed? Amos 3:3&lt;/em&gt;</description>
-        <pubDate>Wed, 24 Aug 2022 00:00:00 -0400</pubDate>
-        <link>https://zipcpu.com/blog/2022/08/24/protocol-design.html</link>
-        <guid isPermaLink="true">https://zipcpu.com/blog/2022/08/24/protocol-design.html</guid>
-        
-        
-        <category>blog</category>
         
       </item>
     
