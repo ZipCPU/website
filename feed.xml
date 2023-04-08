@@ -6,14 +6,844 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Mon, 13 Mar 2023 20:46:32 -0400</pubDate>
-    <lastBuildDate>Mon, 13 Mar 2023 20:46:32 -0400</lastBuildDate>
+    <pubDate>Sat, 08 Apr 2023 18:28:14 -0400</pubDate>
+    <lastBuildDate>Sat, 08 Apr 2023 18:28:14 -0400</lastBuildDate>
     <generator>Jekyll v4.2.0</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>What is a Virtual Packet FIFO?</title>
+        <description>&lt;p&gt;I first came across virtual packet FIFOs in a &lt;a href=&quot;/blog/2022/04/29/proto-bringup.html&quot;&gt;SONAR
+project&lt;/a&gt; by necessity.
+The &lt;a href=&quot;/blog/2022/04/29/proto-bringup.html&quot;&gt;SONAR device&lt;/a&gt;’s
+only means of communicating with the outside world was
+via Gb Ethernet.  There was no
+&lt;a href=&quot;/formal/2019/02/21/txuart.html&quot;&gt;UART&lt;/a&gt; and no JTAG.
+Everything went over Ethernet.  Collected data went over Ethernet.
+Device control was over Ethernet.  &lt;a href=&quot;/blog/2022/08/24/protocol-design.html&quot;&gt;Debugging had to be done over
+Ethernet&lt;/a&gt;.  FPGA
+reconfiguration and all software updates had to go over Ethernet.  Last of
+all, the CPU needed to talk to the outside world over Ethernet.  This was
+where I first came up with the idea of a virtual packet FIFO.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1. A Virtual Packets FIFO&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vfifo/pktvfifo.svg&quot; alt=&quot;&quot; width=&quot;560&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;The idea came from necessity, given how &lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/master/rtl/enet/enetpackets.v&quot;&gt;my previous network
+controller&lt;/a&gt;
+operated.  In &lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/master/rtl/enet/enetpackets.v&quot;&gt;that
+controller&lt;/a&gt;,
+packets would be received into a small block RAM connected the controller.
+That block RAM could hold only one packet at a time.  Once a packet was
+received, therefore, the network controller would be deaf until the CPU
+processed the packet and then notified the controller it could use its
+memory for another packet.  Likewise, when the CPU wished to transmit a
+packet, it would write a single packet to the controller’s memory, notify
+it that a packet was present, and then wait for the controller to finish
+transmitting it before writing the next packet to memory.&lt;/p&gt;
+
+&lt;p&gt;This works great–on a low bandwidth interface.  But what happens if two
+packets arrive in short succession?  Or, similarly, what happens if
+packets arrive that are larger than the &lt;a href=&quot;https://github.com/ZipCPU/zipversa/blob/master/rtl/enet/enetpackets.v&quot;&gt;controller’s internal
+buffer&lt;/a&gt;?
+What about “Jumbo packets”?&lt;/p&gt;
+
+&lt;p&gt;All of these problems necessitated a new solution, and the solution I chose was
+a virtual packet FIFO.  This solution has two big upgrades to the previous
+one.  The first is a size upgrade.  A virtual packet FIFO can be &lt;em&gt;much&lt;/em&gt; larger
+than its block RAM counterpart.  The second upgrade is the number of packets
+that can be held.  Frankly, it doesn’t make much sense if you can hold
+lots of data, if you can’t also fill that with either lots of packets or
+a small number of jumbo packets.&lt;/p&gt;
+
+&lt;p&gt;Since this is a neat idea, let’s take a moment and discuss it.&lt;/p&gt;
+
+&lt;h2 id=&quot;packet-streams&quot;&gt;Packet streams&lt;/h2&gt;
+
+&lt;p&gt;Some time ago, I discussed &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;the problems with the AXI stream
+protocol&lt;/a&gt;.
+At the time, I based my discussion on three specific applications:
+&lt;a href=&quot;/video/2022/03/14/axis-video.html&quot;&gt;video&lt;/a&gt;,
+&lt;a href=&quot;/blog/2019/11/14/sdspi.html&quot;&gt;data capture&lt;/a&gt;, and network
+packet handling.  In each of these applications, data would arrive at the
+incoming interface independent of whether or not there was space available
+to handle it.  &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;Backpressure&lt;/a&gt;, a
+key feature of the AXI stream protocol, could not be supported properly
+without risking data corruption.&lt;/p&gt;
+
+&lt;p&gt;At that time, &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;I suggested a new AXI stream field:
+ABORT&lt;/a&gt;.
+If the &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt; signal
+was ever asserted from an upstream source, the rest of any data packet
+would need to be dropped, and data handling would need to start over with
+the first beat of the next packet.  This new
+&lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt;
+signal has worked nicely in network packet handling constructs.  Indeed, it
+has worked &lt;em&gt;very&lt;/em&gt; well.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Yes, it’s a bit harder to work with and harder to verify than straight AXI
+streams.  This is to be expected.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;However, it was joy to watch the network design “just work” with this
+protocol.  In particular, I watched network data get captured, formed
+into packets, and then dropped as the design started up–because either
+the network interface hadn’t finished its negotiation into 1Gb mode
+(it could never keep up at less than 1Gb/s), or because the data hadn’t
+been told where to go yet.  (Yes, it still needed a destination addresses
+for the SONAR data, both IP and Ethernet, before it could send it out.)&lt;/p&gt;
+
+    &lt;p&gt;Once configuration completed, the protocol started blasting captured
+packets without a hitch.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I loved it!&lt;/p&gt;
+
+&lt;p&gt;Others, however, have argued that my proposed
+&lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt;
+field was unnecessary.  Why create a new protocol, they argued, vs. just using
+straight AXI stream?  The answer to this is twofold:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Jumbo_frame&quot;&gt;Jumbo Frames&lt;/a&gt;&lt;/strong&gt;&lt;/p&gt;
+
+    &lt;p&gt;In order to use straight AXI stream, you have to first convert the incoming
+network packet to AXI stream in the first place.  The follows simply because
+that incoming network interface doesn’t know anything about
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;.
+To do this conversion, incoming packets need to first go into a buffer.
+If there’s not sufficient space in the buffer, the packet is simply dropped.
+If there’s sufficient space, the packet is “committed” and can then be read
+out of the buffer via standard AXI stream.&lt;/p&gt;
+
+    &lt;p&gt;The size of this buffer forces a limit on the maximum packet size that can
+be handled.  Packets larger than the buffer size will need to be dropped.&lt;/p&gt;
+
+    &lt;p&gt;While I was designing the original SONAR Ethernet controller, my customer
+asked about &lt;a href=&quot;https://en.wikipedia.org/wiki/Jumbo_frame&quot;&gt;jumbo
+frames&lt;/a&gt;–packets much larger than
+the (otherwise) maximum
+Ethernet packet size of 1500 Bytes.  How much larger?  They didn’t say.
+All of a sudden, I could no longer size my buffer prior to hardware
+layout (place and route).&lt;/p&gt;
+
+    &lt;p&gt;The Virtual Packet FIFO we’ll discuss today can solve this problem of
+converting an (otherwise) unsized packet to AXI stream proper.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;Vendor Infrastructure&lt;/strong&gt;&lt;/p&gt;
+
+    &lt;p&gt;If I used Xilinx (or any other vendor’s) AXI stream infrastructure, I might
+be tied to that protocol.  The choice of whether or not to use AXI stream
+is really a business decision: either rebuild the AXI stream infrastructure
+from scratch to support a modified protocol, or stick to the AXI stream
+protocol as is.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: right&quot;&gt;&lt;caption&gt;Fig 2. Advantages to using your own IP&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vfifo/personal-ip.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If I rebuild the infrastructure from scratch, I incur additional costs
+   above and beyond what I might have incurred had I used someone else’s
+   (free) infrastructure.  I can release any IP I build under my chosen user
+   license.  I can also formally verify anything I build.  I will also gain
+   the ability (and responsibility, and cost associated with) debugging and
+   maintaining it.  The good news, though, is that I can guarantee the quality
+   of any IP I control.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: left&quot;&gt;&lt;caption&gt;Fig 3. Advantages to using vendor IP&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vfifo/vendor-ip.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If I use a vendor’s infrastructure then I might save some money–while
+   risking my project’s success on the vendor’s responsiveness to bugs found in
+   their infrastructure.  Given that I’m aware of bugs that’ve lived in Xilinx
+   IP for nearly 10 years, and given that I’m a small one-man nobody shop, I
+   don’t have a strong confidence that they’ll fix anything that’s broken.&lt;/p&gt;
+
+&lt;p&gt;Yes, I suppose this is a business decision.&lt;/p&gt;
+
+&lt;p&gt;Frankly, I don’t use vendor infrastructure unless I have to.  It’s just the
+   nature of how I’ve structured my own business at &lt;a href=&quot;/about/gisselquist-technology.html&quot;&gt;Gisselquist
+   Technology&lt;/a&gt;.
+   I’ve now built &lt;a href=&quot;/about/zipcpu.html&quot;&gt;my own CPU&lt;/a&gt;, my own
+   GNU compiler and assembler back ends, &lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;my own bus
+   interconnects&lt;/a&gt;,
+   &lt;a href=&quot;https://github.com/ZipCPU/dspfilters&quot;&gt;my own DSP filters&lt;/a&gt;,
+   &lt;a href=&quot;/dsp/2017/08/30/cordic.html&quot;&gt;CORDICs&lt;/a&gt;,
+   &lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFTs&lt;/a&gt;, etc.  So it should come
+   as no surprise that I’d have no problems building &lt;a href=&quot;https://github.com/ZipCPU/eth10g/tree/master/rtl/net&quot;&gt;an AXI stream
+   infrastructure&lt;/a&gt; based
+   around a new “&lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt;”
+   field.&lt;/p&gt;
+
+&lt;p&gt;Yes, there are risks with this approach.  One common risk is that I might
+   need to interface with a vendor protocol, so I often have &lt;a href=&quot;https://github.com/ZipCPU/wb2axip&quot;&gt;conversion
+   routines&lt;/a&gt; available to move back and
+   forth between one protocol and another when necessary.  For example, it’s
+   not enough to use
+   &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt; if you need
+   to interact with Xilinx’s MIG–so I use a &lt;a href=&quot;/blog/2020/03/23/wbm2axisp.html&quot;&gt;bridge from one protocol to the
+   other&lt;/a&gt;.  I &lt;a href=&quot;https://github.com/ZipCPU/wb2axip&quot;&gt;also
+   have&lt;/a&gt; sufficient infrastructure to
+   use AXI without bridges if necessary.&lt;/p&gt;
+
+&lt;p&gt;Still, AXI stream is a really simple protocol, and &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/doc/axin.pdf&quot;&gt;this modified AXI
+   network stream
+   protocol&lt;/a&gt;,
+   while more complex, isn’t really that much more difficult to deal with.&lt;/p&gt;
+
+&lt;p&gt;Since writing &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;that
+article&lt;/a&gt;, I’ve had great
+success with this new
+&lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt; field.
+Indeed, I’ve had so much success, that I’m now rebuilding all of my network
+data handling components to use it.&lt;/p&gt;
+
+&lt;p&gt;However, there is one (more) problem this &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/doc/axin.pdf&quot;&gt;new
+protocol&lt;/a&gt; needs
+to address: stream widths.&lt;/p&gt;
+
+&lt;p&gt;When working with 1Gb Ethernet, I could operate at 8b/clock at 125MHz, and
+stream widths weren’t really a problem–every beat contained exactly one byte.
+Well, not quite.  Stream widths became a bit of a problem when crossing clock
+domains, since I would need to guarantee sufficient handling width.  To
+handle the CDC case, I first converted to a wider (32b) AXI stream, and
+then prepended a 32b packet length to the packet.  This kept me from
+supporting &lt;a href=&quot;https://en.wikipedia.org/wiki/Jumbo_frame&quot;&gt;jumbo frames&lt;/a&gt;,
+so when rebuilding for a 10Gb interface, I needed a new solution.&lt;/p&gt;
+
+&lt;p&gt;Standard AXI stream solves this problem with their TSTRB and TKEEP fields.
+Each field has one bit per byte per beat within it, and allows the stream
+processor to handle less than a full beat of information.  For example, when
+dealing with a 32-bit interface, a 16-bit value might contain two NULL bytes,
+where a NULL byte is defined as one where TKEEP and TSTRB are both low.&lt;/p&gt;
+
+&lt;p&gt;This seemed insufficient for me for a variety of reasons.  In general, to use
+an AXI stream of this type, you’d first want to pack it and remove all
+NULL bytes.  This would force any unused bytes into the last beat, while also
+requiring that the last beat had at least one valid byte.  The last beat would
+also need to be packed, so that all used bytes would be on the low end–when
+using little endian semantics, or the high end otherwise.  Further, I never
+saw a reason for keeping “position” bytes (TKEEP &amp;amp;&amp;amp; !TSTRB) around.  The
+result was that TKEEP and TSTRB contained too many bits for my purpose.&lt;/p&gt;
+
+&lt;p&gt;So I created a new field: BYTES.  At first, the BYTES field had &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$clog2(DW/8+1)&lt;/code&gt;
+bits to it, where &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DW&lt;/code&gt; is the number of bits in the DATA field–sometimes
+called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;C_AXIS_DATA_WIDTH&lt;/code&gt;.  This BYTES field would then be equal to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DW/8&lt;/code&gt;
+for every beat prior to the last one, and between one and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DW/8&lt;/code&gt; inclusive for
+the last beat.  (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;0 &amp;lt; BYTES &amp;lt;= DW/8&lt;/code&gt;)  Then, on second thought, I realized the
+top bit of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;BYTES&lt;/code&gt; was irrelevant: Since &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;BYTES&lt;/code&gt; was never zero, and never
+more than &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DW/8&lt;/code&gt;, I could map the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DW/8&lt;/code&gt; value to zero and drop a bit.  So,
+now, BYTES has &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$clog2(DW/8)&lt;/code&gt; bits and a value of zero (representing &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DW/8&lt;/code&gt;
+bytes) for all but the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;LAST&lt;/code&gt; beat where it might represent fewer bytes per
+beat.&lt;/p&gt;
+
+&lt;p&gt;So, in summary, to support packet data I made the following changes to the
+AXI stream protocol:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;&lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt;&lt;/strong&gt;: A new
+field, indicating that the upstream processor needed to drop the packet
+for any reason.  Possible reasons I’ve come across include: 1) CRC errors,
+2) protocol errors, 3) hardware errors, or even 4) insufficient memory
+for handling &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;,
+from downstream.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;TKEEP/TSTRB&lt;/strong&gt;: I dropped both of these fields.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;strong&gt;BYTES&lt;/strong&gt;: A new field to replace the TSTRB/TKEEP fields, while still
+indicating how many bytes are active in a given beat.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;And, of course, all beats are fully packed.  Hence, all but the LAST
+beat will have &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;DW/8&lt;/code&gt; valid bytes in it.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I’ve named &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/doc/axin.pdf&quot;&gt;this (new) protocol the AXI-networking, or AXIN,
+protocol&lt;/a&gt;, for lack
+of a better name.  As a result, if you look through &lt;a href=&quot;https://github.com/ZipCPU/eth10g/tree/master/rtl/net&quot;&gt;the designs I’ve built
+to use this protocol&lt;/a&gt;,
+you’ll find “AXIN” in a lot of the names.&lt;/p&gt;
+
+&lt;p&gt;I also have a lot of infrastructure for this new protocol, and that
+infrastructure is growing on a daily basis.  For example, I have AXIN
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/netskid.v&quot;&gt;skidbuffers&lt;/a&gt;,
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axincdc.v&quot;&gt;asynchronous&lt;/a&gt;
+and &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/netfifo.v&quot;&gt;synchronous
+FIFO&lt;/a&gt;s,
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axinbroadcast.v&quot;&gt;broadcasters&lt;/a&gt;,
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axinarbiter.v&quot;&gt;arbiters&lt;/a&gt;,
+a &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axinwidth.v&quot;&gt;width
+converter&lt;/a&gt;,
+and more.  (A CRC checker is still being verified, but will likely be posted
+soon.)&lt;/p&gt;
+
+&lt;p&gt;This brings us to the topic of virtual FIFOs.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-is-a-virtual-fifo&quot;&gt;What is a virtual FIFO?&lt;/h2&gt;
+
+&lt;p&gt;A virtual FIFO is simply a FIFO that uses external instead of internal memory.
+That external memory is typically accessed via a bus, shared among many
+potential users, and commonly exists off-chip.  A classic example would be a
+DDR3 SDRAM memory accessed via an AXI (or
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt;) bus.  You can
+see the difference between a traditional and a virtual FIFO in Fig. 4.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: right&quot;&gt;&lt;caption&gt;Fig 4. Difference between a FIFO and a Virtual FIFO&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vfifo/fifo-comparison.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Some time ago, I built a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axivfifo.v&quot;&gt;Virtual FIFO for the AXI
+protocol&lt;/a&gt;.  The
+flow went as follows:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;The first step was to &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L486-L490&quot;&gt;buffer a burst of data&lt;/a&gt;
+into a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/sfifo.v&quot;&gt;synchronous
+FIFO&lt;/a&gt;.  To work
+smoothly, the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/sfifo.v&quot;&gt;synchronous
+FIFO&lt;/a&gt; needed
+space for at least two AXI bursts.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once a full burst’s worth of data was available in the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L486-L490&quot;&gt;local
+FIFO&lt;/a&gt;,
+that data would be &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L486-L490&quot;&gt;burst to the AXI
+bus&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;When using &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt;,
+I’d do the same thing, save that the burst would only
+end after the incoming FIFO was completely drained.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L409-L427&quot;&gt;Once BVALID was then received&lt;/a&gt;,
+we would know that a full AXI burst’s
+worth of memory was now available in the external RAM to be &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L681-L735&quot;&gt;read
+back&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;In the case of
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt;,
+I’d count data words, not burst sizes, but it’s the same principle.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;There was again another (local, block RAM) &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/sfifo.v&quot;&gt;synchronous
+FIFO&lt;/a&gt; on the read
+memory side.  Like the first FIFO, &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L788-L796&quot;&gt;this
+one&lt;/a&gt;
+also required enough room to contain at least two AXI bursts.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once a burst’s worth of data has been placed into the external RAM, &lt;em&gt;and&lt;/em&gt;
+there is sufficient (uncommitted) data in the second FIFO to hold it,
+a &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L681-L735&quot;&gt;burst read request would be issued&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;Again, when using
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt;,
+I’d make requests until the entire FIFO’s size was committed–not just the
+initial burst size.  Hence, as reads might be made from the FIFO while
+requesting data from the bus, additional reads would be made.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Data read back from memory would then get sent straight into &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L788-L796&quot;&gt;this second
+buffer&lt;/a&gt;
+once it returned from the bus.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The final, outgoing AXI stream, would then be fed &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L786&quot;&gt;straight from this
+second buffer&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Only when the incoming FIFO is full would
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;,
+attempt to slow down the upstream source.&lt;/p&gt;
+
+    &lt;p&gt;The incoming FIFO would be “full” if it wasn’t getting emptied.  This
+would happen if either 1) &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L535-L536&quot;&gt;the memory was full&lt;/a&gt;,
+or 2) the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/49f06ea0219c48a1010f95d72d78ba535b075217/rtl/axivfifo.v#L540-L541&quot;&gt;FIFO couldn’t write to memory fast
+enough&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;Success, when using this technique, required that the stream bandwidth be
+less than 50% of the memory bandwidth.  This will often require that any stream
+necessitating a high throughput might first need to be resized to a wider
+width–just to reduce the throughput to something the memory can handle.
+Remember, when sizing memory bandwidth, there are lots of things that can
+use up your bandwidth:&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 5. Calculating memory bandwidth&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vfifo/mem-bw.svg&quot; alt=&quot;&quot; width=&quot;480&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;You’ll need bandwidth for the data to come in and get written to memory&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You’ll need that much again to read the data back out&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You’ll need to allocate time for bus latency.&lt;/p&gt;
+
+    &lt;p&gt;This can be worse for any bus that needs to stop in order to switch
+directions.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;A memory can only read or write on any given clock cycle, and also needs
+a couple cycles to switch from reading to writing and back again.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Don’t forget, you’ll also need to allocate some number of memory clock
+cycles for refresh.  How many cycles will be required here depends upon
+your memory, your bus structure, and whether or not your memory allows
+pulling refresh cycles or whether such pulled cycles are supported in your
+controller.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Xilinx’s MIG controller also uses a couple of clock cycles per refresh
+to keep it’s IO PLL locked on the memories DQS strobe signal(s).&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;You’ll also need memory bandwidth for everything else that might use the
+memory.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;In short, &lt;em&gt;it depends&lt;/em&gt;.  The best way to size memory bandwidth requirements is
+to calculate how many beats per second you will need, and then make sure
+your memory can support perhaps four times that amount.&lt;/p&gt;
+
+&lt;p&gt;A key problem with the standard virtual FIFO, described above, is that there’s
+no (good) way to store non-data information such as packet boundaries in
+memory.  Either you increase the memory storage requirement to hold a LAST bit
+(often by 2x!), or it just gets dropped.  Indeed, my &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axivfifo.v&quot;&gt;basic AXI virtual
+FIFO&lt;/a&gt;
+implementation simply drops this data.  As a result, it works well on a
+proper &lt;em&gt;stream&lt;/em&gt; interface, but not very well on a &lt;em&gt;packet&lt;/em&gt; interface.&lt;/p&gt;
+
+&lt;p&gt;I have a &lt;a href=&quot;https://github.com/ZipCPU/wbscope/blob/master/rtl/memscope.v&quot;&gt;separate virtual FIFO that I’ve built for my
+&lt;em&gt;scope&lt;/em&gt;&lt;/a&gt;,
+sometimes called an internal logic analyzer.  (This one’s been formally
+verified, but never used in any practical context.  It was fun to build, and
+a good learning exercise, it just hasn’t fit into any important usage
+scenarios … yet.)  In this case, if the
+&lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;scope&lt;/a&gt;
+ever gets overrun and can’t keep up, all the data will be dropped
+and it will start collecting all over again with new data.&lt;/p&gt;
+
+&lt;p&gt;Again, the problem with the stream protocol is
+&lt;em&gt;&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;&lt;/em&gt;,
+and what to do if you overrun the FIFO, and where/when in your stream processing
+will that information be known.  When dealing with packets, the rule
+is data needs to be dropped at packet boundaries.  That information needs
+to be communicated to the place where the decision can be made.&lt;/p&gt;
+
+&lt;p&gt;So how do we mix the &lt;em&gt;packet&lt;/em&gt; concept with the concept of a &lt;em&gt;virtual FIFO&lt;/em&gt;?
+The answer is a virtual packet FIFO.&lt;/p&gt;
+
+&lt;h2 id=&quot;what-is-a-virtual-packet-fifo&quot;&gt;What is a virtual packet FIFO?&lt;/h2&gt;
+
+&lt;p&gt;A virtual packet FIFO is simply a virtual FIFO that maintains packet
+boundaries.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6. Virtual FIFO definitions&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vfifo/vpktdefns.svg&quot; alt=&quot;&quot; width=&quot;560&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;That means two things.&lt;/p&gt;
+
+&lt;p&gt;First, it means we have to preserve packet boundaries.  That &lt;em&gt;LAST&lt;/em&gt; signal
+is important when working with packets.  Moreover, packet boundaries need
+&lt;em&gt;octet&lt;/em&gt; level precision.&lt;/p&gt;
+
+&lt;p&gt;Second, it means that packets are written to the FIFO before being
+&lt;em&gt;committed&lt;/em&gt; to the FIFO.  Only after a full packet has been written to
+the FIFO can it ever get committed.&lt;/p&gt;
+
+&lt;p&gt;To handle both of these requirements, I rearranged how I stored packets
+in memory.  Instead of storing packet data alone, or packet data plus a LAST
+bit, or packet data plus some number of ancillary bits (TSTRB, TKEEP, TUSER,
+and TLAST), I store the length of the packet &lt;em&gt;before&lt;/em&gt; the packet.&lt;/p&gt;
+
+&lt;p&gt;Fig. 6 shows this pictorally.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: right&quot;&gt;&lt;caption&gt;Fig 6. Virtual packets in memory&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/vfifo/vpktmem.svg&quot; alt=&quot;&quot; width=&quot;320&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Specifically:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;All packet length fields precede the packet they describe.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;All packet lengths are 32’bits.  Yes, this is an arbitrary length.
+However, 1) this seems to be the smallest bus size I’ve ever needed to work
+with.  2) I rarely have more than 4GB of memory, so this seems sufficient.
+3) It allows for jumbo packet sizes up to whatever memory size I have on hand.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;I also force a minimum 32-bit alignment on all accesses.  So, for a 128-bit
+wide bus, this word will be aligned on a 32-bit boundary.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Before a packet is committed, its packet length shall be NULL.  (i.e. 32’h0)
+You can think of this like the NULL pointer at the end of a linked list.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The packet data is written to memory using the full width of the bus.&lt;/p&gt;
+
+    &lt;p&gt;In the context of the &lt;a href=&quot;https://github.com/ZipCPU/eth10g&quot;&gt;10Gb Ethernet switch&lt;/a&gt;
+I’m working on, maintaining memory throughput is important.  As a result, I
+need to use the full memory width (512 bits) as often as possible.  Anything
+less would reduce my memory bandwidth.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;If ever a packet gets dropped, the &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifowr.v&quot;&gt;packet
+writer&lt;/a&gt;
+just goes back to the beginning of the packet data area and starts over
+following the NULL packet length word when the next packet starts.&lt;/p&gt;
+
+    &lt;ul&gt;
+      &lt;li&gt;
+        &lt;p&gt;Packets can be dropped for any upstream reason.&lt;/p&gt;
+      &lt;/li&gt;
+      &lt;li&gt;
+        &lt;p&gt;Packets are also dropped if the virtual packet FIFO runs out of room.&lt;/p&gt;
+
+        &lt;p&gt;This is a necessary criteria to prevent a deadlock created if the upstream
+source never needs to abort, and yet there’s no room in memory to hold
+the last of the packet in memory.&lt;/p&gt;
+
+        &lt;p&gt;In order to support packet length pointers, a packet may not be completed
+unless there’s room for both the packet length before and the packet
+length of the packet to follow.&lt;/p&gt;
+      &lt;/li&gt;
+    &lt;/ul&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;As I mentioned, I’m now working on building a Virtual Packet FIFO.  It hasn’t
+yet been verified, or I’d present the entire FIFO here.  For now, let me point
+out the three major components and discuss how they work together:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;There’s the &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifo.v&quot;&gt;Controller&lt;/a&gt;,&lt;/li&gt;
+  &lt;li&gt;The &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifowr.v&quot;&gt;writer&lt;/a&gt;, and&lt;/li&gt;
+  &lt;li&gt;The &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;.&lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;You may expect these components to change as they eventually get verified,
+and then tested and proven in hardware.  (As of today, only the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifowr.v&quot;&gt;writer&lt;/a&gt;
+has passed a formal check, and even that check didn’t properly include the
+&lt;a href=&quot;/formal/2020/06/12/four-keys.html&quot;&gt;contract&lt;/a&gt;.)&lt;/p&gt;
+
+&lt;p&gt;Let’s discuss each of these components briefly.&lt;/p&gt;
+
+&lt;h3 id=&quot;the-virtual-packet-fifo-controller&quot;&gt;The Virtual Packet FIFO Controller&lt;/h3&gt;
+
+&lt;p&gt;The controller is responsible for setting the base address and memory size
+allocated to the virtual FIFO.  These two values are then propagated down to
+both &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifowr.v&quot;&gt;writer&lt;/a&gt;
+and &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;.
+It’s also responsible for resetting the FIFO, and (depending on the
+configuration) releasing it from reset.&lt;/p&gt;
+
+&lt;p&gt;Even though this is only my second virtual packet FIFO, I’ve already had several
+diverse needs for this controller.  In one design, the controller was given a
+fixed memory allocation.  This is appropriate if the controller is required to
+start up and operate without any CPU intervention.  In another design, the CPU
+could allocate memory for the FIFO and then enable or disable the FIFO.  When
+I can’t decide which of the two I want, sometimes I will generate a combination
+of the two, so that the FIFO may start with a default allocation that the CPU
+can come back to and adjust later if necessary.&lt;/p&gt;
+
+&lt;p&gt;What happens if the CPU gives it a bad allocation?  One of the challenges of
+controller design is determining how the virtual packet FIFO should handle
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;bus errors&lt;/a&gt;.
+In general, a &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;bus error&lt;/a&gt; indicates
+that the FIFO has a bad memory allocation.  This might be the case if the
+CPU has allocated memory to the FIFO that isn’t present in the system.  In
+this case, it makes the most sense for the FIFO to shut down with some type of
+error condition, and to then wait for the CPU to correct its memory allocation.
+On the other hand, if the CPU will get its instructions for “fixing” any faults
+from the network, then the network must be able to heal itself without any
+CPU intervention.&lt;/p&gt;
+
+&lt;p&gt;A similar problem might be generated by the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;
+if it ever comes across an invalid packet length word.  Such a packet length
+migth be equal to zero, greater than the total size of the allocated memory,
+or perhaps just big enough to pass the write pointer.&lt;/p&gt;
+
+&lt;p&gt;In both of these cases, either a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;bus error&lt;/a&gt; or an invalid
+packet length, there should be an appropriate way to fix the situation.
+In a hands-off implementation, the FIFO will need to just reset
+itself–hopefully in that case memory allocation issues will be handled before
+implementation.  In another case, the FIFO will wait for the CPU to issue a
+new address before releasing itself from reset.  The same could be done with
+the read packet length, or alternatively the &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;packet
+reader&lt;/a&gt;
+might just skip to where the write pointer is at–skipping any packets in the
+way.&lt;/p&gt;
+
+&lt;p&gt;Which method of resolving faults is appropriate depends upon the particular
+design requirements.&lt;/p&gt;
+
+&lt;h3 id=&quot;the-write-state-machine&quot;&gt;The Write State Machine&lt;/h3&gt;
+
+&lt;p&gt;Once the base address and memory size are known, and once the FIFO has been
+released from reset, incoming packets may be written to memory.&lt;/p&gt;
+
+&lt;p&gt;This takes place in several discrete steps.&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;First, prior to any packet, &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L397-L423&quot;&gt;the packet’s length word must be written as
+zero&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Then, as packet data enters the FIFO, its data &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L424-L464&quot;&gt;gets written directly to
+memory&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;Unfortunately, the 32-bit packet length word guarantees that further writes
+to memory can not be guaranteed to have any particular alignment.  Incoming
+data must then be &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L450-L457&quot;&gt;realigned as it is written to memory&lt;/a&gt;.
+This also means that there may need to be &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L483-L488&quot;&gt;N+1 memory writes for
+every N memory words&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;A second problem here is associated with the data pointer.  Specifically,
+pointers wrap.  Hence, &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L226-L237&quot;&gt;any calculation of the next memory
+address&lt;/a&gt;
+must include &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L232-L234&quot;&gt;a check against the last memory address, and a wrap back
+to the first address if it passes the end of
+memory&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;Finally, &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L461-L462&quot;&gt;this is the only place where committed memory space is
+checked&lt;/a&gt;.
+If a packet uses all of the available memory space, not just the remaining
+memory space, then it must be aborted locally.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;On any packet &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt;s,
+the &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L435-L440&quot;&gt;write pointer is set to follow the prior NULL
+length&lt;/a&gt;.  On a local
+packet &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt;, such
+as might take place if the packet overflowed memory, then we need to
+resync to the beginning of the next packet.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once a packet is complete, the next word becomes the length field of the
+next packet.  &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L495-L523&quot;&gt;It is set to
+NULL&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;After this next word has been set to NULL, the &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifowr.v&quot;&gt;FIFO
+writer&lt;/a&gt;
+can then &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L524-L557&quot;&gt;go back and write the length of the current (just written) packet
+into memory&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;This is what actually commits the packet to memory.  We can know the
+packet has been committed once all bus requests have been completed.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once the bus becomes idle, we tell the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/8e4af12717cfc96611e47b260236e52f5412d95c/rtl/net/pktvfifowr.v#L579&quot;&gt;our new start-of-packet pointer&lt;/a&gt;
+and go back to step #2 above to handle the next packet.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;All of this is handled via a (monster) state machine that can master the bus.&lt;/p&gt;
+
+&lt;h3 id=&quot;the-read-state-machine&quot;&gt;The Read State Machine&lt;/h3&gt;
+
+&lt;p&gt;Once a packet is committed, a second state machine can then read the packet
+back from the bus.  (This one still needs a lot of verification work …)&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;First, the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;
+reads the length word from memory.&lt;/p&gt;
+
+    &lt;p&gt;Knowing when to read this length word is a bit of a problem.  Were this a
+piece of CPU software, we might poll this memory word.  If the memory word
+was ever non-zero, we’d know a packet was present.  However, this design is
+intended for a hardware implementation.  Hardware can poll memory on every
+clock cycle, so much so that the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifowr.v&quot;&gt;writer&lt;/a&gt;
+wouldn’t have any cycles left to write the packet to memory.  To prevent
+this, we’d need to specify a polling interval, which would then increase our
+latency.  Supporting minimum latency requires a different solution.&lt;/p&gt;
+
+    &lt;p&gt;My solution to this problem has been to use an out-of-band communication
+scheme through the controller.  In this scheme, the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifowr.v&quot;&gt;writer&lt;/a&gt;
+tells the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;
+a pointer to the length word of the last packet committed.  If this address
+doesn’t match the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;’s
+last memory address, then a packet is present that may be read.
+In another version of this FIFO, one with the CPU in the middle, the CPU
+provides the reader with the same pointer.  Again, this tells the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;
+when it’s safe to go and read the packet length counter for the next packet.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once returned, the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;
+then verifies the packet length word.&lt;/p&gt;
+
+    &lt;ul&gt;
+      &lt;li&gt;It’s not allowed to be zero.&lt;/li&gt;
+      &lt;li&gt;The packet length may not pass the write pointer.  This would indicate
+a memory overrun condition.&lt;/li&gt;
+      &lt;li&gt;The packet length must be less than the size of memory.&lt;/li&gt;
+    &lt;/ul&gt;
+
+    &lt;p&gt;On any failure, we can either reset the entire FIFO, or (alternatively) just
+drop all packets between our current location and the write pointer.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;If the length pointer is good, we start reading from memory.&lt;/p&gt;
+
+    &lt;p&gt;There are two challenges with this task.  The first challenge is that
+the memory will (in general) be misaligned.  The second challenge is that
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt; has no
+concept of &lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt;,
+and our outgoing stream interface may require it.&lt;/p&gt;
+
+    &lt;p&gt;To handle misalignment, we need to keep track of the previously read
+memory word.  That, plus the current memory word, both shifted
+appropriately, we’ll yield an outgoing stream word.  The trick is that
+we may need to read an additional word to get all of the outgoing
+stream data associated with this packet.&lt;/p&gt;
+
+    &lt;p&gt;The way to handle
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt; when using
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt; is to
+guarantee that we don’t issue a read request in the first place unless
+there’s space available in the following outgoing FIFO for a packet word.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;One of the nice things about the
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfiford.v&quot;&gt;reader&lt;/a&gt;,
+is that we don’t need to generate any
+&lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;ABORT&lt;/a&gt;s.  That’s
+a pleasant simplification.  Indeed, at this point in our return processing, we
+could finally handle (infinite)
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Back_pressure&quot;&gt;backpressure&lt;/a&gt; if need be.&lt;/p&gt;
+
+&lt;h3 id=&quot;a-new-interconnect&quot;&gt;A New Interconnect&lt;/h3&gt;
+
+&lt;p&gt;One piece I wasn’t expecting in this new architecture was an updated/better
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt;
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;interconnect&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;As perspective, &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifo.v&quot;&gt;this virtual packet
+FIFO&lt;/a&gt;, is
+designed to support a &lt;a href=&quot;https://github.com/ZipCPU/eth10g&quot;&gt;10Gb, 4-way Ethernet
+switch&lt;/a&gt;.  That means I want to be able to
+support 10Gb arriving (and departing) on each of the 4 interfaces at the same
+time.  When using our planned hardware, the memory will run on a 200MHz clock,
+reading (or writing) 512-bits (64-bytes) of data per clock cycle.  However, a
+10Gb Ethernet switch will generate one 512-bit word every 51.s ns, or (roughly)
+once every 11 clocks at 200MHz.  Hence, when the interface is running full
+speed, we’ll be getting requests from rotating controllers.  The first
+controller might want a beat, but then not need anything for another 10 beats
+while the second controller wants a beat, etc.&lt;/p&gt;
+
+&lt;p&gt;Typically, I run
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt; in a fashion
+where I burst data to the bus (i.e. to memory) and then wait for the response
+before shutting the interface down.  When using Xilinx’s MIG, this can take
+up 20 clock cycles of latency.  If I did that here, I’d never have enough
+memory bandwidth to keep up.&lt;/p&gt;
+
+&lt;p&gt;My solution to this problem is to use a &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/wbmarbiter.v&quot;&gt;special type of
+interconnect&lt;/a&gt;–one
+I first developed for an AXI project.  When using &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/wbmarbiter.v&quot;&gt;this
+interconnect&lt;/a&gt;, N
+masters may request bus accesses of a single slave.  In this case, as each bus
+master makes its request, the master’s ID is placed in a FIFO.  Since
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt; requests are
+always returned in the order they are received, I can then use this FIFO to
+route responses back to the appropriate master.  This will allow me to
+interleave requests from multiple masters together on their way to memory.&lt;/p&gt;
+
+&lt;p&gt;That’s the good news–more bandwidth.  The bad news is that this N:1 arbiter
+will break &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt; in
+two ways.  First, since there’s no guaranteed concept of the end of a
+transaction, there’s no way to know when to lock the bus.  Second, as I
+implement &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt;, a
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;bus error&lt;/a&gt; terminates any ongoing
+transaction.  This means that if N masters are active and only one of those
+masters receives a &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;bus error&lt;/a&gt;–in
+response to some erroneous transaction, then all
+&lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone&lt;/a&gt; masters will
+receive a &lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;bus error&lt;/a&gt; in return to
+their ongoing operations.  For now, this will work: 1) these virtual packet
+FIFOs will not be locking the bus, and 2) any
+&lt;a href=&quot;https://en.wikipedia.org/wiki/Bus_error&quot;&gt;bus errors&lt;/a&gt; should be rare or
+even non-existent.  Still, it’s a risk, and I’ll need to make sure it’s
+well documented throughout the project.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
+
+&lt;p&gt;This is now the &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifo.v&quot;&gt;second virtual packet FIFO I’ve
+created&lt;/a&gt;.
+If any design becomes so useful that you need to build it more than once,
+then it’s going to become useful again.&lt;/p&gt;
+
+&lt;p&gt;In this case, this &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifo.v&quot;&gt;virtual packet
+FIFO&lt;/a&gt; will
+play an important part of the &lt;a href=&quot;https://github.com/ZipCPU/eth10g&quot;&gt;10Gb Ethernet
+switch&lt;/a&gt;) I’m working on.  As packets arrive
+from the PHY, their CRC’s will be validated, their &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axinwidth.v&quot;&gt;stream width
+expanded&lt;/a&gt;,
+they’ll then &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axincdc.v&quot;&gt;cross clock
+domains&lt;/a&gt;,
+their source MACs will recorded in the router, and they will enter &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifo.v&quot;&gt;this virtual
+packet FIFO&lt;/a&gt;.
+Once these packets come out of
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/pktvfifo.v&quot;&gt;the FIFO&lt;/a&gt;,
+the’ll go into a separate &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/sfifo.v&quot;&gt;synchronous
+FIFO&lt;/a&gt;, have
+their destination MACs checked, get routed to an outgoing interface, &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axincdc.v&quot;&gt;cross
+clock domains&lt;/a&gt;
+(again), have &lt;a href=&quot;https://github.com/ZipCPU/eth10g/blob/master/rtl/net/axinwidth.v&quot;&gt;their widths
+adjusted&lt;/a&gt;
+back to the interface width, and finally get blasted out the network.  Feel
+free to check out
+&lt;a href=&quot;https://github.com/ZipCPU/eth10g/doc/eth10g-blocks.png&quot;&gt;this picture&lt;/a&gt; to see
+an overview of this entire operation, as well as the status of the various
+components required of this project.&lt;/p&gt;
+
+&lt;p&gt;For now, however, the project is still draft.  The hardware, while drafted,
+isn’t yet built and I’m still working on the RTL components within it.
+&lt;a href=&quot;https://www.blueletterbible.org/kjv/jas/4/15/&quot;&gt;Lord willing&lt;/a&gt;,
+I’ll have the RTL done by the time the hardware is available.&lt;/p&gt;
+
+&lt;p&gt;Still, the overall concept of a Virtual Packet FIFO was one I felt would
+be worth sharing.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;There is that scattereth, and yet increaseth; and there is that withholdeth more than is meet, but it tendeth to poverty.  (Prov 11:24)&lt;/em&gt;</description>
+        <pubDate>Sat, 08 Apr 2023 00:00:00 -0400</pubDate>
+        <link>https://zipcpu.com/blog/2023/04/08/vpktfifo.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/blog/2023/04/08/vpktfifo.html</guid>
+        
+        
+        <category>blog</category>
+        
+      </item>
     
       <item>
         <title>What is a SwiC?</title>
@@ -3022,362 +3852,6 @@ you managed to get to making the expression true before ultimately failing.&lt;/
         
         
         <category>quiz</category>
-        
-      </item>
-    
-      <item>
-        <title>Measuring the Steps to Design Checkoff</title>
-        <description>&lt;p&gt;I’ve recently had the opportunity to rebuild a &lt;a href=&quot;https://www.arasan.com/products/nand-flash/&quot;&gt;NAND flash
-controller&lt;/a&gt; for &lt;a href=&quot;https://www.arasan.com&quot;&gt;Arasan Chip
-Systems, Inc&lt;/a&gt;.
-The purpose of this redesign was to upgrade an existing flash controller
-so that it can process flash requests and commands at even faster speeds than
-ever before.  Indeed, this new controller is designed to handle flash chips
-that operate at speeds of up to 1.6GB/s while being backwards compatible with
-all previous speeds.  Those who know my typical design goals will already
-know my personal goals for this design: &lt;em&gt;throughput, throughput, throughput!&lt;/em&gt;&lt;/p&gt;
-
-&lt;p&gt;What I wanted to discuss today, however, was a basic management problem I
-came across while working on this project.  At one time, during development,
-I was asked by &lt;a href=&quot;https://www.arasan.com&quot;&gt;Arasan&lt;/a&gt;’s management team where I
-was at in the project, and how much longer the project would take to
-accomplish.&lt;/p&gt;
-
-&lt;p&gt;Gosh, where do you start?&lt;/p&gt;
-
-&lt;p&gt;First, let’s face reality, despite how much an engineer would like to avoid
-such questions, these are valid questions.  Customers have a right to know
-how far along you are, and when you think you’ll have the project completed.
-In other words, you might not like the question, but it is one that needs
-answering.&lt;/p&gt;
-
-&lt;p&gt;Perhaps the best and most truthful answer might be, “I’m working on it, and
-it’ll get done when it gets done.”  While this might be true, it doesn’t
-allow you the ability to express your progress at all.
-Customers want to know your timeline, and they want to know that the timeline
-you give them is well justified.
-Put simply, you need to break projects down into tasks–tasks that need to take
-place between now and project completion.  Each task then needs to be given
-a time estimate, leading up to an ultimate completion date for each project.&lt;/p&gt;
-
-&lt;p&gt;Here’s an example of what such a task list might look like.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1. Example task list table&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/checkoff/tasklist.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;You might find it better to view something like this via a
-&lt;a href=&quot;https://www.gantt.com/&quot;&gt;Gantt chart&lt;/a&gt; rather than as a list of independent
-tasks, but let’s pull on this idea of a task list a bit more for discussion.
-Why?  Because, once the interfaces to a module have been defined, then the
-design of each module in a larger system can become an independent task
-which can then be separated from the rest of the design. Of course, this
-only goes so far: often when designing a module, you will often discover
-changes that need to be made to the interface, and some tasks (like
-simulation) cannot begin until other tasks complete, but this is still a
-good place to start.&lt;/p&gt;
-
-&lt;p&gt;One of the benefits of independent tasks is that they can be accomplished
-in any order.  Over time, I’ve even found myself walking around in a large
-project in a somewhat scatterbrained fashion and doing things out of order.
-This leads to two clear problems.  The first is, how shall I know if an
-individual task is complete or not?  The second one is like it.  For those
-tasks that are not complete, how shall I measure how much of the task
-remains?&lt;/p&gt;
-
-&lt;p&gt;Answering these questions will be the topic of this article.&lt;/p&gt;
-
-&lt;h2 id=&quot;measuring-design-progress&quot;&gt;Measuring design progress&lt;/h2&gt;
-
-&lt;p&gt;The current solution that I came up with to measure design progress involves
-building a list of design components (modules), and then discussing their
-status in a sort of stop-light chart.  For example, Fig. 2 below shows five
-components of a design together with their various states of development.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2. Module development stoplight chart&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/checkoff/componentlist.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Many of the parts and pieces of this example design are already posted on
-Github.  For example, you can find the &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v&quot;&gt;AXI
-Crossbar&lt;/a&gt; or the
-&lt;a href=&quot;/about/zipcpu.html&quot;&gt;ZipCPU&lt;/a&gt;’s &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/axilfetch.v&quot;&gt;AXI-lite instruction
-fetch&lt;/a&gt; all
-available on line.  You can even find &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axidma.v&quot;&gt;my AXI
-DMA&lt;/a&gt; on
-&lt;a href=&quot;https://github.com/ZipCPU&quot;&gt;github&lt;/a&gt;.  Other components, such as the “Custom
-DMA”, the custom “Micro-Controller”, or the “Top Level Design” listed here,
-were not yet built much less posted anywhere.  Each component is then given
-a row in this chart, where each column contains a task to be accomplished
-before the component is completed.  Each box is then filled in with a color
-and a status to describe the reason for the color.&lt;/p&gt;
-
-&lt;p&gt;In general, my color scheme follows:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;Red: I color tasks red if either the task &lt;em&gt;not yet started&lt;/em&gt;, or if &lt;em&gt;known
-problems exist&lt;/em&gt; with the task.  Perhaps a formal proof fails.  Perhaps the
-component fails in simulation.  Either case would show up here in red.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Yellow: Yellow is for partial completion–a &lt;em&gt;work in progress&lt;/em&gt;.  To be
-yellow, the design component must at least be written, but may not (yet)
-pass any verification steps.  When it comes to formal proofs, a yellow box
-would indicate that the design passed at one time, but for some reason the
-proof needs to be re-run–perhaps because of some changes that have since
-been made to the design, perhaps the interface requirements needed to be
-updated, or perhaps because a new configuration now needs to be tested.
-Whatever the reason, yellow shows progress without yet showing completion.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Green: A green box is &lt;em&gt;good to go&lt;/em&gt;.  The task is completed.  Both the design
-portion is complete, and the given portion of testing has been completed as
-well.  No more attention needs to be paid to a green task.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Gray: &lt;em&gt;Not applicable&lt;/em&gt;.  For example, I tend to only formally verify &lt;em&gt;leaf&lt;/em&gt;
-components of my designs for complexity reasons.  The top level of a design
-rarely sees the light of formal tools, and therefore needs to be tested
-via simulation only.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Now that we know the colors, let’s look at the columns.&lt;/p&gt;
-
-&lt;p&gt;The first column simply provides an overview of the status of the component.
-Is it in development?  If development hasn’t yet started, the component will
-be colored in red.  Has the component been verified?  Is it being tested?  Has
-it been signed off?  Once a component has received a formal sign off, and hence
-is ready for integrated simulation, then I’ll color it green.  All of this is
-captured by the first column.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3. Four formal verification steps&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/checkoff/four-keys.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The next four columns follow from my discussion of the “&lt;a href=&quot;/formal/2020/06/12/four-keys.html&quot;&gt;Four Keys to getting
-your design to work the first
-time&lt;/a&gt;” article.  These
-columns indicate whether or not the design component has passed an interface
-check, a contract check, induction, or cover.  In summary:&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;The &lt;em&gt;interface check&lt;/em&gt; verifies the interfaces the component is supposed to
-maintain.  If done well, a formal interface definition can define both
-sides of the interface, and so assumptions made in one module can be verified
-as assertions on the other side of any interface.&lt;/p&gt;
-
-    &lt;p&gt;As an example from Fig. 2, the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/axilfetch.v&quot;&gt;AXI-Lite
-fetch&lt;/a&gt;
-module maintains two interfaces: one with the &lt;a href=&quot;/formal/2018/12/28/axilite.html&quot;&gt;AXI-Lite
-bus&lt;/a&gt;, and a second
-between the fetch and the CPU.  Both interfaces need to be clearly defined,
-and then the design will need to pass a formal property check against this
-definition in order for the design to pass this box.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The &lt;em&gt;contract check&lt;/em&gt; is an internal check, designed to prove that the
-design component does what it is supposed to do internally.&lt;/p&gt;
-
-    &lt;p&gt;Continuing with the example of the &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/axilfetch.v&quot;&gt;AXI-Lite
-fetch&lt;/a&gt;,
-the contract check would follow:&lt;/p&gt;
-
-    &lt;ol&gt;
-      &lt;li&gt;
-        &lt;p&gt;First, pick an arbitrary memory address together with an arbitrary
-32-bit value (the instruction) that you will assume be at that address.&lt;/p&gt;
-
-        &lt;p&gt;I will also pick another arbitrary bit to decide whether or not reading
-from this address will produce a bus error or not.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;When the AXI-Lite bus returns an instruction associated with that
-address, &lt;em&gt;assume&lt;/em&gt; the value returned matches the arbitrary instruction
-selected above.  The extra bit will also determine whether or not this
-return is OKAY or represents some form of bus error or not.&lt;/p&gt;
-      &lt;/li&gt;
-      &lt;li&gt;
-        &lt;p&gt;Now &lt;em&gt;prove&lt;/em&gt; (i.e. assert) that the instruction passed to the CPU that
-is associated with this address matches the arbitrary instruction value
-picked earlier.  Or, if the bus returned an error, then assert that the
-illegal instruction flag is sent to the CPU with this instruction.&lt;/p&gt;
-      &lt;/li&gt;
-    &lt;/ol&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: left; padding: 25px&quot;&gt;&lt;caption&gt;Fig 4. My master rule of formal verification&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/checkoff/fv-master-rule.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;Note that the check above follows my “master rule” of formal verification:
-  Assume inputs, such as the instruction returned by the bus, and then assert
-  outputs–such as the instruction returned to the CPU.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;The &lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;&lt;em&gt;induction&lt;/em&gt;&lt;/a&gt;
-check will give you the confidence you need that your interface and contract
-properties are not just held for the first twenty clock periods, but rather
-for all time.&lt;/p&gt;
-
-    &lt;p&gt;As an example here, it can be a challenge to formally verify that a component
-is fully AXI compliant.  There’s just a &lt;em&gt;lot&lt;/em&gt; of assertions involved.  If
-you only attempt 64-cycles of a bounded model check, then you’ll never know
-whether or not your design would fail on the 65th cycle of a 256-beat burst,
-or whether or not your design can handle two 32-beat bursts in a row.&lt;/p&gt;
-
-    &lt;p&gt;If the component being tested were a cache component, the
-&lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;&lt;em&gt;induction&lt;/em&gt;&lt;/a&gt;
-check might help verify that nothing spoiled the cache between when the
-instruction was first returned to the CPU, and when it may have been
-returned some time later.  (How long?  Longer than the bound of the proof!)&lt;/p&gt;
-
-    &lt;p&gt;For these questions, you will need to pass
-&lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;induction&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Finally, the &lt;em&gt;cover&lt;/em&gt; check is left over to make certain that, in spite of
-any assumptions you may have made, your design is still able to accomplish
-whatever tasks were assigned to it.&lt;/p&gt;
-
-    &lt;p&gt;Years ago, when visiting a helicopter squadron, I remember being introduced
-to the test pilots of the squadron.  Why would a squadron need test pilots,
-I asked?  The helicopters were decades old, and their performance well
-established, what was the purpose of the test pilots or the test pilot
-section they were members of?  The answer I was given surprised me:
-After taking a helicopter apart to fix it, it’s important to shake
-it around in a test flight just to make certain everything was properly put
-back in place.  In digital design, we might call such a test a “regression”
-test.&lt;/p&gt;
-
-    &lt;p&gt;In a similar fashion, I use cover checks in a sanity checking role.  There’s
-been more than once where I’ve convinced myself that a design passes a
-formal verification check, only to discover later that I had erroneously
-assumed the design would remain in reset the whole time.  A proper cover
-check would’ve failed in this case, which would then lead me to the problem
-in my proof.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;Once all of the various components in a design pass their formal checks, I’ll
-then turn to simulation so that I can demonstrate the functionality of the
-design.  Note that, at this point, I’m no longer trying to &lt;em&gt;prove&lt;/em&gt; the design
-works–that’s already been done via formal methods.  Instead, I’m now trying to
-&lt;em&gt;demonstrate&lt;/em&gt; that the design works.  Frankly, there’s no way I could make any
-simulation as thorough as the formal proofs preceding it, but there remain lots
-of good reasons for using simulations and bugs that still get caught in this
-final step.&lt;/p&gt;
-
-&lt;p&gt;The simulation column might also be where I’d include code coverage statistics,
-if the project required them.&lt;/p&gt;
-
-&lt;p&gt;Some projects have an additional column that I haven’t listed in this chart.
-This column would capture whether or not the design as a whole has been
-hardware tested and proven.  This might mean that the design has been placed
-onto an FPGA, and that it has been demonstrated to work on the FPGA.  It might
-also mean that an ASIC has been built from the design.  The important part
-here is that, while this is a very useful column, it’s not necessarily
-an important check off criteria for all designs.&lt;/p&gt;
-
-&lt;p&gt;With that as background, let’s go back and examine Fig. 2 a bit.&lt;/p&gt;
-
-&lt;p&gt;As you can see from the list of components, my &lt;a href=&quot;https://github.com/ZipCPU/wb2axip/blob/master/rtl/axixbar.v&quot;&gt;AXI
-crossbar&lt;/a&gt; has
-failed its
-&lt;a href=&quot;/blog/2018/03/10/induction-exercise.html&quot;&gt;induction&lt;/a&gt;
-check and changes have been made to it since it was last
-formally verified.  This is evidence of work that needs to be accomplished.&lt;/p&gt;
-
-&lt;p&gt;The &lt;a href=&quot;https://github.com/ZipCPU/zipcpu/blob/zipcore/rtl/core/axilfetch.v&quot;&gt;AXI-lite instruction
-fetch&lt;/a&gt;,
-however, had only recently been built when I put this chart together.  At the
-time, it was still a very new design.  Still, it has passed all of its
-property checks, and was then being used in simulation testing.  (It’s now been
-used quite successfully in several projects, but that’s another story
-for another time.)&lt;/p&gt;
-
-&lt;p&gt;The microcontroller in this example, however, had suffered from catastrophic
-failures in simulation.  (I had tried to skip the formal checks after making
-some minor changes and then to run directly to simulation.  Skipping steps often
-feels like you are moving faster, when in this case it meant I had to go back
-and do some rework.)  Since bugs had been found in the microcontroller, I
-marked it in red so that I would remember to go back and update the formal
-proof so these bugs never come back again.&lt;/p&gt;
-
-&lt;p&gt;The custom DMA should be self-explanatory–it simply hadn’t (yet) been built,
-so it’s line was red through and through.&lt;/p&gt;
-
-&lt;p&gt;That brings us to the “Top Level Design” component.  This level will not be
-formally verified, and so those boxes have been grayed out.  This is for two
-reasons.  First, if everything beneath it was properly verified, then this
-level shouldn’t need to be verified at all.  Second, formal verification
-depends upon an exhaustive search over all potential states.  This search is
-exponentially complex and can easily grow beyond what the designer’s (patience
-and) computer power are able to handle.  Therefore, the top level design will
-be the focus of a lot of simulation work, but that won’t be able to happen
-until all the parts and pieces composing it have been built.&lt;/p&gt;
-
-&lt;h2 id=&quot;other-uses&quot;&gt;Other uses&lt;/h2&gt;
-
-&lt;p&gt;Since I started building charts like this one, I’ve found other uses for
-building charts like this.  Three particular uses include scheduling, cost
-estimation, and explaining design proposals in contract bids.&lt;/p&gt;
-
-&lt;ul&gt;
-  &lt;li&gt;
-    &lt;p&gt;Scheduling&lt;/p&gt;
-
-    &lt;p&gt;When scheduling, I’ll place the amount of time in each box that I expect
-a task to take.  The sum of all the remaining times in a project should
-then be the amount of work time remaining in a project.&lt;/p&gt;
-
-    &lt;p&gt;Do I always get this right?  No.  A better question to ask might be whether
-I ever get this estimate right at all.  The answer is probably not, but it’s
-at least a good first order estimate.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Cost estimation&lt;/p&gt;
-
-    &lt;p&gt;If you can figure out how much time a project will take, then cost
-estimation becomes easier.  For most of my projects, the primary cost driver
-is engineering time–my own personal time in particular.  Once a time
-has been estimated for each of the tasks in the project, all that really
-remains is to multiply that time by an hourly rate.&lt;/p&gt;
-
-    &lt;p&gt;Tracking the time used in any particular task is also an important part of
-estimating such acquisition measures as the &lt;a href=&quot;https://www.dau.edu/acquipedia/pages/ArticleContent.aspx?itemid=290&quot;&gt;Actual Cost of Work Performed
-(ACWP)&lt;/a&gt;
-or the &lt;a href=&quot;https://www.dau.edu/acquipedia/pages/ArticleContent.aspx?itemid=287&quot;&gt;Budgeted Cost of Work Performed
-(BCWP)&lt;/a&gt;
-for those customers that require these numbers.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Contract bids&lt;/p&gt;
-
-    &lt;p&gt;Yes, I also use this approach when bidding for contracts as well.&lt;/p&gt;
-
-    &lt;p&gt;However, when bidding for contracts, I’ll often list components instead of
-components and tasks, and then rearrange those components into something
-with more meaning.  Perhaps its a data flow diagram of some type.  Perhaps
-its a system block diagram.  Either way, such a diagram then helps me to
-illustrate for the customer that I understand the task at hand, while the
-stop-light colors help to illustrate the status of the various &lt;a href=&quot;/blog/2020/01/13/reuse.html&quot;&gt;library
-components&lt;/a&gt; I might bring to
-the project.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ul&gt;
-
-&lt;p&gt;In short, I’ve found this stop-light approach very valuable when communicating
-with customers.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
-
-&lt;p&gt;I’ve now used this component list progress chart for several projects and
-purposes.  It has worked so well for me, that I intend to use it again
-and again on future projects as the projects and needs allow.&lt;/p&gt;
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;And ye shall hear of wars and rumours of wars: see that ye be not troubled: for all these things must come to pass, but the end is not yet.  For nation shall rise against nation, and kingdom against kingdom: and there shall be famines, and pestilences, and earthquakes, in divers places.  (Matt 24:6-7)&lt;/em&gt;</description>
-        <pubDate>Tue, 01 Nov 2022 00:00:00 -0400</pubDate>
-        <link>https://zipcpu.com/formal/2022/11/01/design-checkoff.html</link>
-        <guid isPermaLink="true">https://zipcpu.com/formal/2022/11/01/design-checkoff.html</guid>
-        
-        
-        <category>formal</category>
         
       </item>
     
