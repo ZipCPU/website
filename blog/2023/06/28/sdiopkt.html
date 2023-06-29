@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Using a Verilog task to simulate a packet generator for an SDIO controller</title>
+  <meta name="description" content="Fig 1. The KlusterLab board">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2023/06/28/sdiopkt.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-4ZK7HKHSVW"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-4ZK7HKHSVW');
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Using a Verilog task to simulate a packet generator for an SDIO controller</h1>
+    <p class="post-meta"><time datetime="2023-06-28T00:00:00-04:00" itemprop="datePublished">Jun 28, 2023</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <table align="center" style="float: right"><caption>Fig 1. The KlusterLab board</caption><tr><td><img src="/img/sdiopkt/klusterlab_1.0.jpeg" width="780" /></td></tr></table>
+
+<p>One of my current projects is to test and bring up a <a href="https://github.com/ZipCPU/eth10g">10Gb Ethernet
+test board</a>.  The board has been fondly named
+the “KlusterLab”, because of all of the various interfaces present on it.
+Among those interfaces are <a href="https://github.com/pcbarts/fast-open-switch-hardware/blob/8c531c306c93a31ff30c5851e233dbd086ae79f1/fast-open-switch%20r1.0/Documentation/KlusterLab%20Schematics%20r1.0.pdf">an SD port and an eMMC port</a>.
+Now, how shall I verify their functionality?</p>
+
+<h2 id="building-an-sdioemmc-controller">Building an SDIO/eMMC Controller</h2>
+
+<p>My first round of testing the SD port used my SPI-based SD card controller,
+<a href="https://github.com/ZipCPU/sdspi">SDSPI</a>.  Using that controller, the card
+responded in much the way I expected, save that the first sector of the card
+wasn’t what <a href="http://elm-chan.org/fsw/ff/00index_e.html">FATFS</a> was expecting.
+Since this is simply board bringup, where we are just trying to verify that the
+hardware is working, I signed the component off as working.  I could obviously
+write to the device, and I could read from the device.  (Okay, I signed it
+off too early, but we’re getting there.)</p>
+
+<p>The eMMC port, however, that was going to require more work.  I didn’t have
+an eMMC controller.</p>
+
+<p>On the other hand, I had the beginning scribbles of an SDIO controller I’d
+started to work on years earlier.  SDIO is actually the native SD card
+protocol.  It includes a clock, a bidirectional command wire, and four
+bidirectional data wires that can be used to send blocks of memory back and
+forth.  Moreover, it the SDIO and eMMC protocols are electrically so similar
+that a single hardware controller can work for both of them–even if they would
+need different software drivers.  Still, maybe I could breathe some life into
+my draft controller components?</p>
+
+<p>In the end, I didn’t breathe life into any dead corpse of a project.  I pretty
+much started over.</p>
+
+<table align="center" style="float: right"><caption>Fig 2. SDIO/eMMC IO modes</caption><tr><td><img src="/img/sdiopkt/iomodes.svg" width="420" /></td></tr></table>
+<p>Why?  Well, I figured, if I was going to build a <em>new</em> controller, I should
+build a design to support all of the IO modes used by eMMC and SDIO.  This
+meant I wanted to support both the open-drain IO these interfaces start out
+at, as well as their faster push-pull speeds.  I wanted to support the
+bidirectional command and data pins.  Since the ports will work with either 1,
+4, or 8 (eMMC only) data pins, I wanted to support all of these modes.  Finally,
+the clock speed could run anywhere from 100kHz at the slowest, all the way up
+to 200MHz.  The faster protocols even ran in DDR mode, with the fastest
+protocol requiring return data capture using a data strobe.</p>
+
+<p>Thankfully, this is all doable.  It just needs a little planning.</p>
+
+<p>Over the course of a weekend or two, I managed to draft all of the components
+to the entire controller.  You can see the various parts and pieces of this
+new controller in Fig. 3 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. SDIO/eMMC controller components</caption><tr><td><img src="/img/sdiopkt/sdioparts.svg" width="780" /></td></tr></table>
+
+<p>Once I built the front end hardware, I realized I couldn’t use an OSERDES
+with the FPGAs CCLK pin, so I had to rebuild it without IO elements.  I
+then built it again using DDR elements, and then built it again without
+Xilinx IO elements at all.</p>
+<table align="center" style="float: left; padding: 25px"><caption>Fig 4. Approaches to front-end IO</caption><tr><td><img src="/img/sdiopkt/sdfrontend.svg" width="320" /></td></tr></table>
+<p>The first front end I built was for the highest speed modes.  This was to handle
+anything above 50MHz, and it did so using both 8:1 OSERDES and 1:8 ISERDES
+elements.  I allowed the return data path to be captured any number of 1.25ns
+intervals from an outgoing clock edge (when not using the data strobe).  Even
+better, all of the data strobe qualified signals were placed nicely into
+appropriate asynchronous buffers.  Then I realized, the current
+version of the board will drive the eMMC clock through the CCLK pin, so I have
+no access to the OSERDES when driving this pin.  Hence I built a second version
+of the front end that just did direct IO pin control–allowing nothing to move
+at less than a clock cycle and limiting the controller to 50MHz.  This I built
+both with and without Xilinx IO support–to make sure I could handle the speeds
+CCLK would generate.  The final version, shown as #2 in Fig. 4, was a DDR based
+version.  This allowed me to run at 50MHz DDR from a 100MHz primary clock.  It
+also allowed me to simulate something quickly without needing to simulate
+Xilinx primitives.</p>
+
+<p>(I know, Xilinx primitives aren’t all that hard to simulate in Vivado.
+In fact, they’re pretty easy to simulate.  However, I was using open source
+tools up to that point and wasn’t yet ready to fire Vivado up.)</p>
+
+<p>All that remained was to verify the controller worked.</p>
+
+<p>But, hey, why let that stand in the way of progress if you have hardware
+available to you?  I mean, look at it this way, properly verifying this
+brand new controller would require I have a simulation model of an SD Card.
+Proper simulation models take at least as much time to develop as the IP itself,
+whereas in this case I have an actual SD card to test against.  Why not test
+against reality?</p>
+
+<p>So, I did.</p>
+
+<table align="center" style="float: right"><caption>Fig 5. Initial hardware results</caption><tr><td><img src="/img/sdiopkt/initialfail.svg" width="320" /></td></tr></table>
+<p>As you might expect, nothing worked.  I wasn’t really all that surprised.
+Indeed, I sort of expected that.  (I’m not really a miracle worker …)  What
+I wasn’t expecting was the controller to fail as early as when the board first
+came up.  That was kind of embarrassing.</p>
+
+<p>The problem was even worse than that.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 6. What failed?  I couldn't tell</caption><tr><td><img src="/img/sdiopkt/whichfail.svg" width="320" /></td></tr></table>
+<p>My whole goal at this portion of the project was to tell if the PCB design
+had bugs in it or not.  Since I had no confidence in my own controller, I
+couldn’t tell.  Was it my controller failing or the PCB?</p>
+
+<p>Even more embarrassing was that I couldn’t read known constant values back from
+my own controller’s <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone
+registers</a>.  You’d think
+after all these years I could draft a <a href="/zipcpu/2017/05/29/simple-wishbone.html">Wishbone register
+handler</a> and get it
+right on the first try.  (I certainly thought so.)  Nope.  I didn’t even get
+that part right.  Reading a register which was supposed to have a 4’hc in
+bits [31:28] returned 4’h0 for those bits.  Writing to that register didn’t
+have any effect.  Frankly, I had no idea what the IP was doing when I wrote
+to or read from it.  Yikes!</p>
+
+<p>So that left me in the middle of the longer, slower process of verifying the
+various components of this IP.  I’ve made some progress at this task, and
+so I now have formal proofs for the divided clock generator, the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+controller and the command pin processor.  The proofs aren’t
+<a href="/formal/2020/06/12/four-keys.html">complete</a>, but
+they were enough to get me moving a step closer to success.  They were also
+enough to find some rather embarrassing bugs–like writing when I was supposed
+to be reading, or not setting the output register properly at all.  That said,
+I can (now) read and write registers like I expect to, even when testing in
+hardware(–now).  It’s for this reason that I colored these components in
+green in Fig. 3 above.</p>
+
+<p>Unfortunately, when I got to verifying the packet transmit component, I ran
+into trouble.</p>
+
+<p>Specifically, I wanted to verify that any packet sent to the packet transmitter
+would be faithfully forwarded to the front end, with a proper start bit,
+CRC(s), and stop bit.  It needed to do this when transmitting 1bit, 2bits,
+4bits, 8bits, 16bits, or 32bits per clock cycle.  However, once I got to the
+point where the controller “passed” its <a href="/blog/2018/03/10/induction-exercise.html">formal induction
+proof</a>, I switched
+to <a href="/formal/2018/07/14/dev-cycle.html">checking cover traces</a>
+and the formal solver couldn’t demonstrate the ability to complete a packet at
+all.  Something in my logic was broken, and cover checks are horrible for not
+telling you what the problem is.</p>
+
+<p>I needed to switch to simulation.</p>
+
+<p>This, now, is the background behind what I’m going to discuss next.</p>
+
+<h2 id="simulation-tasks">Simulation Tasks</h2>
+
+<p>A full and proper Verilog simulation test bench, such as the one shown in
+Fig. 7, contains several specific components.  These include:</p>
+<table align="center" style="float: right"><caption>Fig 7. Simulation components</caption><tr><td><img src="/img/sdiopkt/fulltb.svg" width="320" /></td></tr></table>
+
+<ol>
+  <li>
+    <p>A test bench environment.  This is the “top level” of the simulated design.
+All other components will be submodules of this one.  The top level
+test bench will typically define any and all clocks and resets used by
+the design.</p>
+  </li>
+  <li>
+    <p>The device under test (DUT). In this case, it would be my new controller
+with all of its pieces.</p>
+  </li>
+  <li>
+    <p>A bus functional model (BFM) to send commands to the DUT.  This is one of
+those build once use everywhere kinds of components.  In this case, it
+would need to be a Wishbone BFM, since this controller has a <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone
+interface</a>.  Indeed,
+I have <a href="https://github.com/ZipCPU/sdspi/blob/master/bench/cpp/wb_tb.h">such a model that I
+use</a>
+often when controlling a design from
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>.
+I just don’t (yet) have a Verilog one–and the
+<a href="/about/zipcpu.html">ZipCPU</a> doesn’t really count,
+although <a href="/zipcpu/2021/07/23/cpusim.html">I have used it for that purpose in the
+past</a>.</p>
+  </li>
+  <li>
+    <p>A device hardware model.  This would model the component you intend to
+communicate with.  In this case, it would model either an eMMC or an SD
+card.  It’s also going to be the most complex piece of all the components
+I’m discussing here, since it will need to support all of the IO modes
+used by the DUT, as well as responding autonomously to the DUT–just like
+and SD card or eMMC chip would.</p>
+  </li>
+  <li>
+    <p>The final component of a test bench is a test script, designed to drive
+the BFM so that it tests the DUT from the perspective of the user.</p>
+
+    <p><a href="/zipcpu/2022/07/04/zipsim.html">I’ve learned</a> that
+this portion of the test really needs to be in its own file.  That way,
+you can swap which test script you run from one test to the next and
+verify and test different portions of the design at a time.</p>
+  </li>
+</ol>
+
+<p>I colored the missing pieces as black in Fig. 7 above.  Unlike the draft and
+untrusted components I often draw in red, these components haven’t even been
+drafted.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 8. Lessons learned when flagging failures</caption><tr><td><img src="/img/sdiopkt/lsnlearned.svg" width="320" /></td></tr></table>
+<p>A good test bench will also include lots of checks within it, either within the
+BFM or the device model, in order to make sure everything is done according
+to protocol at all stages in the process.  Any failure in this whole
+setup should be flagged as a failure (if it isn’t an expected and intended
+failure), and should then be
+<a href="/zipcpu/2022/07/04/zipsim.html">recorded</a>
+as a failed test case for later fault analysis.</p>
+
+<p>Putting all these components together takes a lot of work.  I just wanted to
+know if my transmit controller worked, and what was causing its <a href="/formal/2018/07/14/dev-cycle.html">formal cover
+check</a> to fail.</p>
+
+<p>So I just built a quick and dirty test bench, as shown in Fig. 9.</p>
+
+<table align="center" style="float: right"><caption>Fig 9. Quick and dirty simulation components</caption><tr><td><img src="/img/sdiopkt/verilogtb.svg" width="320" /></td></tr></table>
+
+<p>I then wanted to share a piece of this test bench here, since it uses
+Verilog tasks and I wanted to point out some key features of using tasks
+together with AXI streams.</p>
+
+<p>The test bench component I wish to share below is a Verilog task designed to
+send a packet, via an AXI stream port, to this transmit controller.  Further,
+it controls one additional transmit control wire–the transmit enable signal,
+<code class="language-plaintext highlighter-rouge">tx_en</code>.  This is the signal from the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+controller to the transmit controller enabling its operation.</p>
+
+<p>Let’s walk through this task.</p>
+
+<p>It starts with a task declaration.  The task accepts one parameter: the
+length of the packet to be transmitted in 32-bit words.  (It helps that
+nothing in either the SDIO or the eMMC protocol will need to transmit
+or receive something that’s not a multiple of 32-bits.)</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">task</span>	<span class="n">send_packet</span><span class="p">(</span><span class="kt">input</span> <span class="p">[</span><span class="mi">8</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="n">length</span><span class="p">);</span>
+	<span class="kt">integer</span>	<span class="n">counter</span><span class="p">;</span>
+<span class="k">begin</span></code></pre></figure>
+
+<p>As with all Verilog task inputs, or outputs for that matter, they are passed
+by value.  Hence even if this length parameter were to change while the task
+was operating, the value would remain constant within this environment.</p>
+
+<p>There are two other details of tasks to be noted here.  The first is that
+this is a “static” task.  “Automatic” tasks are defined by placing the
+word “automatic” between the task and its name.  “Automatic” tasks get
+a new set of variables assigned to them every time they are called.  Since
+this task is “static”, however, the “counter” value declared above will be
+shared across all invocations of it.  This will also make it easier to debug,
+since most Verilog simulators have an option to include these values in their
+generated traces.</p>
+
+<p>The second thing to note is that this is a <code class="language-plaintext highlighter-rouge">task</code> and not a <code class="language-plaintext highlighter-rouge">function</code>.
+Tasks are great when an operation needs to consume time.  As such, they
+aren’t always synthesizable, whereas functions can be used to encapsulate
+complex but synthesizable operations.</p>
+
+<p>Finally, the <code class="language-plaintext highlighter-rouge">integer counter</code> declaration just gives us a register we can
+work with.  It’s identical to <code class="language-plaintext highlighter-rouge">reg signed [31:0] counter</code>, but just a bit
+simpler to declare.</p>
+
+<p>We’ll start our task off by initializing all the values we are going to
+control.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">counter</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">tx_en</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">S_VALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">S_DATA</span>  <span class="o">&lt;=</span> <span class="p">$</span><span class="nb">random</span><span class="p">;</span>
+		<span class="n">S_LAST</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>No, these values are not declared within the task.  This is the task
+controlling values defined within the task’s external context–something
+I’ve only seen done in test bench contexts like this one.</p>
+
+<p>Do take careful note that all of these signals going into my DUT are clock
+synchronous.  Clock synchronous inputs should be set on the clock edge,
+and they should be set using non-blocking assignments.</p>
+
+<p>I come across a lot of designs that don’t do this.</p>
+
+<p>One common approach I find is where an engineer will attempt to set things
+on the clock edge using blocking assignments, but without referencing the
+clock itself.  These engineers might reason that, since the clock has
+positive edges every 10ns, they should just set test bench inputs every 10ns.
+Sadly, this leads to a race condition within the simulator, since the values
+will either then be set before or after the clock edge and not at the clock
+edge.  Worse, you can’t tell from the trace on which side of the clock
+edge such values were set on.  While I’ve seen this mistake often, the lesson
+learned here tends to come quickly.</p>
+
+<p>I’ve also seen things where engineers will offset their logic from the clock
+edge.  Perhaps they might transition their signals on the negative edge of
+the clock.  This, however, creates a coherence problem within the design,
+making debugging a challenge.  (Yes, this is still the approach I use with
+<a href="/blog/2017/06/21/looking-at-verilator.html">Verilator</a>–it
+is flawed, and I am likely to change how I handle such things in the future.)</p>
+
+<p>In one recent project I worked on, however, I did find that I needed to model
+the hold time following the clock edge.  This was due to the partial modeling
+of physical realities, to the point where the clock was arriving at multiple
+times during the clock cycle.  My solution to this problem was to add a hold
+time model, such as:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">tx_en</span>   <span class="o">&lt;=</span> <span class="p">#</span><span class="n">HOLD_TIME</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">S_VALID</span> <span class="o">&lt;=</span> <span class="p">#</span><span class="n">HOLD_TIME</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">S_DATA</span>  <span class="o">&lt;=</span> <span class="p">#</span><span class="n">HOLD_TIME</span> <span class="p">$</span><span class="nb">random</span><span class="p">;</span>
+		<span class="n">S_LAST</span>  <span class="o">&lt;=</span> <span class="p">#</span><span class="n">HOLD_TIME</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Had the right hand side of any of these expressions required calculation
+with the current (before clock) data, this would guarantee that the correct
+calculation was made, and the correct value set <code class="language-plaintext highlighter-rouge">#HOLD_TIME</code> time units
+following the clock edge.</p>
+
+<p>As a last note, let me point out that <code class="language-plaintext highlighter-rouge">tx_en</code> and <code class="language-plaintext highlighter-rouge">S_VALID</code> really need to
+already be clear (zero) coming into this routine.  Otherwise, if they were
+not, it is possible we might’ve just broken the AXI protocol by lowering
+<code class="language-plaintext highlighter-rouge">S_VALID</code> without checking <code class="language-plaintext highlighter-rouge">S_READY</code>.</p>
+
+<p>Now that we have this setup behind us, we can start up the DUT.  The first
+step is to enable the transmitter.  Then one clock later, we’ll start the
+packet stream.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">tx_en</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">S_VALID</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>Why wait a clock cycle?  Simply because the actual packet generator will
+take a clock cycle (or two) to read from its local block RAM before setting
+the <code class="language-plaintext highlighter-rouge">S_VALID</code> signal.  That’s just the way this particular controller works.</p>
+
+<p>The next step is to send the packet data.</p>
+
+<p>When using AXI streams, there are only two times when you are allowed to
+set or adjust any stream values.  The first is on a reset, when the VALID
+signal must be brought low.  Ever after that, stream information may only
+be adjusted when either valid is low (which it won’t be here) or when ready
+is high.  Hence, we check for these conditions before adjusting anything.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">do</span> <span class="k">begin</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">S_VALID</span> <span class="o">||</span> <span class="n">S_READY</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="n">S_VALID</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">S_LAST</span><span class="p">;</span>
+			<span class="n">S_DATA</span>  <span class="o">&lt;=</span> <span class="p">$</span><span class="nb">random</span><span class="p">;</span>
+			<span class="n">S_LAST</span>  <span class="o">&lt;=</span> <span class="p">(</span><span class="n">counter</span><span class="o">+</span><span class="mi">1</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">length</span><span class="p">;</span>
+			<span class="n">counter</span> <span class="o">&lt;=</span> <span class="n">counter</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="k">end</span>
+
+		<span class="k">wait</span><span class="p">(</span><span class="o">!</span><span class="n">clk</span><span class="p">);</span>
+	<span class="k">end</span> <span class="k">while</span><span class="p">(</span><span class="n">counter</span> <span class="o">&lt;</span> <span class="n">length</span><span class="p">);</span></code></pre></figure>
+
+<p>Checking for <code class="language-plaintext highlighter-rouge">S_READY</code> is very important for this controller.  Depending
+on the IO settings, the transmitter might be able to send 32 bits per clock
+cycle (i.e. 200MHz eMMC clock, 8 data lines, and DDR mode driven from a 100MHz
+bus clock), or it might take 32,000 cycles to send 32-bits (i.e. 100kHz clock,
+1 data line, and SDR mode), or any number of possibilities in between.</p>
+
+<p>The trick, however, is that we need to keep running this loop until all
+data words have been sent.  If only sometimes through the loop the data
+is accepted, then we need to make sure we keep looping–hence the while
+<code class="language-plaintext highlighter-rouge">counter &lt; length</code> condition.</p>
+
+<p>But what about the <code class="language-plaintext highlighter-rouge">wait(!clk)</code> condition?</p>
+
+<p>That’s there because the non-blocking statements above don’t take any
+simulation time.  You need to get past them to a point where the simulation
+is forced to step forward for the statements above to take effect.  If we
+didn’t have this wait condition, we might find ourselves looping back up
+to the <code class="language-plaintext highlighter-rouge">@(posedge clk)</code> statement before our assignments had taken effect.
+Waiting for the clock to become negative breaks this cycle, and doesn’t
+really effect anything otherwise.</p>
+
+<p>Once all the data has been sent, there’s one more important step: clearing
+<code class="language-plaintext highlighter-rouge">S_VALID</code> at the end of the packet.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">do</span> <span class="k">begin</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">S_READY</span><span class="p">)</span>
+			<span class="n">S_VALID</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="k">wait</span><span class="p">(</span><span class="o">!</span><span class="n">clk</span><span class="p">);</span>
+	<span class="k">end</span> <span class="k">while</span><span class="p">(</span><span class="n">S_VALID</span><span class="p">);</span></code></pre></figure>
+
+<p>The rest of this task is just simulation maintenance.  For example, you
+don’t want to return from sending a packet while the transmitter is still
+busy, so we’ll wait for it to finish it’s task.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">wait</span><span class="p">(</span><span class="o">!</span><span class="n">tx_valid</span><span class="p">);</span></code></pre></figure>
+
+<p>Once the transmitter completes its task, we need to drop the transmit enable
+line.  We’ll wait a clock cycle first.  Then, we have to drop it on a clock
+edge, since this is a source synchronous signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">);</span>
+	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="n">tx_en</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span></code></pre></figure>
+
+<p>Lest we allow the controller to start immediately with the next packet,
+we’ll force a minimum packet separation of another two clock cycles.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">);</span>
+	<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">);</span>
+<span class="k">end</span> <span class="k">endtask</span></code></pre></figure>
+
+<p>This was enough to stimulate the DUT into sending a packet.  It was also enough
+to find out why the cover check was failing–so I can now return to my
+formal proof.</p>
+
+<p>It wasn’t enough to check that the packet CRC was valid.</p>
+
+<p>CRC checking can be a challenge with formal methods, so I wanted to check
+it via simulation anyway.  Worse, there are many types of CRCs I need to check.
+Specifically, both SDIO and eMMC protocol place CRCs at the end of every
+packet, and those CRCs are one per data line.  That’s right.  The CRC on
+data line zero covers only the data on data line zero.  The CRC on data line
+7 covers the data transmitted on data line 7.  Moreover, when working in one
+of the DDR modes, the CRC checks are split between the two clock edges.
+There’s one CRC per data line per clock edge, so up to a maximum of 16 CRCs
+that can be transmitted and then must be checked.</p>
+
+<p>Did I find bugs?  Definitely.  How many?  Too many for my ego.  I was convinced
+I had a wonderful design, with only a few minor bugs before going through this
+effort.  Those “few minor” bugs, however, were causing the transmitter to
+lock up mid operation–something my formal proof wasn’t catching.  This
+simulation, however, caught the bug nicely.</p>
+
+<p>Unfortunately, because this was an ad-hoc simulation setup, it fails several
+of the criteria of a “good” simulation.  For example, most of the verification
+that took place was done by looking over the resulting trace.  It wasn’t until
+I got to CRC checking that I started adding assertions to my simulation
+to automatically catch and flag bugs.  As a result, while this helped me get
+further along in the project, it’s not really good enough to keep around long
+term.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>So, did I find the initial failure?  Absolutely!  The design came up broken
+because … the PCB design was broken.  The PCB design used an approach to
+crossing from 1.8V to 3.3V that didn’t allow open drain signals to cross
+properly.  As a result, once I had confidence that my IP was working, I
+could tell that when the board started up it didn’t pull the data lines high
+through the voltage translator.  Instead, the voltage translator sampled the
+line low and maintained it at a low level in spite of the pull up resistors
+that were intended to pull it high.  As a result, when the SD card processed
+the first command I sent, it would notice that data line 3 was also low, and
+it would go into SPI mode even if I wanted it to stay in SDIO mode.</p>
+
+<p>Yes, that’s right, it’s not just the SDIO controller that is a work in
+progress, and I’m not the only one who makes mistakes when bringing things
+up for the first time.</p>
+
+<p>If this is a piece of IP you are interested in, then watch <a href="https://github.com/ZipCPU/sdspi">this
+space</a>.  I intend to post it and maintain
+it there once I’m done getting it to work.  Once done, it will have an
+interface similar to the
+<a href="https://github.com/ZipCPU/sdspi">SDSPI</a> controller that’s currently there,
+and I intend to maintain the two alongside each other.  The two big
+improvements I’d still like to make are 1) adding a DMA, to push data around
+to and from memory at the full speed of the bus, and 2) I’d also like to
+add support for reading or writing a stream of blocks in a row–something the
+<a href="https://github.com/ZipCPU/sdspi">SDSPI</a> controller has no ability to do.</p>
+
+<p>If you are too impatient to wait, you can take a peek at the controller
+under development
+<a href="https://github.com/ZipCPU/eth10g/blob/master/rtl/sdspi/sdio_top.v">here</a>,
+but I’d caution you that if I were to offer any guarantees or warranties at
+this point, it would be that there are still bugs in the design.  Frankly,
+it’s a work in progress.</p>
+
+<p>I am tempted, though, to come back to this controller later and write another
+article about how to process the data strobe returned by the eMMC controller.
+Such data strobes are becoming commonplace in high speed memory controllers,
+to such an extent that I’ve now had to build controllers that could handle
+data strobes from <a href="https://www.arasan.com/product/xspi-psram-master/">NOR flash (xSPI protocol),
+HyperRAM</a>,
+<a href="https://www.arasan.com/product/onfi-4-2-controller-phy/">NAND flash (ONFI)</a>,
+and now this eMMC interface.  Another project I’m involved in, where I’m only
+mentoring an amazing engineer, is that of a <a href="https://github.com/AngeloJacobo/DDR3_Controller">Verilog DDR3
+controller</a> and the
+DDR3 protocol includes return strobes as well.  All told, I may have now seen
+four or five different ways of processing these return data strobe signals–so
+it might be ripe for a future blog post and/or a discussion on the topic.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Give instruction to a wise man, and he will be yet wiser: teach a just man, and he will increase in learning.  (Prov 9:9)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
