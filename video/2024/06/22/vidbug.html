@@ -1,0 +1,1310 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Debugging video from across the ocean</title>
+  <meta name="description" content="I’ve come across two approaches to video synchronization.  The first, used bya lot of the Xilinx IP I’ve come across, is to hold the video pipeline inreset u...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/video/2024/06/22/vidbug.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-4ZK7HKHSVW"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-4ZK7HKHSVW');
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Debugging video from across the ocean</h1>
+    <p class="post-meta"><time datetime="2024-06-22T00:00:00-04:00" itemprop="datePublished">Jun 22, 2024</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>I’ve come across two approaches to video synchronization.  The first, used by
+a lot of the Xilinx IP I’ve come across, is to hold the video pipeline in
+reset until everything is ready and then release the resets (in the right and
+proper order) to get the design started.  If something goes wrong, however,
+there’s no room for recovery.  The second approach is the approach I like to
+use, which is to <a href="/video/2022/03/14/axis-video.html">build video components that are inherently
+“stable”</a>: 1) if they
+ever lose synchronization, they will naturally work their way back into
+synchronization, and 2) once synchronized they will not get out of sync.</p>
+
+<p>At least that’s the goal.  It’s a great goal, too–when it works.</p>
+
+<p>Today’s story is about what happens when a “robust” video display isn’t.</p>
+
+<h2 id="system-overview">System Overview</h2>
+
+<p>Let’s start at the top level: I’m working on building a SONAR device.</p>
+
+<p>This device will be placed in the water, and it will sample acoustic data.
+All of the electronics will be contained within a pressure chamber, with
+the only interface to the outside world being a single cable providing both
+Ethernet and power.</p>
+
+<p>Here’s the picture I used to capture this idea when <a href="/blog/2022/08/24/protocol-design.html">we discussed the network
+protocols that would be required to debug this
+device</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 1. Controlling an Underwater FPGA</caption><tr><td><img src="/img/netbus/sysdesign.svg" alt="" width="780" /></td></tr></table>
+
+<p>This “wet” device will then connect to a “dry” device (kept on land, via
+Ethernet) where the sampled data can then be read, stored and processed.</p>
+
+<p>Now into today’s detail: while my customer has provided no requirement for
+real-time processing, there’s arguably a need for it during development testing.
+Even if there’s no need for real-time processing in the final delivery, there’s
+arguably a need for it in the lab leading up to that final delivery.  That is,
+I’d like to be able to just glance at my lab setup and know (at a glance or
+two) that things are working.  For this reason, I’d like some real time
+displays that I can read, at a glance, and know that things are working.</p>
+
+<p>So, what do we have available to us to get us closer?</p>
+
+<h2 id="display-architecture">Display Architecture</h2>
+
+<p>Some time ago, I built several RTL “display” modules to use for this
+lab-testing purpose.  In general, these modules take an <a href="/blog/2022/02/23/axis-abort.html">AXI stream of incoming
+data</a>,
+and they produce an <a href="/video/2022/03/14/axis-video.html">AXI video stream for
+display</a>.  At present,
+there are only five of these graphics display modules:</p>
+
+<ul>
+  <li>
+    <p><a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_histogram.v">A histogram display</a></p>
+
+    <p><a href="/dsp/2019/12/21/histogram.html">Histograms are exceptionally useful for diagnosing any A/D collection
+issues</a>, so having a live
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_histogram.v">histogram display</a>
+to provide insight into the sampled data distribution just makes sense.</p>
+
+    <p>However, <a href="/dsp/2019/12/21/histogram.html">histogram</a>
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_histogram.v">displays</a>
+need a tremendous dynamic range.  How do you handle that in hardware?  Yeah,
+that was part of the challenge when building this display.  It involved
+figuring out how to build multiplies and divides without doing either
+multiplication or division.  A fun project, though.</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">A trace module</a></p>
+
+    <p>By “trace”, I mean something to show the time series, such as a plot of
+voltage against time.  My big challenge with this display so far has been
+the reality that the SONAR A/D chips can produce more data than they eye can
+quickly process.</p>
+
+    <p>Now that we’ve been through a test or two with the hardware, I have a better
+idea of what would be valuable here.  As a result, I’m likely going to take
+the absolute value of voltages across a significant fraction of a second,
+and then use that approach to display a couple of seconds worth of data on
+the screen.  Thankfully, my <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">trace display
+module</a> is
+quite flexible, and should be able to display anything you give to it by way
+of an AXI Stream input.</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v">A falling raster</a></p>
+
+    <p>The very first time my wife came to a family day at the office, way back
+in the 1995-96 time frame or so, the office had a display set up with a
+microphone and a sliding spectral raster.  I was in awe!  You could speak,
+and see what your voice “looked” like spectrally over time.  You could hit
+the table, whistle, bark, whatever, and every sound you made would look
+different.</p>
+
+    <p>I’ve since <a href="https://github.com/ZipCPU/fftdemo">built this kind of capability</a>
+many times over, and even <a href="/dsp/2020/11/21/spectrogram.html">studied the best ways to do it from a
+mathematical standpoint</a>.</p>
+
+    <p>In the SONAR world, you’ll find this sort of thing really helps you visualize
+what’s going on in your data streams–what sounds are your sensors picking
+up, what frequencies are they at, etc.  A good raster will let you “see”
+motors in the water–all very valuable.</p>
+  </li>
+  <li>
+    <p>A spectrogram, via the same <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">trace
+module</a></p>
+
+    <p>This primarily involves plotting the absolute values of the data coming out
+of an <a href="/dsp/2018/10/02/fft.html">FFT</a>,
+applied to the incoming data.  Thankfully, the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">trace
+module</a>
+is robust enough to handle this kind of input as well.</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_split.v">A split screen display</a>,
+that can place both an <a href="/dsp/2018/10/02/fft.html">FFT</a>
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">trace</a>
+and a falling raster on the same screen.</p>
+  </li>
+</ul>
+
+<p>We’ll come back to the split screen display in a bit.  In general, however,
+the processing components used within it look (roughly) like Fig.  2 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 2. Split display video processing pipeline</caption><tr><td><img src="/img/qoi-debug/split-pipeline.svg" alt="" width="780" /></td></tr></table>
+
+<p>Making this happen required some other behind the scenes components as well,
+to include:</p>
+
+<ul>
+  <li>
+    <p><a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_empty.v">An empty video generator</a>–to
+generate an <a href="/video/2022/03/14/axis-video.html">AXI video
+stream</a> from scratch.
+The video out of this device is a constant color (typically black).  This
+then forms a “canvas” (via the <a href="/video/2022/03/14/axis-video.html">AXI video
+stream protocol</a>)
+that other things can be overlaid on top of.</p>
+
+    <p>This generator leaves <code class="language-plaintext highlighter-rouge">TVALID</code> high, for reasons we’ve
+<a href="/video/2022/03/14/axis-video.html">discussed before</a>,
+and that we’ll get to again in a moment.</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_mux.v">A video multiplexer</a>–to
+select between one of the various “displays”, and send only one to the
+outgoing video display.</p>
+
+    <p>One of the things newcomers to the hardware world often don’t realize is that
+the hardware used for a display can often not be reused when you switch
+display types.  This is sort of like an ALU–the CPU will include support
+for ADD, OR, XOR, and AND instructions, even if only one of the results is
+selected on each clock cycle.  The same is true here.  Each of the various
+displays listed
+above is built in hardware, occupies a separate area of the FPGA (whether used
+or not), and so something is needed to select between the various outputs to
+choose which we’d like.</p>
+
+    <p>It did take some thought to figure out how to maintaining video
+synchronization while multiplexing multiple video streams together.</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">A video overlay module</a>–to merge two displays together, creating a result that
+looks like it has multiple independent “windows” all displaying real time
+data.</p>
+  </li>
+</ul>
+
+<p>I wrote these modules years ago.  They’ve all worked beautifully–in simulation.
+So far, these have only been designed to be engineering displays, and not
+necessarily great finished products.  Their biggest design problem?  None of
+them display any units.  Still, they promise a valuable debugging
+capability–provided they work.</p>
+
+<p>Herein lies the rub.  Although these display modules have worked nicely in
+simulation, and although many have been formally verified, for some reason
+I’ve had troubles with these modules when placed into actual hardware.</p>
+
+<p>Debugging this video chain is the topic of today’s discussion.</p>
+
+<h2 id="axi-video-rules">AXI Video Rules</h2>
+
+<p>For some more background, each of these modules produces an AXI video stream.
+In general, these components would take data input, and produce a video
+stream as output–much like Fig. 3 below.</p>
+
+<table align="center" style="float: right"><caption>Fig 3. General AXI Stream Video component</caption><tr><td><img src="/img/qoi-debug/gendisplay.svg" alt="" width="420" /></td></tr></table>
+
+<p>In this figure, acoustic data arrives on the left, and video data comes out on
+the right.  Both use AXI streams.</p>
+
+<p>The <a href="/video/2022/03/14/axis-video.html">AXI stream protocol, however, isn’t necessarily a good fit for video
+proccessing</a>.
+You really have to be aware of who drives the pixel clock,
+and where the blanking intervals in your design are handled.</p>
+
+<ul>
+  <li>
+    <p>Sink</p>
+
+    <p>If video comes into your device, the pixel clock is driven by that video
+ source.  The source will also determine when blanking intervals need to
+ take place and how long they should be.  This will be controlled via the
+ video’s <code class="language-plaintext highlighter-rouge">VALID</code> signal.</p>
+  </li>
+  <li>
+    <p>Source</p>
+
+    <p>Otherwise, if you are not consuming incoming video but producing video out,
+ then the pixel clock and blanking intervals will be driven by the video
+ controller.  This will be controlled by the display controllers <code class="language-plaintext highlighter-rouge">READY</code>
+ signal.</p>
+  </li>
+</ul>
+
+<p>In our case, these intermediate display modules also need to be aware that
+there’s often <em>no</em> buffering for the input.  If you drop the <code class="language-plaintext highlighter-rouge">SRC_READY</code> line,
+data will be lost.  Acoustic sensor data is coming at the design whether you
+are ready for it or not.  Likewise, the <a href="/blog/2022/02/23/axis-abort.html">video output data needs to get to the
+display module, and there’s no room in the HDMI standard for <code class="language-plaintext highlighter-rouge">VALID</code> dropping
+when a pixel needs to be
+produced</a>.</p>
+
+<p>Put simply, there are two constraints to these controllers: 1) the source can’t
+handle <code class="language-plaintext highlighter-rouge">VALID &amp;&amp; !READY</code>, and 2) the display controller at the end of the video
+processing chain can’t handle <code class="language-plaintext highlighter-rouge">READY &amp;&amp; !VALID</code>.  Any IP in the middle needs
+to do what it can to avoid these conditions.</p>
+
+<p>This leads to some self-imposed criteria, that I’ve “added” to the AXI stream
+protocol.  Here are my extra rules for processing AXI video stream data:</p>
+
+<ol>
+  <li>
+    <p>All video processing components should keep READY high.</p>
+
+    <p>Specifically, nothing <em>within</em>
+the module should ever drop the ready signal.  Only the downstream display
+driver should ever drop READY by more than a cycle or two between lines.
+This drop in READY then needs to propagate through all the way through any
+video processing chain.</p>
+
+    <p>My <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_mux.v">video multiplexer</a>
+module is an example of an exception to this rule: It drops READY on all
+of the video streams that aren’t currently active.  By waiting until the
+end of a frame before adjusting/swapping which source is active, it can keep
+all sources synchronized with the output.  This component will fail,
+however, if one of those incoming streams is a true video source.</p>
+  </li>
+  <li>
+    <p>Keep VALID high as much as possible.</p>
+
+    <p>Only an upstream video source, such as a camera, should ever drop VALID by
+more than a cycle or two between lines.  As with READY, this drop in VALID
+should then propagate through the video processing chain.</p>
+
+    <p>In my case, There’s no such camera in this design, and so I’m never starting
+from a live video source.  However, for reuse purposes in case I ever wish
+to merge any of these components with a live feed, I try to keep VALID high
+as much as possible.</p>
+  </li>
+  <li>
+    <p>Expect the environment to do something crazy.  Deal with it.  If your
+algorithm depends on the image size, and that size changes, deal with it.</p>
+
+    <p>For example, if you are doing an overlay, and the overlay position changes,
+you’ll need to move it.  If a video being overlaid isn’t VALID by the time
+it’s needed, then you’ll have to diable the overlay operation and wait for
+the overlay video source to get to the end of its frame before stalling it,
+and then forcing it to wait until the time required for its first pixel
+comes around again.</p>
+  </li>
+  <li>
+    <p>If your algorithm has a memory dependency, then there is always the
+possibility that the memory cannot keep up with the videos requirements.
+Prepare for this.  Expect it.  Plan for it.  Know how to deal with it.</p>
+
+    <p>For example, if you are reading memory from a frame buffer to generate a
+video image, and the memory doesn’t respond in time then, again, you have
+to deal with it.  Your algorithm should do something “smart”, fail
+gracefully, and then be able to resynchronize again later.  Perhaps
+something else, such as a disk-drive DMA, was using memory and kept the
+frame buffer from meeting its real-time requirements.  Perhaps it will be
+gone later.  Deal with it, and recover.</p>
+  </li>
+</ol>
+
+<p>In my case, I was building a falling raster.  I had two real-time requirements.</p>
+
+<p>First, data comes from the SONAR device at some incoming rate.  There’s no
+room to slow it down.  You either handle it in time, or you don’t. In my case,
+SONAR data is slow, so this isn’t really an issue.</p>
+
+<table align="center" style="padding: 25px; float: left"><caption>Fig 4. AXI Stream Video "Rules"</caption><tr><td><img src="/img/qoi-debug/vidrules.svg" alt="" width="420" /></td></tr></table>
+
+<p>This data then goes through an
+<a href="/dsp/2018/10/02/fft.html">FFT</a>,
+and possibly a logarithm or an averager,
+before coming to the first half of the raster.  This component then writes
+data to memory, one <a href="/dsp/2018/10/02/fft.html">FFT</a>
+line at a time.  (See Fig. 2 above.)  If the memory is
+too slow here, data may be catastrophically dropped.  This is bad, but rare.</p>
+
+<p>Second, the waterfall display data must be produced at a known rate.  VALID
+must be held high as much as possible so that the downstream display driver
+at the end of the processing chain can rate limit the pipeline as necessary.
+That means the waterfall must be read from memory as often as the downstream
+display driver needs it.  If the memory can’t keep up, the display goes on.
+You can’t allow these to get out of sync, but if they do they have to be able
+to resynchronize automatically.</p>
+
+<p>Those are my rules for AXI video.  I’ve also summarized them in Fig. 4.</p>
+
+<h2 id="debugging-challenge">Debugging Challenge</h2>
+
+<p>Now let’s return to my SONAR project, where one of the big challenges was that
+the SONAR device wasn’t on my desktop.  It’s being developed on the other side
+of the Atlantic from where I’m at.  It has no JTAG connection to Vivado.
+There’s no ILA, although my <a href="https://github.com/ZipCPU/wbscope">Wishbone scope</a>
+works fine.  The bottom line here, though, is that I can’t just glance at the
+device (like I’d like) to see if the display is working.</p>
+
+<p>I’ve therefore spent countless hours using both formal methods and video
+simulations to verify that each of these display components work.  Each of
+these displays has passed a lint check, a formal check, and a simulation check.
+Therefore, they should all be working … right?</p>
+
+<p>Except that when I tried to deploy these “working” modules to the
+hardware … they didn’t work.</p>
+
+<p>The classic example of “not working” was the split screen spectrum/waterfall
+display.  This screen was supposed to display the current spectrum of the
+input data on top, with a waterfall synchronized to the same data falling down
+beneath it.  It’s a nice effect–when it works.  However, we had problems
+where the two would get out of sync.  1) The waterfall would show energy in
+locations separate from the spectral energy, 2) the waterfall could be seen
+“jumping” horizontally across the screen–just like the old TVs would do when
+they lost sync.</p>
+
+<p>This never happened in any of my simulations.  Never.  Not even once.</p>
+
+<p>Sadly, my integrated SONAR simulation environment isn’t perfect.  It has
+some challenges.  Of course, there’s the obvious challenge that my simulation
+isn’t connected to “real” data.  Instead, I tend to drive it with various sine
+waves.  These tend to be good for testing.  I suppose I could fix this somewhat
+by replaying collected data, but that’s only on my “To-Do” list for now.  Then
+there’s the challenge that <a href="https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp">my memory simulation
+model</a>
+doesn’t typically match Xilinx’s MIG DDR3 performance.  (No, I’m not simulating
+the entire DDR3 memory–although perhaps I should.) Finally, I can only
+simulate about 5-15 frames of video data.  It just doesn’t take very long
+before the <a href="/blog/2017/07/31/vcd.html">VCD trace file</a>
+exceeds 100GB, and then <a href="https://gtkwave.sourceforge.net/">my
+tools</a> struggle.</p>
+
+<p>Bottom line: <a href="/blog/2018/08/04/sim-mismatch.html">works in simulation, fails hard in
+hardware</a>.</p>
+
+<p>Now, how to figure this one out?</p>
+
+<h2 id="first-step-formal-verification">First Step: Formal verification</h2>
+
+<p>I know I said everything was formally verified.  That wasn’t quite true
+initially.  Initially, the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>
+wasn’t formally verified.</p>
+
+<p>In general, I like to develop with formal methods as my guide.  Barring that,
+if I ever run into problems then formal verification is my first approach to
+debugging.  I find that I can find problems faster when using the formal tools.
+It tends to condense debugging very quickly.  Further, the formal tools aren’t
+constrained by the requirement that the simulation environment needs to make
+sense.  As a result, I tend to check my designs against a much richer
+environment when checking them formally than I would via simulation.</p>
+
+<p>In this case, I was tied up with other problems, so I had someone else do the
+formal verification for me.  He was somewhat new to formal verification, and
+this particular module was quite the challenge–there are just so many cases
+that had to be considered:</p>
+
+<p>We can start with the typical design, where the overlaid image lands nicely
+within the main image window.</p>
+
+<table align="center" style="float: right"><caption>Fig 5. Overlaid window in video</caption><tr><td><img src="/img/qoi-debug/midoverlay.svg" alt="" width="420" /></td></tr></table>
+
+<p>This is what I typically think of when I set up an overlay of some type.</p>
+
+<p>This isn’t as simple as it sounds, though, since the IP needs to know that
+the overlay window has finished its line, and so it shouldn’t start on the
+next line until the main window gets to the left corner of the overlay
+window for the next line.</p>
+
+<p>What happens, though, when the overlay window scrolls off to once side and
+wraps back onto the main window?</p>
+
+<table align="center" style="padding: 25px; float: left"><caption>Fig 6. Clipping the Overlaid video</caption><tr><td><img src="/img/qoi-debug/overlay.svg" alt="" width="420" /></td></tr></table>
+
+<p>It might also scroll off the bottom as well.</p>
+
+<p>In both cases, the overlay video should be clipped.  This is not something my
+simulation environment ever really checked, but it is something we had no
+end of challenges when checking via formal tools.</p>
+
+<p>These clipped examples are okay.  There’s nothing wrong with them–they just
+never look right with only a couple clock cycles of trace.</p>
+
+<table align="center" style="float: right"><caption>Fig 7. Overlay not ready</caption><tr><td><img src="/img/qoi-debug/overlay-block.svg" alt="" width="420" /></td></tr></table>
+
+<p>There’s also the possibility of what happens when the overlay window isn’t
+ready when the main window is, as illustrated in Fig. 7 on the right.</p>
+
+<p>Remember our video rules.  Together, these rules require that VALID and READY
+be propagated through the module–but never dropped internal to the module.
+That means there’s no time to wait.  If the overlay module isn’t ready when
+it’s time, then the image will be corrupted.  We can’t wait or the hardware
+display will lose sync.  The overlay has to be ready or the image will be
+corrupted.</p>
+
+<p>So, how to deal with situations like this?</p>
+
+<p>Yeah.</p>
+
+<p>Yes, my helper learned a lot during this process.  Eventually, we got to the
+point of pictorially drawing out what was going on each time the formal engine
+presented us with another verification failure, just so we could follow what
+was going on.  Yes, our drawings started looking like Fig. 5 or 6 above.</p>
+
+<p>Yes, formal verification is where I turn when things don’t work.  Typically
+there’s some hardware path I’m not expecting, and formal tends to find all
+such paths to make sure the logic considers them properly.</p>
+
+<p>In this case, it wasn’t enough.  Even though I formally verified all of these
+components, the displays still weren’t working.  Unfortunately, in order to
+know this, I had to ask an engineer in a European time zone to connect a
+monitor and … he told me it wasn’t working.  Sure, he was more helpful than
+that: he provided me pictures of the failures.  (They were nasty.  These were
+ugly looking failures.)  Unfortunately, these told me nothing of what needed
+to be adjusted, and it was also costly in terms of requiring a team effort–I
+would need to arrange for his availability, (potentially) his cost, all for
+something that wasn’t (yet) a customer requirement.</p>
+
+<p>I needed a better approach.</p>
+
+<p>What I needed was a way to “see” what was going on, without being there.
+I needed a digital method of screen capture.</p>
+
+<p>Building something like this, however, is quite the challenge: the waterfall
+displays all use my memory bandwidth–they can even use a (potentially)
+significant memory bandwidth.  Debugging meant that I was going to need a
+means of capturing the screen headed to the display that wouldn’t
+(significantly) impact my memory bandwidth–otherwise my test infrastructure
+(i.e. any debugging screen capture) would impact what I was trying to test.
+That might lead to chasing down phantom bugs, or believing things were still
+broken even after they’d been fixed.</p>
+
+<p>This left me at an impass for some time–knowing there were bugs in the video,
+but unable to do anything about them.</p>
+
+<h2 id="enter-qoi-compression">Enter QOI Compression</h2>
+
+<p>Some time ago, I remember reading about <a href="https://qoiformat.org">QOI
+compression</a>.  It captured my attention, as a fun
+underdog story.</p>
+
+<p>Yes, I’d implemented my own <a href="https://en.wikipedia.org/wiki/GIF">GIF</a>
+compression/decompression in time past.  This was back when I was still focused
+on software, and thus before I started doing any hardware design. I’d even
+looked up how to compress images with <a href="https://en.wikipedia.org/wiki/PNG">PNG</a>
+and how <a href="https://en.wikipedia.org/wiki/Bzip2">BZip2</a> could compress files.
+Frankly, over the course of 30 years working in this industry, compression is
+kind of hard to avoid.  That said, none of these compression methods is
+really suitable for FPGA work.</p>
+
+<p><a href="https://qoiformat.org">QOI</a> is different.</p>
+
+<p><a href="https://qoiformat.org">QOI</a> is <em>much</em> simpler than
+<a href="https://en.wikipedia.org/wiki/GIF">GIF</a>,
+<a href="https://en.wikipedia.org/wiki/PNG">PNG</a>,
+or <a href="https://en.wikipedia.org/wiki/Bzip2">BZip2</a>.  <em>Much</em> simpler.  It’s so
+simple, it can be implemented in hardware without too many challenges.  It’s so
+simple, it can be implemented in 700 Xilinx 6-LUTs.  Not only that, it claims
+better performance than <a href="https://en.wikipedia.org/wiki/PNG">PNG</a>
+across <a href="https://qoiformat.org/benchmark/">many (not all) benchmarks</a>.</p>
+
+<p>Yeah, now I’m interested.</p>
+
+<p>With a little bit of work, I was able to implement a <a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v">QOI compression
+module</a>.  A
+<a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_encoder.v">small wrapper</a>
+could encode and attach a small “file” header and trailer onto the compressed
+stream.  This could then be followed by a <a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_recorder.v">QOI image capture
+module</a>
+which I could then use to capture a series of subsequent video frames.</p>
+
+<p>This led to a debugging plan that was starting to take shape.  You can see how
+this plan would work in Fig. 8 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 8. Video debug plan using QOI compression</caption><tr><td><img src="/img/qoi-debug/qoiplan.svg" alt="" width="780" /></td></tr></table>
+
+<p>If all went well, video data would be siphoned off from between the video
+multiplexer and the display driver generating the HDMI output.  This video
+would be (nominally) at around (<code class="language-plaintext highlighter-rouge">800*600*3*60</code>) 82MB/s.  If the compression
+works well, the data rate should drop to about 1MB/s–but we’ll see.</p>
+
+<p>Of course, as with anything, nothing works out of the box.  Worse, if you are
+going to rely on something for “test”, it really needs to be better than
+the device under test.  If not, you’ll never know which item is the cause of
+an observation: the device under test, or the test infrastructure used to
+measure it.</p>
+
+<p>Therefore, I set up a basic simulation test on my desktop.  I’d run the
+SONAR simulation, visually inspect the HDMI output, and capture three frames
+of data.  I’d then <a href="https://github.com/phoboslab/qoi">convert</a> these three
+frames of data to <a href="https://en.wikipedia.org/wiki/PNG">PNG</a>s.  If the resulting
+<a href="https://en.wikipedia.org/wiki/PNG">PNG</a>s visually matched, then I had
+a <del>strong</del> confidence the
+<a href="https://qoiformat.org">QOI</a>
+<a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v">compression</a>,
+<a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_encoder.v">encoder</a>, and
+<a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_recorder.v">recorder</a>
+were working.</p>
+
+<p>Note that I had to cross out the word “strong” there.  Unless and until an
+IP can be tested through <em>every</em> logic path, you really don’t have any “strong”
+confidence something is working.  Still, it was enough to get me off the ground.</p>
+
+<p>The challenge here is that tracing the design through simulation while it
+records three images can generate a 120GB+
+<a href="/blog/2017/07/31/vcd.html">VCD file</a>,
+and took longer to test
+in simulation than it did to build the hardware design, load the hardware
+design, and capture images from hardware.  As a result, I often found myself
+debugging both the <a href="https://github.com/ZipCPU/qoiimg">QOI processing system</a>
+and the (buggy) video processing system jointly, <a href="/blog/2017/06/02/design-process.html">in hardware, at the same
+time</a>.
+No, it’s not ideal, but it did work.</p>
+
+<h2 id="the-first-bug-never-getting-back-in-sync">The First Bug: Never getting back in sync</h2>
+
+<p>I started my debugging with the default display, a <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_split.v">split
+screen</a>
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">spectrogram</a>
+and <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v">waterfall</a>.
+Using my newfound capability, I quickly received an image that looked something
+like the figure below.</p>
+
+<table align="center" style="float: none"><caption>Fig 9. First QOI capture -- no waterfall</caption><tr><td><img src="/img/qoi-debug/20240527-qoi-before.png" alt="" width="800" /></td></tr></table>
+
+<p>This figure shows what <em>should</em> be a
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_split.v">split screen</a>
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">spectrogram</a>
+and
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v">waterfall</a>
+display.  The
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v">spectrum</a>
+on top appears about right, however the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v">waterfall</a>
+that’s supposed to exist in the bottom half of the display is completely absent.</p>
+
+<p>Well, the good news is that I could at least capture a bug.</p>
+
+<p>The next step was to walk this bug backwards through the design.  In this case,
+we’re walking backwards through Fig. 2 above and the first component to look at
+is the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>.  It
+is possible for the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>
+to lose synchronization.  This typically means either the overlay isn’t
+ready when the primary display is ready for it, or that the overlay is still
+displaying some (other) portion of its video.  Once out of sync, you can no
+longer merge the two displays.  The two streams then need to be resynchronized.
+That is, the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay</a>
+module would need to wait for the end of the secondary image (the image to be
+overlaid on top of the primary), and then it would need to stall the secondary
+image until the primary display was ready for it again.</p>
+
+<p>However, the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>
+wasn’t losing synchronization.</p>
+
+<p>No?</p>
+
+<p>This was a complete surprise to me.  This was where I was expecting the bug,
+and where most of my debugging efforts had been (blindly) focused up until this
+point.</p>
+
+<p>Okay, so … let’s move back one more step.  (See Fig. 2)</p>
+
+<p>It is possible for the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">video waterfall
+reader</a>
+to get out of sync between its two clocks.  Specifically, one portion of the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">reader</a>
+reads data, one line at a time, from the bus and stuffs it into
+first a synchronous FIFO, and then
+an <a href="/blog/2018/07/06/afifo.html">asynchronous one</a>.  This
+half operates at whatever speed the bus is at, and that’s defined by the
+memory’s speed.  The second half of the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">reader</a>
+takes this data from the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a> and attempts
+to create an AXI stream video output from it–this time at the pixel clock rate.
+Because we are not allowed to stall this video output to wait for memory, it
+is possible for the two to get out of sync.  In this case, the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">reader</a>
+(pixel clock domain) is supposed to wait for an end of frame indication from
+the memory
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">reader</a>
+(bus clock domain, via the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>),
+and then it is to stall the memory
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">reader</a>
+(by not reading from the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>)
+until it receives an end of video frame indication from its own video
+reconstruction logic.</p>
+
+<p>A quick check revealed that yes, these two were getting out of sync.</p>
+
+<p>Here’s how the “out-of-sync” detection was taking place:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">px_lost_sync</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">pix_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">pix_reset</span><span class="p">)</span>
+		<span class="n">px_lost_sync</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">M_VID_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_VID_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">M_VID_HLAST</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Check when sending the last pixel of a line.  On this last</span>
+		<span class="c1">// pixel, the data read from memory (px_hlast) must also</span>
+		<span class="c1">// indicate that it is the last pixel in a line.  Further,</span>
+		<span class="c1">// if this is also the last line in a frame, then both the</span>
+		<span class="c1">// memory indicator of the last line in a frame (px_vlast)</span>
+		<span class="c1">// and the outgoing video indicator (M_VID_VLAST) must match.</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">px_hlast</span> <span class="o">||</span> <span class="p">(</span><span class="n">M_VID_VLAST</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">px_vlast</span><span class="p">))</span>
+			<span class="n">px_lost_sync</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">px_lost_sync</span> <span class="o">&amp;&amp;</span> <span class="n">M_VID_VLAST</span> <span class="o">&amp;&amp;</span> <span class="n">px_vlast</span><span class="p">)</span>
+			<span class="c1">// We can resynchronize once both memory and</span>
+			<span class="c1">// outgoing video streams have both reached the end of</span>
+			<span class="c1">// a frame.</span>
+			<span class="n">px_lost_sync</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Following any reset, the entire design should be synchronized.  That’s the
+easy part.</p>
+
+<p>Next, if the output of the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>
+(that’s the <code class="language-plaintext highlighter-rouge">M_VID_*</code> prefix values) is ready to produce the last pixel of a
+line, then we check if the FIFO signals line up.  In our example, we have two
+sets of synchronization signals.  First, there are the <code class="language-plaintext highlighter-rouge">M_VID_HLAST</code> and
+<code class="language-plaintext highlighter-rouge">M_VID_VLAST</code> signals.  These are generated blindly based upon the frame size.
+These indicate the last pixel in a line (<code class="language-plaintext highlighter-rouge">M_VID_HLAST</code>) and the end of a frame
+(<code class="language-plaintext highlighter-rouge">M_VID_VLAST</code>) respectively–from the perspective of the video stream.  Two
+other signals, <code class="language-plaintext highlighter-rouge">px_hlast</code> and <code class="language-plaintext highlighter-rouge">px_vlast</code>, come through the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>.  These
+are used to indicate the last bus word in a line and the end of a frame from
+the perspective of the data found within the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>
+containing the samples read from memory–one bus word (not one pixel) at a time.
+If these two ever get out of sync, then perhaps memory hasn’t kept up with the
+display or perhaps something else has gone wrong.</p>
+
+<p>So, to determine if we’ve lost sync, we check for it on the last pixel of any
+line.  That is, when <code class="language-plaintext highlighter-rouge">M_VID_HLAST</code> is true to indicate the last pixel in a
+line, then <code class="language-plaintext highlighter-rouge">px_last</code> should also be true–both should be synchronized.
+Likewise, when <code class="language-plaintext highlighter-rouge">M_VID_VLAST</code> (last line of frame) is true, then <code class="language-plaintext highlighter-rouge">px_vlast</code>
+should also be true–or the two have come out of sync.</p>
+
+<p>Because I’m also doing 128b bus word to 8b pixel conversions here, the two
+signals don’t directly correspond.  That is, <code class="language-plaintext highlighter-rouge">px_hlast</code> might be true (last
+bus word of a line), even though <code class="language-plaintext highlighter-rouge">M_VID_HLAST</code> isn’t true yet (last pixel of a
+line).  Hence, I only check these values if <code class="language-plaintext highlighter-rouge">M_VID_HLAST</code> is true–on the last
+<em>pixel</em> of the line.</p>
+
+<p>That’s how we know if we’re out of sync.  But … how do we get synchronized
+again?</p>
+
+<p>For this, the plan is to read from the memory reader as fast as possible until
+the end of the frame.  Once we get to the end of the frame, we’ll stop reading
+from memory and wait for the video (pixel clock) to get to the end of the
+frame.  Once both are synchronized at the end of a frame, the plan is to then
+release both together and we’ll be synchronized again.</p>
+
+<p>At least, that’s how this is <em>supposed</em> to work.</p>
+
+<p>The key (broken) signal was the signal to read from the <a href="/blog/2018/07/06/afifo.html">asynchronous
+FIFO</a>.
+This signal, called <code class="language-plaintext highlighter-rouge">afifo_read</code>, is shown below.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">afifo_read</span> <span class="o">=</span> <span class="p">(</span><span class="n">px_count</span> <span class="o">&lt;=</span> <span class="n">PW</span> <span class="o">||</span> <span class="o">!</span><span class="n">px_valid</span>
+			<span class="o">||</span> <span class="p">(</span><span class="n">M_VID_TVALID</span> <span class="o">&amp;&amp;</span> <span class="n">M_VID_TREADY</span> <span class="o">&amp;&amp;</span> <span class="n">M_VID_HLAST</span><span class="p">));</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">M_VID_TVALID</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">M_VID_TREADY</span><span class="p">)</span>
+			<span class="n">afifo_read</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">;</span>
+
+		<span class="c1">// Always read if we are out of sync</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">px_lost_sync</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">px_hlast</span> <span class="o">||</span> <span class="o">!</span><span class="n">px_vlast</span><span class="p">))</span>
+			<span class="n">afifo_read</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Basically, we want to read from the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>
+any time we don’t have a full pixel’s width left in our bus width to pixel
+gearbox, any time we don’t have a valid buffer, or any time we reach the end
+of the line–where we would flush the gearbox’s buffer.  The exception to this
+is if the outgoing AXI stream is stalled.  This is how the
+<a href="/blog/2018/07/06/afifo.html">FIFO</a> read signal is supposed
+to work normally.  There’s one exception here, and that is if the two are out
+of sync.  In that case, we will always read from
+the <a href="/blog/2018/07/06/afifo.html">FIFO</a>
+until the last pixel in a line on the last line of the frame.</p>
+
+<p>This all sounds good.  It looked good on a desk check too.  II passed over this
+many times, reading it, convincing myself that this was right.</p>
+
+<p>The problem is this was the logic that was broken.</p>
+
+<p>If you look closely, you might notice that this logic would never allow us to
+get back in sync.  Once we lose synchronization, we’ll read until the end of
+the frame and then stop, only to read again when any of the original criteria
+are true–the ones assuming synhronization.</p>
+
+<p>Yeah, that’s not right.</p>
+
+<p>This also explains why all my hardware traces showed the waterfall never
+resynchronizing with the outgoing video stream.</p>
+
+<p>One missing condition fixes this.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// ...</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">px_lost_sync</span> <span class="o">&amp;&amp;</span> <span class="n">px_hlast</span> <span class="o">&amp;&amp;</span> <span class="n">px_vlast</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">M_VID_HLAST</span>
+				<span class="o">||</span> <span class="o">!</span><span class="n">M_VID_VLAST</span><span class="p">))</span>
+			<span class="n">afifo_read</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This last condition states that, if we are out of sync and we’ve reached the
+last pixel in a frame, then we need to wait until the outgoing frame matches
+our sync.  Only then can we read again.</p>
+
+<p>Once I fixed this, things got better.</p>
+
+<table align="center" style="float: none"><caption>Fig 10. QOI capture, showing an attempted waterfall display</caption><tr><td><img src="/img/qoi-debug/20240528-qoi-promising.png" alt="" width="800" /></td></tr></table>
+
+<p>I could now get through a significant fraction of a frame before losing
+synchronization for the rest of it.  In other words, I had found and fixed
+the cause of why the design wasn’t recovering, just not the cause of what
+caused it to get out of sync in the first place.</p>
+
+<p>The waterfall background is also supposed to be <em>black</em>, not <em>blue</em>–so I
+needed to dig into that as well.  (That turned out to be a bug in the <a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v">QOI
+compression
+module</a>.  I
+could just about guess this bug, if I watched how the official decoder worked.)</p>
+
+<p>So, back I went to the <a href="https://github.com/ZipCPU/wbscope">Wishbone scope</a>,
+this time <a href="/blog/2017/06/08/simple-scope.html">triggering the
+scope</a>
+on a loss of sync event.  I needed to find out why this design lost sync in
+the first place.</p>
+
+<h2 id="the-second-bug-how-did-we-lose-sync-in-the-first-place">The Second Bug: How did we lose sync in the first place?</h2>
+
+<p>Years ago, I wrote <a href="/blog/2018/11/29/llvga.html">an article that argued that good and correct video handling
+was all captured by a pair of
+counters</a>.  You needed one
+counter for the horizontal pixel, and another for the vertical pixel.  Once
+these got to the raw width and height of the image, the counters would be
+reset and start over.</p>
+
+<p>When dealing with memory, things are a touch different–at least for this
+design.</p>
+
+<p>As hinted above, the bus portion of the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">waterfall
+reader</a>
+works off of <em>bus words</em>, not pixels.  It reads one line at a time from the
+bus, reading as many bus words as are necessary to make up a line.  In the case
+of this system, a bus word on the <a href="https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications">Nexys Video
+board</a>
+is 128-bits long–the natural width of the DDR3 SDRAM memory.  (Our <a href="https://www.enclustra.com/en/products/fpga-modules/mercury-kx2/">next
+hardware
+platform</a>
+will increase this to 512-bits.)  Likewise, the waterfall pixel size is only
+8-bits–since it has no color, and a <a href="https://github.com/ZipCPU/vgasim/blob/48de0f29c1cb91fabb0ef4d0cba4829c4a43651c/rtl/gfx/vid_clrmap.v">false
+color</a>
+will be provided later.  Hence, to read an 800 pixel line, the bus master must
+read 50 bus words (<code class="language-plaintext highlighter-rouge">800*8/128</code>).  The last word will then be marked as the last
+in the line, possibly also the last in the frame, and the result will be
+stuffed into the <a href="/blog/2018/07/06/afifo.html">asynchronous
+FIFO</a>.
+Once the last word in a line is requested of the bus, the bus master
+needs to increment his line pointer address to the next line</p>
+
+<p>However, there’s a problem with bus mastering: the logic that makes <em>requests</em>
+of a bus has to take place many clocks before the logic that <em>receives</em> the bus
+responses.  The difference is not really that important, but it typically ends
+up around 30 clock cycles or so.  That means this design needs two sets of
+X and Y counters: one when making requests, to know when a full line (or frame)
+has been requested and that it is time to advance to the next line (or frame),
+and a second set to keep track of when the line (or frame) ends with respect
+to the values <em>returned</em> from the bus.  This second set controls the end of
+line and frame markers that go into the synchronous and then <a href="/blog/2018/07/06/afifo.html">asynchronous
+FIFO</a>.</p>
+
+<p>Let’s walk through this logic to see if I can clarify it at all.</p>
+
+<ol>
+  <li>
+    <p>First, there’s both an synchronous FIFO and an
+<a href="/blog/2018/07/06/afifo.html">asynchronous one</a>–since
+it can be a challenge to know the <em>fill</em> of the
+<a href="/blog/2018/07/06/afifo.html">asynchronous FIFO</a>.</p>
+  </li>
+  <li>
+    <p>Once the <em>synchronous</em> FIFO is at least half empty, the reader begins a bus
+transaction.  For a <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone
+bus</a>, this means both <code class="language-plaintext highlighter-rouge">CYC</code> and <code class="language-plaintext highlighter-rouge">STB</code> need to
+be raised.</p>
+  </li>
+  <li>
+    <p>For every <code class="language-plaintext highlighter-rouge">STB &amp;&amp; !STALL</code>, a request is made of the bus.  At this time, we
+also subtract one from a counter keeping track of the number of available
+(i.e. uncommitted) entries in the synchronous FIFO.</p>
+  </li>
+  <li>
+    <p>Likewise, for every <code class="language-plaintext highlighter-rouge">STB &amp;&amp; !STALL</code>, the IP increments the requested memory
+address.</p>
+
+    <p>Once you get to the end of the line, set the next address to the last line
+start address <em>minus</em> one line of memory.  Remember, we are creating a
+<em>falling</em> raster, where we go from most recent
+<a href="/dsp/2018/10/02/fft.html">FFT</a> data to oldest
+<a href="/dsp/2018/10/02/fft.html">FFT</a> data.
+Hence we read <em>backwards</em> through memory, one line at a time.</p>
+
+    <p>Once we get to the beginning of our assigned memory area, we wrap back
+to the end of our assigned memory area minus one line.</p>
+
+    <p>Once we get to the end of the <em>frame</em>, we need to reset the address to
+the last line the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_w.v">writer</a>
+has just completed.</p>
+  </li>
+  <li>
+    <p>On evey <code class="language-plaintext highlighter-rouge">ACK</code>, the returned by data gets stored into the synchronous FIFO.
+With each result stored in the FIFO, we also add an indication of whether
+this return was associated with the end of a line or the end of a frame.</p>
+  </li>
+  <li>
+    <p>Once the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">reader</a>
+gets to the end of the line, we restart the (horizontal) <del>pixel</del> bus
+word counter and increment the line counter.  When it gets to the end of
+the frame, we reset the line counter as well.</p>
+
+    <p>Just to make sure that these two sets of counters (request and return)
+remain synchronized, the return counters to set to equal the request
+counters any time the bus is idle.</p>
+  </li>
+  <li>
+    <p>The IP then continues making requests until there would be no more room in
+the FIFO for the returned data.  At this point, <code class="language-plaintext highlighter-rouge">STB</code> gets dropped and we
+wait for the last request to be returned.</p>
+  </li>
+  <li>
+    <p>Once all requests have been returned, drop <code class="language-plaintext highlighter-rouge">CYC</code> and wait again.</p>
+
+    <p>The rule of the bus is also the rule of the boarding house bathroom:
+do your business, and get out of there.  Once you are done with any bus
+transactions, it’s therefore important to get off the bus.  Even if we could
+(now) make more requests, we’ll get off the bus and wait for the FIFO to
+become less than half full again–that way other (potential) bus masters
+can have a chance to access memory.</p>
+  </li>
+</ol>
+
+<p>And … right there is the foundation for this bug.</p>
+
+<p>The actual bug was how I determined whether or not the last request was being
+returned.  Let’s look at that logic for a moment, shall we?  Here’s what it
+looked like (when broken):  (Watch for what clears <code class="language-plaintext highlighter-rouge">o_wb_cyc</code> …)</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="o">{</span> <span class="n">o_wb_cyc</span><span class="p">,</span> <span class="n">o_wb_stb</span> <span class="o">}</span> <span class="o">=</span> <span class="mb">2'b00</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">wb_reset</span><span class="p">)</span>
+		<span class="c1">// Halt any requests on reset</span>
+		<span class="o">{</span> <span class="n">o_wb_cyc</span><span class="p">,</span> <span class="n">o_wb_stb</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="mb">2'b00</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">o_wb_cyc</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">o_wb_stb</span> <span class="o">||</span> <span class="o">!</span><span class="n">i_wb_stall</span><span class="p">)</span>
+			<span class="c1">// Drop the strobe signal on the last request.  Never</span>
+			<span class="c1">// raise it again during this cycle.</span>
+			<span class="n">o_wb_stb</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">last_request</span><span class="p">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_wb_ack</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="o">!</span><span class="n">o_wb_stb</span> <span class="o">||</span> <span class="o">!</span><span class="n">i_wb_stall</span><span class="p">)</span>
+					<span class="o">&amp;&amp;</span> <span class="n">last_request</span> <span class="o">&amp;&amp;</span> <span class="n">last_ack</span><span class="p">)</span>
+			<span class="c1">// Drop ACK once the last return has been received.</span>
+			<span class="n">o_wb_cyc</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">fifo_fill</span><span class="p">[</span><span class="n">LGFIFO</span><span class="o">:</span><span class="n">LGBURST</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+		<span class="c1">// Start requests when the FIFO has less than a burst's size</span>
+		<span class="c1">// within it.</span>
+		<span class="o">{</span> <span class="n">o_wb_cyc</span><span class="p">,</span> <span class="n">o_wb_stb</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="mb">2'b11</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">o_wb_cyc</span> <span class="o">||</span> <span class="n">i_wb_err</span><span class="p">)</span>
+		<span class="n">last_ack</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span>
+		<span class="n">last_ack</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">wb_outstanding</span> <span class="o">+</span> <span class="p">(</span><span class="n">o_wb_stb</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">)</span>
+				<span class="o">&lt;=</span> <span class="mi">2</span> <span class="o">+</span><span class="p">(</span><span class="n">i_wb_ack</span> <span class="o">?</span> <span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">));</span></code></pre></figure>
+
+<p>Look specifically at the <code class="language-plaintext highlighter-rouge">last_ack</code> signal.</p>
+
+<p>Depending upon the pipeline, this signal can be off by one clock cycle.</p>
+
+<p>This was the bug.  Because the <code class="language-plaintext highlighter-rouge">last_ack</code> signal, indicating that there’s only
+one more acknowledgement left, compared the number of outstanding requests
+against <code class="language-plaintext highlighter-rouge">2</code> plus the current acknowledgment, and because the signal was
+<em>registered</em>, <code class="language-plaintext highlighter-rouge">last_ack</code> might be set if there were two requests outstanding
+<em>and</em> nothing was returned on the current cycle.</p>
+
+<p>Since all requests would’ve been made by this time, the X and Y <del>pixel</del>
+bus word counters for the <em>request</em> would reflect that we’d just requested a
+line of data.  The <em>return</em> counters, on the other hand, would be off by one
+if <code class="language-plaintext highlighter-rouge">CYC</code> ever dropped a cycle early.  These return counters would then get
+reset to equal the <em>request</em> counters any time <code class="language-plaintext highlighter-rouge">CYC</code> was zero.  Hence,
+dropping the bus line one cycle early would result in a line
+of pixels (well, bus words representing pixels …) going into the FIFO
+that didn’t have enough pixels within it–or perhaps the LAST signal might
+be missing entirely.  Whatever the case, it didn’t line up.</p>
+
+<p>This particular design was formally verified.  Shouldn’t this bug have shown
+up in a formal test?  Sadly, no.  <a href="/zipcpu/2017/11/07/wb-formal.html">It’s <em>legal</em> to drop <code class="language-plaintext highlighter-rouge">CYC</code>
+early</a>, so there’s
+no protocol violation there.  Further, my acknowledgment counter was off by
+one in such that the formal properties allowed it.  If I added an assertion
+that <code class="language-plaintext highlighter-rouge">CYC</code> would never be dropped early (which I did once I discovered this
+bug), the design would then immediately (and appropriately) fail.</p>
+
+<p>There’s one more surprise to this story though.  Why didn’t this bug show up in
+simulation?</p>
+
+<p>Ahh, now there’s a very interesting lesson to be learned.</p>
+
+<h2 id="reality-why-didnt-the-bugs-show-up-in-simulation">Reality: Why didn’t the bug(s) show up in simulation?</h2>
+
+<p>Why didn’t the bug show up earlier?  Because of Xilinx’s DDR3 SDRAM controller,
+commonly known as “The MIG”.</p>
+
+<p>I don’t normally simulate DDR3 memories.  A DDR3 SDRAM memory controller
+requires a lot of hardware specific components, components that aren’t
+necessarily easy to simulate, and it also requires a DDR3 SDRAM simulation
+model.  I tend to simplify all of this and just simulate my designs with an
+<a href="https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp">alternate SDRAM model–a model that looks and acts “about” right, but one that
+isn’t exact</a>.</p>
+
+<p>It was the difference between <a href="https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp">my simulation
+model</a>,
+which wouldn’t trigger any of the bugs, and Xilinx’s MIG reality that
+ended up triggering the bug.</p>
+
+<p>Fig. 11, for example, shows what the <a href="https://github.com/ZipCPU/wbscope">Wishbone
+scope</a> returned when documenting the
+<a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v">waterfall
+reader</a>’s
+transactions with the MIG.</p>
+
+<table align="center" style="float: none"><caption>Fig 11.  The Waterfall reader's view of Wishbone bus handshaking when accessing memory</caption><tr><td><img src="/img/qoi-debug/20240605-migfail.png" alt="" width="800" /></td></tr></table>
+
+<p>Focus your attention on first the stall (<code class="language-plaintext highlighter-rouge">i_stall</code>) and then the
+acknowledgment (<code class="language-plaintext highlighter-rouge">i_ack</code>) lines.</p>
+
+<p>First, stall is high immediately as part of the beginning of the transaction.
+This is to be expected.  With the exception of filling a minimal buffer, any
+bus master requesting transactions of the bus is going to need to wait for
+<a href="/blog/2019/07/17/crossbar.html">arbitration</a>.
+This only takes a clock or two.  Once
+<a href="/blog/2019/07/17/crossbar.html">arbitration</a> is received, the
+<a href="/blog/2019/07/17/crossbar.html">interconnect</a>
+won’t stall the design again during this bus cycle.</p>
+
+<p>Only the stall line gets raised again after that–several times even.  These
+stalls are all due to the MIG.</p>
+
+<p>Let’s back up a touch.</p>
+
+<p>There are a lot of rules to SDRAM interaction.  Most SDRAM’s are configured in
+memory <em>banks</em>.  Banks are read and written in <em>rows</em>.  The data in each row
+is stored in a set of capacitors.  This allows for maximum data packing in
+minimal area (cost).  However, you can’t read from a row of capacitors.  To
+read from the memory, that row first needs to be copied to a row of fast
+memory.  This is called
+“activating” the row.  Once a row is activated, it can be read from or written
+to.  Once you are done with one row, it must be “precharged” (i.e. put back),
+before a different row can be activated.  All of this takes time.  If the
+row you want isn’t activated, you’ll need to switch rows.  That will cause a
+stall as the old row needs to be precharged and the new row activated.  Hence,
+when making a long string of read or a long string of write requests, you’ll
+suffer from a stall every time you cross rows.</p>
+
+<p>Xilinx’s MIG has another rule.  Because of how their architecture uses an IO
+trained PLL (Xilinx calls this a “phasor”), the MIG needs to regularly read
+from memory to keep this PLL trained.  During this time the memory must also
+stall.  (Why the MIG can’t train on <em>my</em> memory reads, but needs its own–I
+don’t know.)  These stalls are very periodic, and if you dig a bit you can
+find this taking place within their controller.</p>
+
+<p>Then the part of the trace showing a long stalled section reflects the reality
+that, every now and again, the memory needs to be taken entirely off line for
+a period of time so that the capacitors can be recharged.  This requires a
+longer time period, as highlighted in Fig. 12 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 12.  SDRAM refresh cycles force long stalls</caption><tr><td><img src="/img/qoi-debug/20240605-migrefresh.png" alt="" width="800" /></td></tr></table>
+
+<p>Once it’s time for a refresh cycle like this, several steps need to take place
+in the memory controller–in this case the MIG.  First, any active rows need
+to be precharged.  Then, the memory is refreshed.  Finally, you’ll need to
+re-activate the row you need.  This takes time as well–as shown in Fig. 12.</p>
+
+<p>That’s part one–the stall signal.  <a href="https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp">My over-simplified SDRAM memory
+model</a>
+doesn’t simulate any of these practical memory realities.</p>
+
+<p>Part two is the acknowledgments.  From these traces, you can see that there’s
+about a 30 cycle latency (300ns) from the first request to the first
+acknowledgment.  However, unlike my <a href="https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp">over-simplified memory
+model</a>,
+the acknowledgments also come back broken due to the stalls.  This makes sense.
+If every request takes 30 cycles, and some get stalled, then it only makes
+sense that the stalled requests would get acknowledged later the ones that
+didn’t get stalled.</p>
+
+<p>Put together, this is why my waterfall display worked in simulation, but not
+in hardware.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>Wow, that was a long story!</p>
+
+<p>Yeah.  It was long from my perspective too.  Although the “bugs” amounted to
+only 2-5 lines of Verilog, it took a lot of work to find those bugs.</p>
+
+<p>Here are some key takeaways to consider:</p>
+
+<ol>
+  <li>
+    <p>All of this was predicated on a <a href="/blog/2018/08/04/sim-mismatch.html">simulation vs hardware
+mismatch</a>.</p>
+
+    <p>Because the SDRAM simulation did not match the SDRAM reality, cycle for
+cycle, a key hardware reality was missed in testing.</p>
+  </li>
+  <li>
+    <p>This should’ve been caught via formal methods.</p>
+
+    <p>From now on, I’m going to have to make certain I check that <code class="language-plaintext highlighter-rouge">CYC</code> is only
+ever dropped either following either a reset, an error, or the last
+acknowledgment.  There should be zero requests outstanding when <code class="language-plaintext highlighter-rouge">CYC</code> is
+dropped.</p>
+  </li>
+  <li>
+    <p>Why wasn’t the pixel resynchronization bug caught via formal?</p>
+
+    <p>Because … FIFOs.  It can be a challenge to formally verify a design
+containing a FIFO.  Rather than deal with this properly, I allowed the two
+halves of the design to be somewhat independent–and so the formal tool
+never really examined whether or not the design could (or would) properly
+recover from a lost sync.</p>
+  </li>
+  <li>
+    <p>Did formally verifying the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>
+help?</p>
+
+    <p>Yes.  When we went through it, we found bugs in it.  Once the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>
+was formally verified, the result stopped <em>jumping</em>.  Instead, the
+overlay might just note a problem and stop showing the overlaid image.
+Even better, unlike before the <a href="https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v">overlay
+module</a>
+was properly verified, I haven’t had any more instances of the top and
+bottom pictures getting out of sync with each other.</p>
+  </li>
+  <li>
+    <p>What about that blue field?</p>
+
+    <p>Yes, the waterfall background should be black when no signal was present.
+The blue field turned out to be caused by a bug in the <a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v">QOI compression
+module</a>.</p>
+
+    <p>Once fixed, the captured image looked like Fig. 13 below.</p>
+  </li>
+</ol>
+
+<table align="center" style="float: none"><caption>Fig 13.  SDRAM refresh cycles force long stalls</caption><tr><td><img src="/img/qoi-debug/20240528-qoi-working.png" alt="" width="800" /></td></tr></table>
+
+<p>This was easily found and fixed.  (It had to deal with a race condition on the
+pixel index when writing to the compression table, if I recall correctly …)</p>
+
+<ol start="6">
+  <li>
+    <p>How about that <a href="https://github.com/ZipCPU/qoiimg">QOI module</a>?</p>
+
+    <p>The thing worked like a champ!  I love the simplicity of the
+<a href="https://qoiformat.org">QOI</a>
+encoding, enough so that I’m likely to use it again and again!</p>
+
+    <p>Okay, perhaps I’m overselling this.  It wasn’t perfect at first.  This is,
+in many ways to be expected–this was the first time it was ever used.
+However, it was small and cheap, and worked well enough to get the job done.</p>
+
+    <p>Some time later, I managed to formally verify the
+<a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v">compression</a>
+engine, and I found another bug or two that had been missed in my hardware
+testing.</p>
+
+    <p>That’s <a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v">compression</a>.</p>
+
+    <p>Decompression?  That’s another story.  I think I’ve convinced myself that I
+can do decompression in hardware, but the
+<a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_decompress.v">algorithm</a>
+(while cheap) isn’t
+really straightforward any more.  At issue is the reality that it will take
+several clock cycles (i.e. pipeline stages) to determine the table index for
+storing colors into, yet the very next pixel might be dependent upon the
+result of reading from the table.  Scheduling the pipeline isn’t
+straightforward.  (Worse, I have simulation test cases showing that the
+<a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_decompress.v">decompression logic I have</a>
+doesn’t work yet.)</p>
+  </li>
+  <li>
+    <p>Are the displays ready for prime time?</p>
+
+    <p>I’d love to say so, but they don’t have labeled axes.  They really need
+labeled axes to be proper <em>professional</em> displays.  Perhaps a
+<a href="https://qoiformat.org">QOI</a> <a href="https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_decompress.v">decompression
+algorithm</a>
+can take labeled image data from memory and overlay it onto the display as
+well.  However, to do this I’m going to have to redesign how I handle
+scaling, otherwise the labels won’t match the image.</p>
+
+    <p>Worse, <a href="https://x.com/Dg3Yev/status/1797779997190443498">[DG3YEV Tobias] recently put my waterfall display to
+shame</a>.  My basic displays
+are much too simple.  So, it looks like I might need to up my game.</p>
+  </li>
+</ol>
+
+<p>I should point out, in passing, that the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 SDRAM
+controller</a> doesn’t nearly have as
+many stall cycles as Xilinx’s MIG.  It doesn’t use the (undocumented) hardware
+phasors, so it doesn’t have to take the memory offline periodically.  Further,
+it can schedule the row precharge and activation cycles so as to avoid
+bus stalls (when accessing memory sequentially).  As such, it operates about
+10% faster than the MIG.  It even gets a lower latency.  These details,
+however, really belong in an article to themselves.</p>
+
+<p>I suppose the bottom line question is whether or not these displays are ready
+for our next testing session.  The answer is a solid, No.  Not yet.  I still
+need to do some more testing with them.  However, these displays are a lot
+closer now than they’ve been for the last two years.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>Seest thou a man diligent in his business? he shall stand before kings; he shall not stand before mean men. (Prov 22:29)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>

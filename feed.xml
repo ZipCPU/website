@@ -6,14 +6,1186 @@
 </description>
     <link>https://zipcpu.com/</link>
     <atom:link href="https://zipcpu.com/feed.xml" rel="self" type="application/rss+xml"/>
-    <pubDate>Thu, 13 Jun 2024 11:19:24 -0400</pubDate>
-    <lastBuildDate>Thu, 13 Jun 2024 11:19:24 -0400</lastBuildDate>
+    <pubDate>Sat, 22 Jun 2024 20:27:49 -0400</pubDate>
+    <lastBuildDate>Sat, 22 Jun 2024 20:27:49 -0400</lastBuildDate>
     <generator>Jekyll v4.2.0</generator>
     <image>
       <url>https://zipcpu.com/img/gt-rss.png</url>
       <title></title>
       <link></link>
     </image>
+    
+      <item>
+        <title>Debugging video from across the ocean</title>
+        <description>&lt;p&gt;I’ve come across two approaches to video synchronization.  The first, used by
+a lot of the Xilinx IP I’ve come across, is to hold the video pipeline in
+reset until everything is ready and then release the resets (in the right and
+proper order) to get the design started.  If something goes wrong, however,
+there’s no room for recovery.  The second approach is the approach I like to
+use, which is to &lt;a href=&quot;/video/2022/03/14/axis-video.html&quot;&gt;build video components that are inherently
+“stable”&lt;/a&gt;: 1) if they
+ever lose synchronization, they will naturally work their way back into
+synchronization, and 2) once synchronized they will not get out of sync.&lt;/p&gt;
+
+&lt;p&gt;At least that’s the goal.  It’s a great goal, too–when it works.&lt;/p&gt;
+
+&lt;p&gt;Today’s story is about what happens when a “robust” video display isn’t.&lt;/p&gt;
+
+&lt;h2 id=&quot;system-overview&quot;&gt;System Overview&lt;/h2&gt;
+
+&lt;p&gt;Let’s start at the top level: I’m working on building a SONAR device.&lt;/p&gt;
+
+&lt;p&gt;This device will be placed in the water, and it will sample acoustic data.
+All of the electronics will be contained within a pressure chamber, with
+the only interface to the outside world being a single cable providing both
+Ethernet and power.&lt;/p&gt;
+
+&lt;p&gt;Here’s the picture I used to capture this idea when &lt;a href=&quot;/blog/2022/08/24/protocol-design.html&quot;&gt;we discussed the network
+protocols that would be required to debug this
+device&lt;/a&gt;.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 1. Controlling an Underwater FPGA&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/netbus/sysdesign.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This “wet” device will then connect to a “dry” device (kept on land, via
+Ethernet) where the sampled data can then be read, stored and processed.&lt;/p&gt;
+
+&lt;p&gt;Now into today’s detail: while my customer has provided no requirement for
+real-time processing, there’s arguably a need for it during development testing.
+Even if there’s no need for real-time processing in the final delivery, there’s
+arguably a need for it in the lab leading up to that final delivery.  That is,
+I’d like to be able to just glance at my lab setup and know (at a glance or
+two) that things are working.  For this reason, I’d like some real time
+displays that I can read, at a glance, and know that things are working.&lt;/p&gt;
+
+&lt;p&gt;So, what do we have available to us to get us closer?&lt;/p&gt;
+
+&lt;h2 id=&quot;display-architecture&quot;&gt;Display Architecture&lt;/h2&gt;
+
+&lt;p&gt;Some time ago, I built several RTL “display” modules to use for this
+lab-testing purpose.  In general, these modules take an &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;AXI stream of incoming
+data&lt;/a&gt;,
+and they produce an &lt;a href=&quot;/video/2022/03/14/axis-video.html&quot;&gt;AXI video stream for
+display&lt;/a&gt;.  At present,
+there are only five of these graphics display modules:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_histogram.v&quot;&gt;A histogram display&lt;/a&gt;&lt;/p&gt;
+
+    &lt;p&gt;&lt;a href=&quot;/dsp/2019/12/21/histogram.html&quot;&gt;Histograms are exceptionally useful for diagnosing any A/D collection
+issues&lt;/a&gt;, so having a live
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_histogram.v&quot;&gt;histogram display&lt;/a&gt;
+to provide insight into the sampled data distribution just makes sense.&lt;/p&gt;
+
+    &lt;p&gt;However, &lt;a href=&quot;/dsp/2019/12/21/histogram.html&quot;&gt;histogram&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_histogram.v&quot;&gt;displays&lt;/a&gt;
+need a tremendous dynamic range.  How do you handle that in hardware?  Yeah,
+that was part of the challenge when building this display.  It involved
+figuring out how to build multiplies and divides without doing either
+multiplication or division.  A fun project, though.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;A trace module&lt;/a&gt;&lt;/p&gt;
+
+    &lt;p&gt;By “trace”, I mean something to show the time series, such as a plot of
+voltage against time.  My big challenge with this display so far has been
+the reality that the SONAR A/D chips can produce more data than they eye can
+quickly process.&lt;/p&gt;
+
+    &lt;p&gt;Now that we’ve been through a test or two with the hardware, I have a better
+idea of what would be valuable here.  As a result, I’m likely going to take
+the absolute value of voltages across a significant fraction of a second,
+and then use that approach to display a couple of seconds worth of data on
+the screen.  Thankfully, my &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;trace display
+module&lt;/a&gt; is
+quite flexible, and should be able to display anything you give to it by way
+of an AXI Stream input.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v&quot;&gt;A falling raster&lt;/a&gt;&lt;/p&gt;
+
+    &lt;p&gt;The very first time my wife came to a family day at the office, way back
+in the 1995-96 time frame or so, the office had a display set up with a
+microphone and a sliding spectral raster.  I was in awe!  You could speak,
+and see what your voice “looked” like spectrally over time.  You could hit
+the table, whistle, bark, whatever, and every sound you made would look
+different.&lt;/p&gt;
+
+    &lt;p&gt;I’ve since &lt;a href=&quot;https://github.com/ZipCPU/fftdemo&quot;&gt;built this kind of capability&lt;/a&gt;
+many times over, and even &lt;a href=&quot;/dsp/2020/11/21/spectrogram.html&quot;&gt;studied the best ways to do it from a
+mathematical standpoint&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;In the SONAR world, you’ll find this sort of thing really helps you visualize
+what’s going on in your data streams–what sounds are your sensors picking
+up, what frequencies are they at, etc.  A good raster will let you “see”
+motors in the water–all very valuable.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;A spectrogram, via the same &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;trace
+module&lt;/a&gt;&lt;/p&gt;
+
+    &lt;p&gt;This primarily involves plotting the absolute values of the data coming out
+of an &lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;,
+applied to the incoming data.  Thankfully, the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;trace
+module&lt;/a&gt;
+is robust enough to handle this kind of input as well.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_split.v&quot;&gt;A split screen display&lt;/a&gt;,
+that can place both an &lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;trace&lt;/a&gt;
+and a falling raster on the same screen.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;We’ll come back to the split screen display in a bit.  In general, however,
+the processing components used within it look (roughly) like Fig.  2 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2. Split display video processing pipeline&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/split-pipeline.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Making this happen required some other behind the scenes components as well,
+to include:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_empty.v&quot;&gt;An empty video generator&lt;/a&gt;–to
+generate an &lt;a href=&quot;/video/2022/03/14/axis-video.html&quot;&gt;AXI video
+stream&lt;/a&gt; from scratch.
+The video out of this device is a constant color (typically black).  This
+then forms a “canvas” (via the &lt;a href=&quot;/video/2022/03/14/axis-video.html&quot;&gt;AXI video
+stream protocol&lt;/a&gt;)
+that other things can be overlaid on top of.&lt;/p&gt;
+
+    &lt;p&gt;This generator leaves &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;TVALID&lt;/code&gt; high, for reasons we’ve
+&lt;a href=&quot;/video/2022/03/14/axis-video.html&quot;&gt;discussed before&lt;/a&gt;,
+and that we’ll get to again in a moment.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_mux.v&quot;&gt;A video multiplexer&lt;/a&gt;–to
+select between one of the various “displays”, and send only one to the
+outgoing video display.&lt;/p&gt;
+
+    &lt;p&gt;One of the things newcomers to the hardware world often don’t realize is that
+the hardware used for a display can often not be reused when you switch
+display types.  This is sort of like an ALU–the CPU will include support
+for ADD, OR, XOR, and AND instructions, even if only one of the results is
+selected on each clock cycle.  The same is true here.  Each of the various
+displays listed
+above is built in hardware, occupies a separate area of the FPGA (whether used
+or not), and so something is needed to select between the various outputs to
+choose which we’d like.&lt;/p&gt;
+
+    &lt;p&gt;It did take some thought to figure out how to maintaining video
+synchronization while multiplexing multiple video streams together.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;A video overlay module&lt;/a&gt;–to merge two displays together, creating a result that
+looks like it has multiple independent “windows” all displaying real time
+data.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;I wrote these modules years ago.  They’ve all worked beautifully–in simulation.
+So far, these have only been designed to be engineering displays, and not
+necessarily great finished products.  Their biggest design problem?  None of
+them display any units.  Still, they promise a valuable debugging
+capability–provided they work.&lt;/p&gt;
+
+&lt;p&gt;Herein lies the rub.  Although these display modules have worked nicely in
+simulation, and although many have been formally verified, for some reason
+I’ve had troubles with these modules when placed into actual hardware.&lt;/p&gt;
+
+&lt;p&gt;Debugging this video chain is the topic of today’s discussion.&lt;/p&gt;
+
+&lt;h2 id=&quot;axi-video-rules&quot;&gt;AXI Video Rules&lt;/h2&gt;
+
+&lt;p&gt;For some more background, each of these modules produces an AXI video stream.
+In general, these components would take data input, and produce a video
+stream as output–much like Fig. 3 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 3. General AXI Stream Video component&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/gendisplay.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;In this figure, acoustic data arrives on the left, and video data comes out on
+the right.  Both use AXI streams.&lt;/p&gt;
+
+&lt;p&gt;The &lt;a href=&quot;/video/2022/03/14/axis-video.html&quot;&gt;AXI stream protocol, however, isn’t necessarily a good fit for video
+proccessing&lt;/a&gt;.
+You really have to be aware of who drives the pixel clock,
+and where the blanking intervals in your design are handled.&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;
+    &lt;p&gt;Sink&lt;/p&gt;
+
+    &lt;p&gt;If video comes into your device, the pixel clock is driven by that video
+ source.  The source will also determine when blanking intervals need to
+ take place and how long they should be.  This will be controlled via the
+ video’s &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;VALID&lt;/code&gt; signal.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Source&lt;/p&gt;
+
+    &lt;p&gt;Otherwise, if you are not consuming incoming video but producing video out,
+ then the pixel clock and blanking intervals will be driven by the video
+ controller.  This will be controlled by the display controllers &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;READY&lt;/code&gt;
+ signal.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;In our case, these intermediate display modules also need to be aware that
+there’s often &lt;em&gt;no&lt;/em&gt; buffering for the input.  If you drop the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;SRC_READY&lt;/code&gt; line,
+data will be lost.  Acoustic sensor data is coming at the design whether you
+are ready for it or not.  Likewise, the &lt;a href=&quot;/blog/2022/02/23/axis-abort.html&quot;&gt;video output data needs to get to the
+display module, and there’s no room in the HDMI standard for &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;VALID&lt;/code&gt; dropping
+when a pixel needs to be
+produced&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Put simply, there are two constraints to these controllers: 1) the source can’t
+handle &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;VALID &amp;amp;&amp;amp; !READY&lt;/code&gt;, and 2) the display controller at the end of the video
+processing chain can’t handle &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;READY &amp;amp;&amp;amp; !VALID&lt;/code&gt;.  Any IP in the middle needs
+to do what it can to avoid these conditions.&lt;/p&gt;
+
+&lt;p&gt;This leads to some self-imposed criteria, that I’ve “added” to the AXI stream
+protocol.  Here are my extra rules for processing AXI video stream data:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;All video processing components should keep READY high.&lt;/p&gt;
+
+    &lt;p&gt;Specifically, nothing &lt;em&gt;within&lt;/em&gt;
+the module should ever drop the ready signal.  Only the downstream display
+driver should ever drop READY by more than a cycle or two between lines.
+This drop in READY then needs to propagate through all the way through any
+video processing chain.&lt;/p&gt;
+
+    &lt;p&gt;My &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_mux.v&quot;&gt;video multiplexer&lt;/a&gt;
+module is an example of an exception to this rule: It drops READY on all
+of the video streams that aren’t currently active.  By waiting until the
+end of a frame before adjusting/swapping which source is active, it can keep
+all sources synchronized with the output.  This component will fail,
+however, if one of those incoming streams is a true video source.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Keep VALID high as much as possible.&lt;/p&gt;
+
+    &lt;p&gt;Only an upstream video source, such as a camera, should ever drop VALID by
+more than a cycle or two between lines.  As with READY, this drop in VALID
+should then propagate through the video processing chain.&lt;/p&gt;
+
+    &lt;p&gt;In my case, There’s no such camera in this design, and so I’m never starting
+from a live video source.  However, for reuse purposes in case I ever wish
+to merge any of these components with a live feed, I try to keep VALID high
+as much as possible.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Expect the environment to do something crazy.  Deal with it.  If your
+algorithm depends on the image size, and that size changes, deal with it.&lt;/p&gt;
+
+    &lt;p&gt;For example, if you are doing an overlay, and the overlay position changes,
+you’ll need to move it.  If a video being overlaid isn’t VALID by the time
+it’s needed, then you’ll have to diable the overlay operation and wait for
+the overlay video source to get to the end of its frame before stalling it,
+and then forcing it to wait until the time required for its first pixel
+comes around again.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;If your algorithm has a memory dependency, then there is always the
+possibility that the memory cannot keep up with the videos requirements.
+Prepare for this.  Expect it.  Plan for it.  Know how to deal with it.&lt;/p&gt;
+
+    &lt;p&gt;For example, if you are reading memory from a frame buffer to generate a
+video image, and the memory doesn’t respond in time then, again, you have
+to deal with it.  Your algorithm should do something “smart”, fail
+gracefully, and then be able to resynchronize again later.  Perhaps
+something else, such as a disk-drive DMA, was using memory and kept the
+frame buffer from meeting its real-time requirements.  Perhaps it will be
+gone later.  Deal with it, and recover.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;In my case, I was building a falling raster.  I had two real-time requirements.&lt;/p&gt;
+
+&lt;p&gt;First, data comes from the SONAR device at some incoming rate.  There’s no
+room to slow it down.  You either handle it in time, or you don’t. In my case,
+SONAR data is slow, so this isn’t really an issue.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: left&quot;&gt;&lt;caption&gt;Fig 4. AXI Stream Video &quot;Rules&quot;&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/vidrules.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This data then goes through an
+&lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;,
+and possibly a logarithm or an averager,
+before coming to the first half of the raster.  This component then writes
+data to memory, one &lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;
+line at a time.  (See Fig. 2 above.)  If the memory is
+too slow here, data may be catastrophically dropped.  This is bad, but rare.&lt;/p&gt;
+
+&lt;p&gt;Second, the waterfall display data must be produced at a known rate.  VALID
+must be held high as much as possible so that the downstream display driver
+at the end of the processing chain can rate limit the pipeline as necessary.
+That means the waterfall must be read from memory as often as the downstream
+display driver needs it.  If the memory can’t keep up, the display goes on.
+You can’t allow these to get out of sync, but if they do they have to be able
+to resynchronize automatically.&lt;/p&gt;
+
+&lt;p&gt;Those are my rules for AXI video.  I’ve also summarized them in Fig. 4.&lt;/p&gt;
+
+&lt;h2 id=&quot;debugging-challenge&quot;&gt;Debugging Challenge&lt;/h2&gt;
+
+&lt;p&gt;Now let’s return to my SONAR project, where one of the big challenges was that
+the SONAR device wasn’t on my desktop.  It’s being developed on the other side
+of the Atlantic from where I’m at.  It has no JTAG connection to Vivado.
+There’s no ILA, although my &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone scope&lt;/a&gt;
+works fine.  The bottom line here, though, is that I can’t just glance at the
+device (like I’d like) to see if the display is working.&lt;/p&gt;
+
+&lt;p&gt;I’ve therefore spent countless hours using both formal methods and video
+simulations to verify that each of these display components work.  Each of
+these displays has passed a lint check, a formal check, and a simulation check.
+Therefore, they should all be working … right?&lt;/p&gt;
+
+&lt;p&gt;Except that when I tried to deploy these “working” modules to the
+hardware … they didn’t work.&lt;/p&gt;
+
+&lt;p&gt;The classic example of “not working” was the split screen spectrum/waterfall
+display.  This screen was supposed to display the current spectrum of the
+input data on top, with a waterfall synchronized to the same data falling down
+beneath it.  It’s a nice effect–when it works.  However, we had problems
+where the two would get out of sync.  1) The waterfall would show energy in
+locations separate from the spectral energy, 2) the waterfall could be seen
+“jumping” horizontally across the screen–just like the old TVs would do when
+they lost sync.&lt;/p&gt;
+
+&lt;p&gt;This never happened in any of my simulations.  Never.  Not even once.&lt;/p&gt;
+
+&lt;p&gt;Sadly, my integrated SONAR simulation environment isn’t perfect.  It has
+some challenges.  Of course, there’s the obvious challenge that my simulation
+isn’t connected to “real” data.  Instead, I tend to drive it with various sine
+waves.  These tend to be good for testing.  I suppose I could fix this somewhat
+by replaying collected data, but that’s only on my “To-Do” list for now.  Then
+there’s the challenge that &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp&quot;&gt;my memory simulation
+model&lt;/a&gt;
+doesn’t typically match Xilinx’s MIG DDR3 performance.  (No, I’m not simulating
+the entire DDR3 memory–although perhaps I should.) Finally, I can only
+simulate about 5-15 frames of video data.  It just doesn’t take very long
+before the &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD trace file&lt;/a&gt;
+exceeds 100GB, and then &lt;a href=&quot;https://gtkwave.sourceforge.net/&quot;&gt;my
+tools&lt;/a&gt; struggle.&lt;/p&gt;
+
+&lt;p&gt;Bottom line: &lt;a href=&quot;/blog/2018/08/04/sim-mismatch.html&quot;&gt;works in simulation, fails hard in
+hardware&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Now, how to figure this one out?&lt;/p&gt;
+
+&lt;h2 id=&quot;first-step-formal-verification&quot;&gt;First Step: Formal verification&lt;/h2&gt;
+
+&lt;p&gt;I know I said everything was formally verified.  That wasn’t quite true
+initially.  Initially, the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;
+wasn’t formally verified.&lt;/p&gt;
+
+&lt;p&gt;In general, I like to develop with formal methods as my guide.  Barring that,
+if I ever run into problems then formal verification is my first approach to
+debugging.  I find that I can find problems faster when using the formal tools.
+It tends to condense debugging very quickly.  Further, the formal tools aren’t
+constrained by the requirement that the simulation environment needs to make
+sense.  As a result, I tend to check my designs against a much richer
+environment when checking them formally than I would via simulation.&lt;/p&gt;
+
+&lt;p&gt;In this case, I was tied up with other problems, so I had someone else do the
+formal verification for me.  He was somewhat new to formal verification, and
+this particular module was quite the challenge–there are just so many cases
+that had to be considered:&lt;/p&gt;
+
+&lt;p&gt;We can start with the typical design, where the overlaid image lands nicely
+within the main image window.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. Overlaid window in video&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/midoverlay.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This is what I typically think of when I set up an overlay of some type.&lt;/p&gt;
+
+&lt;p&gt;This isn’t as simple as it sounds, though, since the IP needs to know that
+the overlay window has finished its line, and so it shouldn’t start on the
+next line until the main window gets to the left corner of the overlay
+window for the next line.&lt;/p&gt;
+
+&lt;p&gt;What happens, though, when the overlay window scrolls off to once side and
+wraps back onto the main window?&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: left&quot;&gt;&lt;caption&gt;Fig 6. Clipping the Overlaid video&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/overlay.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;It might also scroll off the bottom as well.&lt;/p&gt;
+
+&lt;p&gt;In both cases, the overlay video should be clipped.  This is not something my
+simulation environment ever really checked, but it is something we had no
+end of challenges when checking via formal tools.&lt;/p&gt;
+
+&lt;p&gt;These clipped examples are okay.  There’s nothing wrong with them–they just
+never look right with only a couple clock cycles of trace.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 7. Overlay not ready&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/overlay-block.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;There’s also the possibility of what happens when the overlay window isn’t
+ready when the main window is, as illustrated in Fig. 7 on the right.&lt;/p&gt;
+
+&lt;p&gt;Remember our video rules.  Together, these rules require that VALID and READY
+be propagated through the module–but never dropped internal to the module.
+That means there’s no time to wait.  If the overlay module isn’t ready when
+it’s time, then the image will be corrupted.  We can’t wait or the hardware
+display will lose sync.  The overlay has to be ready or the image will be
+corrupted.&lt;/p&gt;
+
+&lt;p&gt;So, how to deal with situations like this?&lt;/p&gt;
+
+&lt;p&gt;Yeah.&lt;/p&gt;
+
+&lt;p&gt;Yes, my helper learned a lot during this process.  Eventually, we got to the
+point of pictorially drawing out what was going on each time the formal engine
+presented us with another verification failure, just so we could follow what
+was going on.  Yes, our drawings started looking like Fig. 5 or 6 above.&lt;/p&gt;
+
+&lt;p&gt;Yes, formal verification is where I turn when things don’t work.  Typically
+there’s some hardware path I’m not expecting, and formal tends to find all
+such paths to make sure the logic considers them properly.&lt;/p&gt;
+
+&lt;p&gt;In this case, it wasn’t enough.  Even though I formally verified all of these
+components, the displays still weren’t working.  Unfortunately, in order to
+know this, I had to ask an engineer in a European time zone to connect a
+monitor and … he told me it wasn’t working.  Sure, he was more helpful than
+that: he provided me pictures of the failures.  (They were nasty.  These were
+ugly looking failures.)  Unfortunately, these told me nothing of what needed
+to be adjusted, and it was also costly in terms of requiring a team effort–I
+would need to arrange for his availability, (potentially) his cost, all for
+something that wasn’t (yet) a customer requirement.&lt;/p&gt;
+
+&lt;p&gt;I needed a better approach.&lt;/p&gt;
+
+&lt;p&gt;What I needed was a way to “see” what was going on, without being there.
+I needed a digital method of screen capture.&lt;/p&gt;
+
+&lt;p&gt;Building something like this, however, is quite the challenge: the waterfall
+displays all use my memory bandwidth–they can even use a (potentially)
+significant memory bandwidth.  Debugging meant that I was going to need a
+means of capturing the screen headed to the display that wouldn’t
+(significantly) impact my memory bandwidth–otherwise my test infrastructure
+(i.e. any debugging screen capture) would impact what I was trying to test.
+That might lead to chasing down phantom bugs, or believing things were still
+broken even after they’d been fixed.&lt;/p&gt;
+
+&lt;p&gt;This left me at an impass for some time–knowing there were bugs in the video,
+but unable to do anything about them.&lt;/p&gt;
+
+&lt;h2 id=&quot;enter-qoi-compression&quot;&gt;Enter QOI Compression&lt;/h2&gt;
+
+&lt;p&gt;Some time ago, I remember reading about &lt;a href=&quot;https://qoiformat.org&quot;&gt;QOI
+compression&lt;/a&gt;.  It captured my attention, as a fun
+underdog story.&lt;/p&gt;
+
+&lt;p&gt;Yes, I’d implemented my own &lt;a href=&quot;https://en.wikipedia.org/wiki/GIF&quot;&gt;GIF&lt;/a&gt;
+compression/decompression in time past.  This was back when I was still focused
+on software, and thus before I started doing any hardware design. I’d even
+looked up how to compress images with &lt;a href=&quot;https://en.wikipedia.org/wiki/PNG&quot;&gt;PNG&lt;/a&gt;
+and how &lt;a href=&quot;https://en.wikipedia.org/wiki/Bzip2&quot;&gt;BZip2&lt;/a&gt; could compress files.
+Frankly, over the course of 30 years working in this industry, compression is
+kind of hard to avoid.  That said, none of these compression methods is
+really suitable for FPGA work.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://qoiformat.org&quot;&gt;QOI&lt;/a&gt; is different.&lt;/p&gt;
+
+&lt;p&gt;&lt;a href=&quot;https://qoiformat.org&quot;&gt;QOI&lt;/a&gt; is &lt;em&gt;much&lt;/em&gt; simpler than
+&lt;a href=&quot;https://en.wikipedia.org/wiki/GIF&quot;&gt;GIF&lt;/a&gt;,
+&lt;a href=&quot;https://en.wikipedia.org/wiki/PNG&quot;&gt;PNG&lt;/a&gt;,
+or &lt;a href=&quot;https://en.wikipedia.org/wiki/Bzip2&quot;&gt;BZip2&lt;/a&gt;.  &lt;em&gt;Much&lt;/em&gt; simpler.  It’s so
+simple, it can be implemented in hardware without too many challenges.  It’s so
+simple, it can be implemented in 700 Xilinx 6-LUTs.  Not only that, it claims
+better performance than &lt;a href=&quot;https://en.wikipedia.org/wiki/PNG&quot;&gt;PNG&lt;/a&gt;
+across &lt;a href=&quot;https://qoiformat.org/benchmark/&quot;&gt;many (not all) benchmarks&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Yeah, now I’m interested.&lt;/p&gt;
+
+&lt;p&gt;With a little bit of work, I was able to implement a &lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v&quot;&gt;QOI compression
+module&lt;/a&gt;.  A
+&lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_encoder.v&quot;&gt;small wrapper&lt;/a&gt;
+could encode and attach a small “file” header and trailer onto the compressed
+stream.  This could then be followed by a &lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_recorder.v&quot;&gt;QOI image capture
+module&lt;/a&gt;
+which I could then use to capture a series of subsequent video frames.&lt;/p&gt;
+
+&lt;p&gt;This led to a debugging plan that was starting to take shape.  You can see how
+this plan would work in Fig. 8 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 8. Video debug plan using QOI compression&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/qoiplan.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;If all went well, video data would be siphoned off from between the video
+multiplexer and the display driver generating the HDMI output.  This video
+would be (nominally) at around (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;800*600*3*60&lt;/code&gt;) 82MB/s.  If the compression
+works well, the data rate should drop to about 1MB/s–but we’ll see.&lt;/p&gt;
+
+&lt;p&gt;Of course, as with anything, nothing works out of the box.  Worse, if you are
+going to rely on something for “test”, it really needs to be better than
+the device under test.  If not, you’ll never know which item is the cause of
+an observation: the device under test, or the test infrastructure used to
+measure it.&lt;/p&gt;
+
+&lt;p&gt;Therefore, I set up a basic simulation test on my desktop.  I’d run the
+SONAR simulation, visually inspect the HDMI output, and capture three frames
+of data.  I’d then &lt;a href=&quot;https://github.com/phoboslab/qoi&quot;&gt;convert&lt;/a&gt; these three
+frames of data to &lt;a href=&quot;https://en.wikipedia.org/wiki/PNG&quot;&gt;PNG&lt;/a&gt;s.  If the resulting
+&lt;a href=&quot;https://en.wikipedia.org/wiki/PNG&quot;&gt;PNG&lt;/a&gt;s visually matched, then I had
+a &lt;del&gt;strong&lt;/del&gt; confidence the
+&lt;a href=&quot;https://qoiformat.org&quot;&gt;QOI&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v&quot;&gt;compression&lt;/a&gt;,
+&lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_encoder.v&quot;&gt;encoder&lt;/a&gt;, and
+&lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_recorder.v&quot;&gt;recorder&lt;/a&gt;
+were working.&lt;/p&gt;
+
+&lt;p&gt;Note that I had to cross out the word “strong” there.  Unless and until an
+IP can be tested through &lt;em&gt;every&lt;/em&gt; logic path, you really don’t have any “strong”
+confidence something is working.  Still, it was enough to get me off the ground.&lt;/p&gt;
+
+&lt;p&gt;The challenge here is that tracing the design through simulation while it
+records three images can generate a 120GB+
+&lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD file&lt;/a&gt;,
+and took longer to test
+in simulation than it did to build the hardware design, load the hardware
+design, and capture images from hardware.  As a result, I often found myself
+debugging both the &lt;a href=&quot;https://github.com/ZipCPU/qoiimg&quot;&gt;QOI processing system&lt;/a&gt;
+and the (buggy) video processing system jointly, &lt;a href=&quot;/blog/2017/06/02/design-process.html&quot;&gt;in hardware, at the same
+time&lt;/a&gt;.
+No, it’s not ideal, but it did work.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-first-bug-never-getting-back-in-sync&quot;&gt;The First Bug: Never getting back in sync&lt;/h2&gt;
+
+&lt;p&gt;I started my debugging with the default display, a &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_split.v&quot;&gt;split
+screen&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;spectrogram&lt;/a&gt;
+and &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v&quot;&gt;waterfall&lt;/a&gt;.
+Using my newfound capability, I quickly received an image that looked something
+like the figure below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 9. First QOI capture -- no waterfall&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/20240527-qoi-before.png&quot; alt=&quot;&quot; width=&quot;800&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This figure shows what &lt;em&gt;should&lt;/em&gt; be a
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_split.v&quot;&gt;split screen&lt;/a&gt;
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;spectrogram&lt;/a&gt;
+and
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v&quot;&gt;waterfall&lt;/a&gt;
+display.  The
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_trace.v&quot;&gt;spectrum&lt;/a&gt;
+on top appears about right, however the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/gfx/vid_waterfall.v&quot;&gt;waterfall&lt;/a&gt;
+that’s supposed to exist in the bottom half of the display is completely absent.&lt;/p&gt;
+
+&lt;p&gt;Well, the good news is that I could at least capture a bug.&lt;/p&gt;
+
+&lt;p&gt;The next step was to walk this bug backwards through the design.  In this case,
+we’re walking backwards through Fig. 2 above and the first component to look at
+is the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;.  It
+is possible for the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;
+to lose synchronization.  This typically means either the overlay isn’t
+ready when the primary display is ready for it, or that the overlay is still
+displaying some (other) portion of its video.  Once out of sync, you can no
+longer merge the two displays.  The two streams then need to be resynchronized.
+That is, the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay&lt;/a&gt;
+module would need to wait for the end of the secondary image (the image to be
+overlaid on top of the primary), and then it would need to stall the secondary
+image until the primary display was ready for it again.&lt;/p&gt;
+
+&lt;p&gt;However, the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;
+wasn’t losing synchronization.&lt;/p&gt;
+
+&lt;p&gt;No?&lt;/p&gt;
+
+&lt;p&gt;This was a complete surprise to me.  This was where I was expecting the bug,
+and where most of my debugging efforts had been (blindly) focused up until this
+point.&lt;/p&gt;
+
+&lt;p&gt;Okay, so … let’s move back one more step.  (See Fig. 2)&lt;/p&gt;
+
+&lt;p&gt;It is possible for the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;video waterfall
+reader&lt;/a&gt;
+to get out of sync between its two clocks.  Specifically, one portion of the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;reader&lt;/a&gt;
+reads data, one line at a time, from the bus and stuffs it into
+first a synchronous FIFO, and then
+an &lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous one&lt;/a&gt;.  This
+half operates at whatever speed the bus is at, and that’s defined by the
+memory’s speed.  The second half of the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;reader&lt;/a&gt;
+takes this data from the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt; and attempts
+to create an AXI stream video output from it–this time at the pixel clock rate.
+Because we are not allowed to stall this video output to wait for memory, it
+is possible for the two to get out of sync.  In this case, the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;reader&lt;/a&gt;
+(pixel clock domain) is supposed to wait for an end of frame indication from
+the memory
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;reader&lt;/a&gt;
+(bus clock domain, via the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt;),
+and then it is to stall the memory
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;reader&lt;/a&gt;
+(by not reading from the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt;)
+until it receives an end of video frame indication from its own video
+reconstruction logic.&lt;/p&gt;
+
+&lt;p&gt;A quick check revealed that yes, these two were getting out of sync.&lt;/p&gt;
+
+&lt;p&gt;Here’s how the “out-of-sync” detection was taking place:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;initial&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;px_lost_sync&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pix_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pix_reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;px_lost_sync&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_VID_TVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;M_VID_TREADY&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;M_VID_HLAST&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Check when sending the last pixel of a line.  On this last&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// pixel, the data read from memory (px_hlast) must also&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// indicate that it is the last pixel in a line.  Further,&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// if this is also the last line in a frame, then both the&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// memory indicator of the last line in a frame (px_vlast)&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// and the outgoing video indicator (M_VID_VLAST) must match.&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_hlast&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_VID_VLAST&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_vlast&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;px_lost_sync&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_lost_sync&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;M_VID_VLAST&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;px_vlast&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// We can resynchronize once both memory and&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// outgoing video streams have both reached the end of&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// a frame.&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;px_lost_sync&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Following any reset, the entire design should be synchronized.  That’s the
+easy part.&lt;/p&gt;
+
+&lt;p&gt;Next, if the output of the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;
+(that’s the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_*&lt;/code&gt; prefix values) is ready to produce the last pixel of a
+line, then we check if the FIFO signals line up.  In our example, we have two
+sets of synchronization signals.  First, there are the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_HLAST&lt;/code&gt; and
+&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_VLAST&lt;/code&gt; signals.  These are generated blindly based upon the frame size.
+These indicate the last pixel in a line (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_HLAST&lt;/code&gt;) and the end of a frame
+(&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_VLAST&lt;/code&gt;) respectively–from the perspective of the video stream.  Two
+other signals, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;px_hlast&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;px_vlast&lt;/code&gt;, come through the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt;.  These
+are used to indicate the last bus word in a line and the end of a frame from
+the perspective of the data found within the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt;
+containing the samples read from memory–one bus word (not one pixel) at a time.
+If these two ever get out of sync, then perhaps memory hasn’t kept up with the
+display or perhaps something else has gone wrong.&lt;/p&gt;
+
+&lt;p&gt;So, to determine if we’ve lost sync, we check for it on the last pixel of any
+line.  That is, when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_HLAST&lt;/code&gt; is true to indicate the last pixel in a
+line, then &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;px_last&lt;/code&gt; should also be true–both should be synchronized.
+Likewise, when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_VLAST&lt;/code&gt; (last line of frame) is true, then &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;px_vlast&lt;/code&gt;
+should also be true–or the two have come out of sync.&lt;/p&gt;
+
+&lt;p&gt;Because I’m also doing 128b bus word to 8b pixel conversions here, the two
+signals don’t directly correspond.  That is, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;px_hlast&lt;/code&gt; might be true (last
+bus word of a line), even though &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_HLAST&lt;/code&gt; isn’t true yet (last pixel of a
+line).  Hence, I only check these values if &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;M_VID_HLAST&lt;/code&gt; is true–on the last
+&lt;em&gt;pixel&lt;/em&gt; of the line.&lt;/p&gt;
+
+&lt;p&gt;That’s how we know if we’re out of sync.  But … how do we get synchronized
+again?&lt;/p&gt;
+
+&lt;p&gt;For this, the plan is to read from the memory reader as fast as possible until
+the end of the frame.  Once we get to the end of the frame, we’ll stop reading
+from memory and wait for the video (pixel clock) to get to the end of the
+frame.  Once both are synchronized at the end of a frame, the plan is to then
+release both together and we’ll be synchronized again.&lt;/p&gt;
+
+&lt;p&gt;At least, that’s how this is &lt;em&gt;supposed&lt;/em&gt; to work.&lt;/p&gt;
+
+&lt;p&gt;The key (broken) signal was the signal to read from the &lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous
+FIFO&lt;/a&gt;.
+This signal, called &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;afifo_read&lt;/code&gt;, is shown below.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;afifo_read&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_count&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;PW&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_valid&lt;/span&gt;
+			&lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_VID_TVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;M_VID_TREADY&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;M_VID_HLAST&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_VID_TVALID&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_VID_TREADY&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;afifo_read&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;c1&quot;&gt;// Always read if we are out of sync&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_lost_sync&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_hlast&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_vlast&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;afifo_read&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Basically, we want to read from the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt;
+any time we don’t have a full pixel’s width left in our bus width to pixel
+gearbox, any time we don’t have a valid buffer, or any time we reach the end
+of the line–where we would flush the gearbox’s buffer.  The exception to this
+is if the outgoing AXI stream is stalled.  This is how the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;FIFO&lt;/a&gt; read signal is supposed
+to work normally.  There’s one exception here, and that is if the two are out
+of sync.  In that case, we will always read from
+the &lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;FIFO&lt;/a&gt;
+until the last pixel in a line on the last line of the frame.&lt;/p&gt;
+
+&lt;p&gt;This all sounds good.  It looked good on a desk check too.  II passed over this
+many times, reading it, convincing myself that this was right.&lt;/p&gt;
+
+&lt;p&gt;The problem is this was the logic that was broken.&lt;/p&gt;
+
+&lt;p&gt;If you look closely, you might notice that this logic would never allow us to
+get back in sync.  Once we lose synchronization, we’ll read until the end of
+the frame and then stop, only to read again when any of the original criteria
+are true–the ones assuming synhronization.&lt;/p&gt;
+
+&lt;p&gt;Yeah, that’s not right.&lt;/p&gt;
+
+&lt;p&gt;This also explains why all my hardware traces showed the waterfall never
+resynchronizing with the outgoing video stream.&lt;/p&gt;
+
+&lt;p&gt;One missing condition fixes this.&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// ...&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;px_lost_sync&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;px_hlast&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;px_vlast&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_VID_HLAST&lt;/span&gt;
+				&lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;M_VID_VLAST&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;afifo_read&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This last condition states that, if we are out of sync and we’ve reached the
+last pixel in a frame, then we need to wait until the outgoing frame matches
+our sync.  Only then can we read again.&lt;/p&gt;
+
+&lt;p&gt;Once I fixed this, things got better.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 10. QOI capture, showing an attempted waterfall display&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/20240528-qoi-promising.png&quot; alt=&quot;&quot; width=&quot;800&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;I could now get through a significant fraction of a frame before losing
+synchronization for the rest of it.  In other words, I had found and fixed
+the cause of why the design wasn’t recovering, just not the cause of what
+caused it to get out of sync in the first place.&lt;/p&gt;
+
+&lt;p&gt;The waterfall background is also supposed to be &lt;em&gt;black&lt;/em&gt;, not &lt;em&gt;blue&lt;/em&gt;–so I
+needed to dig into that as well.  (That turned out to be a bug in the &lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v&quot;&gt;QOI
+compression
+module&lt;/a&gt;.  I
+could just about guess this bug, if I watched how the official decoder worked.)&lt;/p&gt;
+
+&lt;p&gt;So, back I went to the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone scope&lt;/a&gt;,
+this time &lt;a href=&quot;/blog/2017/06/08/simple-scope.html&quot;&gt;triggering the
+scope&lt;/a&gt;
+on a loss of sync event.  I needed to find out why this design lost sync in
+the first place.&lt;/p&gt;
+
+&lt;h2 id=&quot;the-second-bug-how-did-we-lose-sync-in-the-first-place&quot;&gt;The Second Bug: How did we lose sync in the first place?&lt;/h2&gt;
+
+&lt;p&gt;Years ago, I wrote &lt;a href=&quot;/blog/2018/11/29/llvga.html&quot;&gt;an article that argued that good and correct video handling
+was all captured by a pair of
+counters&lt;/a&gt;.  You needed one
+counter for the horizontal pixel, and another for the vertical pixel.  Once
+these got to the raw width and height of the image, the counters would be
+reset and start over.&lt;/p&gt;
+
+&lt;p&gt;When dealing with memory, things are a touch different–at least for this
+design.&lt;/p&gt;
+
+&lt;p&gt;As hinted above, the bus portion of the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;waterfall
+reader&lt;/a&gt;
+works off of &lt;em&gt;bus words&lt;/em&gt;, not pixels.  It reads one line at a time from the
+bus, reading as many bus words as are necessary to make up a line.  In the case
+of this system, a bus word on the &lt;a href=&quot;https://store.digilentinc.com/nexys-video-artix-7-fpga-trainer-board-for-multimedia-applications&quot;&gt;Nexys Video
+board&lt;/a&gt;
+is 128-bits long–the natural width of the DDR3 SDRAM memory.  (Our &lt;a href=&quot;https://www.enclustra.com/en/products/fpga-modules/mercury-kx2/&quot;&gt;next
+hardware
+platform&lt;/a&gt;
+will increase this to 512-bits.)  Likewise, the waterfall pixel size is only
+8-bits–since it has no color, and a &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/48de0f29c1cb91fabb0ef4d0cba4829c4a43651c/rtl/gfx/vid_clrmap.v&quot;&gt;false
+color&lt;/a&gt;
+will be provided later.  Hence, to read an 800 pixel line, the bus master must
+read 50 bus words (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;800*8/128&lt;/code&gt;).  The last word will then be marked as the last
+in the line, possibly also the last in the frame, and the result will be
+stuffed into the &lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous
+FIFO&lt;/a&gt;.
+Once the last word in a line is requested of the bus, the bus master
+needs to increment his line pointer address to the next line&lt;/p&gt;
+
+&lt;p&gt;However, there’s a problem with bus mastering: the logic that makes &lt;em&gt;requests&lt;/em&gt;
+of a bus has to take place many clocks before the logic that &lt;em&gt;receives&lt;/em&gt; the bus
+responses.  The difference is not really that important, but it typically ends
+up around 30 clock cycles or so.  That means this design needs two sets of
+X and Y counters: one when making requests, to know when a full line (or frame)
+has been requested and that it is time to advance to the next line (or frame),
+and a second set to keep track of when the line (or frame) ends with respect
+to the values &lt;em&gt;returned&lt;/em&gt; from the bus.  This second set controls the end of
+line and frame markers that go into the synchronous and then &lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous
+FIFO&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;Let’s walk through this logic to see if I can clarify it at all.&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;First, there’s both an synchronous FIFO and an
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous one&lt;/a&gt;–since
+it can be a challenge to know the &lt;em&gt;fill&lt;/em&gt; of the
+&lt;a href=&quot;/blog/2018/07/06/afifo.html&quot;&gt;asynchronous FIFO&lt;/a&gt;.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once the &lt;em&gt;synchronous&lt;/em&gt; FIFO is at least half empty, the reader begins a bus
+transaction.  For a &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;Wishbone
+bus&lt;/a&gt;, this means both &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;STB&lt;/code&gt; need to
+be raised.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;For every &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;STB &amp;amp;&amp;amp; !STALL&lt;/code&gt;, a request is made of the bus.  At this time, we
+also subtract one from a counter keeping track of the number of available
+(i.e. uncommitted) entries in the synchronous FIFO.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Likewise, for every &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;STB &amp;amp;&amp;amp; !STALL&lt;/code&gt;, the IP increments the requested memory
+address.&lt;/p&gt;
+
+    &lt;p&gt;Once you get to the end of the line, set the next address to the last line
+start address &lt;em&gt;minus&lt;/em&gt; one line of memory.  Remember, we are creating a
+&lt;em&gt;falling&lt;/em&gt; raster, where we go from most recent
+&lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt; data to oldest
+&lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt; data.
+Hence we read &lt;em&gt;backwards&lt;/em&gt; through memory, one line at a time.&lt;/p&gt;
+
+    &lt;p&gt;Once we get to the beginning of our assigned memory area, we wrap back
+to the end of our assigned memory area minus one line.&lt;/p&gt;
+
+    &lt;p&gt;Once we get to the end of the &lt;em&gt;frame&lt;/em&gt;, we need to reset the address to
+the last line the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_w.v&quot;&gt;writer&lt;/a&gt;
+has just completed.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;On evey &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ACK&lt;/code&gt;, the returned by data gets stored into the synchronous FIFO.
+With each result stored in the FIFO, we also add an indication of whether
+this return was associated with the end of a line or the end of a frame.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;reader&lt;/a&gt;
+gets to the end of the line, we restart the (horizontal) &lt;del&gt;pixel&lt;/del&gt; bus
+word counter and increment the line counter.  When it gets to the end of
+the frame, we reset the line counter as well.&lt;/p&gt;
+
+    &lt;p&gt;Just to make sure that these two sets of counters (request and return)
+remain synchronized, the return counters to set to equal the request
+counters any time the bus is idle.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;The IP then continues making requests until there would be no more room in
+the FIFO for the returned data.  At this point, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;STB&lt;/code&gt; gets dropped and we
+wait for the last request to be returned.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Once all requests have been returned, drop &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt; and wait again.&lt;/p&gt;
+
+    &lt;p&gt;The rule of the bus is also the rule of the boarding house bathroom:
+do your business, and get out of there.  Once you are done with any bus
+transactions, it’s therefore important to get off the bus.  Even if we could
+(now) make more requests, we’ll get off the bus and wait for the FIFO to
+become less than half full again–that way other (potential) bus masters
+can have a chance to access memory.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;And … right there is the foundation for this bug.&lt;/p&gt;
+
+&lt;p&gt;The actual bug was how I determined whether or not the last request was being
+returned.  Let’s look at that logic for a moment, shall we?  Here’s what it
+looked like (when broken):  (Watch for what clears &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;o_wb_cyc&lt;/code&gt; …)&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;initial&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_wb_cyc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_wb_stb&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2'b00&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;wb_reset&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Halt any requests on reset&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_wb_cyc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_wb_stb&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2'b00&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_wb_cyc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_wb_stb&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_wb_stall&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// Drop the strobe signal on the last request.  Never&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// raise it again during this cycle.&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;o_wb_stb&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;last_request&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_wb_ack&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_wb_stb&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_wb_stall&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+					&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;last_request&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;last_ack&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+			&lt;span class=&quot;c1&quot;&gt;// Drop ACK once the last return has been received.&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;o_wb_cyc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;else&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;fifo_fill&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;LGFIFO&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;LGBURST&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;==&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// Start requests when the FIFO has less than a burst's size&lt;/span&gt;
+		&lt;span class=&quot;c1&quot;&gt;// within it.&lt;/span&gt;
+		&lt;span class=&quot;o&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_wb_cyc&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;o_wb_stb&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;}&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;2'b11&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_wb_cyc&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_wb_err&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;last_ack&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;last_ack&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;wb_outstanding&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;o_wb_stb&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;?&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+				&lt;span class=&quot;o&quot;&gt;&amp;lt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;2&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_wb_ack&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;?&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Look specifically at the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;last_ack&lt;/code&gt; signal.&lt;/p&gt;
+
+&lt;p&gt;Depending upon the pipeline, this signal can be off by one clock cycle.&lt;/p&gt;
+
+&lt;p&gt;This was the bug.  Because the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;last_ack&lt;/code&gt; signal, indicating that there’s only
+one more acknowledgement left, compared the number of outstanding requests
+against &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;2&lt;/code&gt; plus the current acknowledgment, and because the signal was
+&lt;em&gt;registered&lt;/em&gt;, &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;last_ack&lt;/code&gt; might be set if there were two requests outstanding
+&lt;em&gt;and&lt;/em&gt; nothing was returned on the current cycle.&lt;/p&gt;
+
+&lt;p&gt;Since all requests would’ve been made by this time, the X and Y &lt;del&gt;pixel&lt;/del&gt;
+bus word counters for the &lt;em&gt;request&lt;/em&gt; would reflect that we’d just requested a
+line of data.  The &lt;em&gt;return&lt;/em&gt; counters, on the other hand, would be off by one
+if &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt; ever dropped a cycle early.  These return counters would then get
+reset to equal the &lt;em&gt;request&lt;/em&gt; counters any time &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt; was zero.  Hence,
+dropping the bus line one cycle early would result in a line
+of pixels (well, bus words representing pixels …) going into the FIFO
+that didn’t have enough pixels within it–or perhaps the LAST signal might
+be missing entirely.  Whatever the case, it didn’t line up.&lt;/p&gt;
+
+&lt;p&gt;This particular design was formally verified.  Shouldn’t this bug have shown
+up in a formal test?  Sadly, no.  &lt;a href=&quot;/zipcpu/2017/11/07/wb-formal.html&quot;&gt;It’s &lt;em&gt;legal&lt;/em&gt; to drop &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt;
+early&lt;/a&gt;, so there’s
+no protocol violation there.  Further, my acknowledgment counter was off by
+one in such that the formal properties allowed it.  If I added an assertion
+that &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt; would never be dropped early (which I did once I discovered this
+bug), the design would then immediately (and appropriately) fail.&lt;/p&gt;
+
+&lt;p&gt;There’s one more surprise to this story though.  Why didn’t this bug show up in
+simulation?&lt;/p&gt;
+
+&lt;p&gt;Ahh, now there’s a very interesting lesson to be learned.&lt;/p&gt;
+
+&lt;h2 id=&quot;reality-why-didnt-the-bugs-show-up-in-simulation&quot;&gt;Reality: Why didn’t the bug(s) show up in simulation?&lt;/h2&gt;
+
+&lt;p&gt;Why didn’t the bug show up earlier?  Because of Xilinx’s DDR3 SDRAM controller,
+commonly known as “The MIG”.&lt;/p&gt;
+
+&lt;p&gt;I don’t normally simulate DDR3 memories.  A DDR3 SDRAM memory controller
+requires a lot of hardware specific components, components that aren’t
+necessarily easy to simulate, and it also requires a DDR3 SDRAM simulation
+model.  I tend to simplify all of this and just simulate my designs with an
+&lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp&quot;&gt;alternate SDRAM model–a model that looks and acts “about” right, but one that
+isn’t exact&lt;/a&gt;.&lt;/p&gt;
+
+&lt;p&gt;It was the difference between &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp&quot;&gt;my simulation
+model&lt;/a&gt;,
+which wouldn’t trigger any of the bugs, and Xilinx’s MIG reality that
+ended up triggering the bug.&lt;/p&gt;
+
+&lt;p&gt;Fig. 11, for example, shows what the &lt;a href=&quot;https://github.com/ZipCPU/wbscope&quot;&gt;Wishbone
+scope&lt;/a&gt; returned when documenting the
+&lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/vid_waterfall_r.v&quot;&gt;waterfall
+reader&lt;/a&gt;’s
+transactions with the MIG.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 11.  The Waterfall reader's view of Wishbone bus handshaking when accessing memory&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/20240605-migfail.png&quot; alt=&quot;&quot; width=&quot;800&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Focus your attention on first the stall (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;i_stall&lt;/code&gt;) and then the
+acknowledgment (&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;i_ack&lt;/code&gt;) lines.&lt;/p&gt;
+
+&lt;p&gt;First, stall is high immediately as part of the beginning of the transaction.
+This is to be expected.  With the exception of filling a minimal buffer, any
+bus master requesting transactions of the bus is going to need to wait for
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;arbitration&lt;/a&gt;.
+This only takes a clock or two.  Once
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;arbitration&lt;/a&gt; is received, the
+&lt;a href=&quot;/blog/2019/07/17/crossbar.html&quot;&gt;interconnect&lt;/a&gt;
+won’t stall the design again during this bus cycle.&lt;/p&gt;
+
+&lt;p&gt;Only the stall line gets raised again after that–several times even.  These
+stalls are all due to the MIG.&lt;/p&gt;
+
+&lt;p&gt;Let’s back up a touch.&lt;/p&gt;
+
+&lt;p&gt;There are a lot of rules to SDRAM interaction.  Most SDRAM’s are configured in
+memory &lt;em&gt;banks&lt;/em&gt;.  Banks are read and written in &lt;em&gt;rows&lt;/em&gt;.  The data in each row
+is stored in a set of capacitors.  This allows for maximum data packing in
+minimal area (cost).  However, you can’t read from a row of capacitors.  To
+read from the memory, that row first needs to be copied to a row of fast
+memory.  This is called
+“activating” the row.  Once a row is activated, it can be read from or written
+to.  Once you are done with one row, it must be “precharged” (i.e. put back),
+before a different row can be activated.  All of this takes time.  If the
+row you want isn’t activated, you’ll need to switch rows.  That will cause a
+stall as the old row needs to be precharged and the new row activated.  Hence,
+when making a long string of read or a long string of write requests, you’ll
+suffer from a stall every time you cross rows.&lt;/p&gt;
+
+&lt;p&gt;Xilinx’s MIG has another rule.  Because of how their architecture uses an IO
+trained PLL (Xilinx calls this a “phasor”), the MIG needs to regularly read
+from memory to keep this PLL trained.  During this time the memory must also
+stall.  (Why the MIG can’t train on &lt;em&gt;my&lt;/em&gt; memory reads, but needs its own–I
+don’t know.)  These stalls are very periodic, and if you dig a bit you can
+find this taking place within their controller.&lt;/p&gt;
+
+&lt;p&gt;Then the part of the trace showing a long stalled section reflects the reality
+that, every now and again, the memory needs to be taken entirely off line for
+a period of time so that the capacitors can be recharged.  This requires a
+longer time period, as highlighted in Fig. 12 below.&lt;/p&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 12.  SDRAM refresh cycles force long stalls&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/20240605-migrefresh.png&quot; alt=&quot;&quot; width=&quot;800&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;Once it’s time for a refresh cycle like this, several steps need to take place
+in the memory controller–in this case the MIG.  First, any active rows need
+to be precharged.  Then, the memory is refreshed.  Finally, you’ll need to
+re-activate the row you need.  This takes time as well–as shown in Fig. 12.&lt;/p&gt;
+
+&lt;p&gt;That’s part one–the stall signal.  &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp&quot;&gt;My over-simplified SDRAM memory
+model&lt;/a&gt;
+doesn’t simulate any of these practical memory realities.&lt;/p&gt;
+
+&lt;p&gt;Part two is the acknowledgments.  From these traces, you can see that there’s
+about a 30 cycle latency (300ns) from the first request to the first
+acknowledgment.  However, unlike my &lt;a href=&quot;https://github.com/ZipCPU/zbasic/blob/e7b39a56ee515d1cabe8427f30c7add0592bfab1/sim/verilated/memsim.cpp&quot;&gt;over-simplified memory
+model&lt;/a&gt;,
+the acknowledgments also come back broken due to the stalls.  This makes sense.
+If every request takes 30 cycles, and some get stalled, then it only makes
+sense that the stalled requests would get acknowledged later the ones that
+didn’t get stalled.&lt;/p&gt;
+
+&lt;p&gt;Put together, this is why my waterfall display worked in simulation, but not
+in hardware.&lt;/p&gt;
+
+&lt;h2 id=&quot;conclusion&quot;&gt;Conclusion&lt;/h2&gt;
+
+&lt;p&gt;Wow, that was a long story!&lt;/p&gt;
+
+&lt;p&gt;Yeah.  It was long from my perspective too.  Although the “bugs” amounted to
+only 2-5 lines of Verilog, it took a lot of work to find those bugs.&lt;/p&gt;
+
+&lt;p&gt;Here are some key takeaways to consider:&lt;/p&gt;
+
+&lt;ol&gt;
+  &lt;li&gt;
+    &lt;p&gt;All of this was predicated on a &lt;a href=&quot;/blog/2018/08/04/sim-mismatch.html&quot;&gt;simulation vs hardware
+mismatch&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;Because the SDRAM simulation did not match the SDRAM reality, cycle for
+cycle, a key hardware reality was missed in testing.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;This should’ve been caught via formal methods.&lt;/p&gt;
+
+    &lt;p&gt;From now on, I’m going to have to make certain I check that &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt; is only
+ever dropped either following either a reset, an error, or the last
+acknowledgment.  There should be zero requests outstanding when &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CYC&lt;/code&gt; is
+dropped.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Why wasn’t the pixel resynchronization bug caught via formal?&lt;/p&gt;
+
+    &lt;p&gt;Because … FIFOs.  It can be a challenge to formally verify a design
+containing a FIFO.  Rather than deal with this properly, I allowed the two
+halves of the design to be somewhat independent–and so the formal tool
+never really examined whether or not the design could (or would) properly
+recover from a lost sync.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Did formally verifying the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;
+help?&lt;/p&gt;
+
+    &lt;p&gt;Yes.  When we went through it, we found bugs in it.  Once the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;
+was formally verified, the result stopped &lt;em&gt;jumping&lt;/em&gt;.  Instead, the
+overlay might just note a problem and stop showing the overlaid image.
+Even better, unlike before the &lt;a href=&quot;https://github.com/ZipCPU/vgasim/blob/master/rtl/axisvoverlay.v&quot;&gt;overlay
+module&lt;/a&gt;
+was properly verified, I haven’t had any more instances of the top and
+bottom pictures getting out of sync with each other.&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;What about that blue field?&lt;/p&gt;
+
+    &lt;p&gt;Yes, the waterfall background should be black when no signal was present.
+The blue field turned out to be caused by a bug in the &lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v&quot;&gt;QOI compression
+module&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;Once fixed, the captured image looked like Fig. 13 below.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 13.  SDRAM refresh cycles force long stalls&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/qoi-debug/20240528-qoi-working.png&quot; alt=&quot;&quot; width=&quot;800&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+
+&lt;p&gt;This was easily found and fixed.  (It had to deal with a race condition on the
+pixel index when writing to the compression table, if I recall correctly …)&lt;/p&gt;
+
+&lt;ol start=&quot;6&quot;&gt;
+  &lt;li&gt;
+    &lt;p&gt;How about that &lt;a href=&quot;https://github.com/ZipCPU/qoiimg&quot;&gt;QOI module&lt;/a&gt;?&lt;/p&gt;
+
+    &lt;p&gt;The thing worked like a champ!  I love the simplicity of the
+&lt;a href=&quot;https://qoiformat.org&quot;&gt;QOI&lt;/a&gt;
+encoding, enough so that I’m likely to use it again and again!&lt;/p&gt;
+
+    &lt;p&gt;Okay, perhaps I’m overselling this.  It wasn’t perfect at first.  This is,
+in many ways to be expected–this was the first time it was ever used.
+However, it was small and cheap, and worked well enough to get the job done.&lt;/p&gt;
+
+    &lt;p&gt;Some time later, I managed to formally verify the
+&lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v&quot;&gt;compression&lt;/a&gt;
+engine, and I found another bug or two that had been missed in my hardware
+testing.&lt;/p&gt;
+
+    &lt;p&gt;That’s &lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_compress.v&quot;&gt;compression&lt;/a&gt;.&lt;/p&gt;
+
+    &lt;p&gt;Decompression?  That’s another story.  I think I’ve convinced myself that I
+can do decompression in hardware, but the
+&lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_decompress.v&quot;&gt;algorithm&lt;/a&gt;
+(while cheap) isn’t
+really straightforward any more.  At issue is the reality that it will take
+several clock cycles (i.e. pipeline stages) to determine the table index for
+storing colors into, yet the very next pixel might be dependent upon the
+result of reading from the table.  Scheduling the pipeline isn’t
+straightforward.  (Worse, I have simulation test cases showing that the
+&lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_decompress.v&quot;&gt;decompression logic I have&lt;/a&gt;
+doesn’t work yet.)&lt;/p&gt;
+  &lt;/li&gt;
+  &lt;li&gt;
+    &lt;p&gt;Are the displays ready for prime time?&lt;/p&gt;
+
+    &lt;p&gt;I’d love to say so, but they don’t have labeled axes.  They really need
+labeled axes to be proper &lt;em&gt;professional&lt;/em&gt; displays.  Perhaps a
+&lt;a href=&quot;https://qoiformat.org&quot;&gt;QOI&lt;/a&gt; &lt;a href=&quot;https://github.com/ZipCPU/qoiimg/blob/master/rtl/qoi_decompress.v&quot;&gt;decompression
+algorithm&lt;/a&gt;
+can take labeled image data from memory and overlay it onto the display as
+well.  However, to do this I’m going to have to redesign how I handle
+scaling, otherwise the labels won’t match the image.&lt;/p&gt;
+
+    &lt;p&gt;Worse, &lt;a href=&quot;https://x.com/Dg3Yev/status/1797779997190443498&quot;&gt;[DG3YEV Tobias] recently put my waterfall display to
+shame&lt;/a&gt;.  My basic displays
+are much too simple.  So, it looks like I might need to up my game.&lt;/p&gt;
+  &lt;/li&gt;
+&lt;/ol&gt;
+
+&lt;p&gt;I should point out, in passing, that the &lt;a href=&quot;https://github.com/AngeloJacobo/UberDDR3&quot;&gt;UberDDR3 SDRAM
+controller&lt;/a&gt; doesn’t nearly have as
+many stall cycles as Xilinx’s MIG.  It doesn’t use the (undocumented) hardware
+phasors, so it doesn’t have to take the memory offline periodically.  Further,
+it can schedule the row precharge and activation cycles so as to avoid
+bus stalls (when accessing memory sequentially).  As such, it operates about
+10% faster than the MIG.  It even gets a lower latency.  These details,
+however, really belong in an article to themselves.&lt;/p&gt;
+
+&lt;p&gt;I suppose the bottom line question is whether or not these displays are ready
+for our next testing session.  The answer is a solid, No.  Not yet.  I still
+need to do some more testing with them.  However, these displays are a lot
+closer now than they’ve been for the last two years.&lt;/p&gt;
+&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Seest thou a man diligent in his business? he shall stand before kings; he shall not stand before mean men. (Prov 22:29)&lt;/em&gt;</description>
+        <pubDate>Sat, 22 Jun 2024 00:00:00 -0400</pubDate>
+        <link>https://zipcpu.com/video/2024/06/22/vidbug.html</link>
+        <guid isPermaLink="true">https://zipcpu.com/video/2024/06/22/vidbug.html</guid>
+        
+        
+        <category>video</category>
+        
+      </item>
     
       <item>
         <title>Bringing up Kimos</title>
@@ -7103,529 +8275,6 @@ it just keeps on growing.&lt;/p&gt;
         
         
         <category>zipcpu</category>
-        
-      </item>
-    
-      <item>
-        <title>Debugging the Hard Stuff</title>
-        <description>&lt;p&gt;There are a couple of really hard problems in digital design.  These include
-debugging &lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;s,
-cryptographic algorithms, and &lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;Error Correction Coding
-(ECC)&lt;/a&gt;.
-Debugging a good compression algorithm is also a solid runner up, but it’s
-not quite as difficult as the others.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/dbgchallenge.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;What makes these problems hard is the debugging challenge: put simply,
-given a failing design, pinpoint the line (or lines) of failing logic.
-This debugging challenge is hard because these particular problems don’t
-break down easily into visually reducible sub-problems.  That is, it can
-be a real challenge when working with problems like these is to first
-identify the problem in the trace, and then to be able to walk backwards
-from there to the bug.&lt;/p&gt;
-
-&lt;p&gt;Take, for example, an &lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;.
-Some time ago, a user came to me telling me my
-&lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;
-was broken.  Nonsense I said, it works fine for me.  So he sent me a &lt;a href=&quot;/blog/2017/07/31/vcd.html&quot;&gt;VCD
-trace&lt;/a&gt;, and sure enough, the
-I&lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt; of an
-&lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt; wasn’t producing the
-input again.
-It wasn’t even close.  The challenge here was that this user had introduced
-random data into the system.  Because it was &lt;em&gt;random&lt;/em&gt;, it was hard to tell at
-every stage what the &lt;em&gt;right&lt;/em&gt; answer should’ve been and therefore where in
-the algorithm did the design break.&lt;/p&gt;
-
-&lt;p&gt;How then do you debug these complex algorithms?&lt;/p&gt;
-
-&lt;h2 id=&quot;to-debug-build-new-tools-when-necessary&quot;&gt;To debug: Build new tools when necessary&lt;/h2&gt;
-
-&lt;p&gt;Remember, the goal is to find the one (or more) lines of HDL that are broken.&lt;/p&gt;
-
-&lt;p&gt;Recently, I was asked to do some
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-work.  It started out simple: here’s a working
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-design, now generate a piece of software that will replicate it.
-Okay, there’s more to the backstory.  The
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-was part of a non-volatile memory controller, and the customer wanted to
-pre-load the device at the factory with data and valid
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-parity bits.  Not a problem, right?  Most, but not all,
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-is just straight linear algebra over &lt;a href=&quot;https://en.wikipedia.org/wiki/GF%282%29&quot;&gt;Galois Field 2
-(GF2)&lt;/a&gt;, so this should be basic, no?&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: left&quot;&gt;&lt;caption&gt;Fig 1. ECC wraps the CRC, which then wraps the user data&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/eccpkt.svg&quot; alt=&quot;&quot; width=&quot;360&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The problems got worse from there.  Gee, Dr. Dan, since you’re an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt; expert (Wait, what?
-I am?), why not maintain some logic for me?  Here’s your first task: a
-customer wants 32-bit error correction.  Our standard 16-bit error correction
-isn’t good enough for this customer.  Then, once that task was done, the next
-task was for a customer who wanted even more error correction than just
-32-bits per packet.  Then there was the customer who wanted not just
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;, but an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt; protected
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;
-so that he could tell if the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt; ever failed.&lt;/p&gt;
-
-&lt;p&gt;This is all well and good, but how do you debug this stuff?  Remember, the
-debugging challenge is to find the line (or lines) of HDL (VHDL or Verilog)
-containing the bug.  Also remember, I didn’t write the original logic–I’m
-just the one getting paid to maintain it.&lt;/p&gt;
-
-&lt;p&gt;Here’s the method I came up with:&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Start with a golden reference.&lt;/p&gt;
-
-    &lt;p&gt;This may seem like the hardest part at first.  I mean, if you are building
-an algorithm for the first time, how will you know that your golden
-reference works properly in the first place?&lt;/p&gt;
-
-    &lt;p&gt;It helps to start with the references from others.  &lt;a href=&quot;https://www.amazon.com/Numerical-Recipes-Scientific-Computing-Second/dp/0521431085/&quot;&gt;Numerical Recipes in
-C &lt;/a&gt;
-publishes the C source of an
-&lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt; algorithm that I’ve since
-used often.  There’s even a &lt;a href=&quot;https://www.amazon.com/Numerical-Recipes-Art-Scientific-Computing/dp/8175960965&quot;&gt;Numerical Recipes in
-C++&lt;/a&gt;,
-which I would expect is the same recipes but with an updated coding
-standard.  Then there’s the “Advanced Encryption Standard” (AES), which
-includes an appendix showing what the outputs should look like at each
-stage of the encryption standard given a known key and a known input.
-There’s also at least one &lt;a href=&quot;https://opencores.org/projects/tiny_aes&quot;&gt;AES algorithm on
-OpenCores&lt;/a&gt; that you might use.
-In general, references are available for your work with digital design,
-you might just need to spend some time looking for them.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Add debug &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$display&lt;/code&gt; statements to the design, and make them both human
-readable and computer friendly.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Use those debug statements to feed the golden reference.&lt;/p&gt;
-
-    &lt;p&gt;This is the key feature I’ll be discussing in a moment.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;Now look for the first difference between the reference and any broken 
-trace.&lt;/p&gt;
-
-    &lt;p&gt;Remember, the golden reference &lt;em&gt;works&lt;/em&gt;.  Therefore, any discrepancy or
-other difference between the golden reference and your design will be
-something you want to dig into.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;Let’s walk through how this works, by discussing the last
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-problem I worked on: adding a
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;
-to a memory controller, prior to the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-parity generator and then checking it at the back end.&lt;/p&gt;
-
-&lt;p&gt;What made this
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;
-task challenging was that the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-parity bits were packed together–even across byte boundaries.  The
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt; bits, therefore,
-needed to be packed together with the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-parity bits.  Not only that, both needed to be gathered together and assembled
-separate from the data itself.  Together, this created data blocks looking
-somewhat like Fig. 2 below when transmitted.  (Note that the Fig 2. is not
-drawn to scale by any means.)&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 2. Data backs consisted of data blocks, followed by CRC then parity&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/packet.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The original algorithm I was given handled this via a combined shift
-register and memory implementation that had grown to over 2k lines
-of Verilog.  It read like a series of cascaded case statements: if this
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-option, this data block size, the data block number, then adjust these bits,
-etc.)  Indeed, by the time I started working with this logic, it had
-gotten so repetitive that I was using a C++ program to write and update these
-thousands of lines of Verilog for me.  Now, this may have been fine originally,
-for the simple &lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-codes this controller was originally built to handle, but the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-bit-vector had now grown to over 7k bits, each individually accessed, and none
-able to be optimized into memory properly.  It got so bad that this part of
-the algorithm was starting to dominate the total area cost–and I was going to
-add &lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;s
-to this mess?  No, that wasn’t going to happen–not without a rewrite.&lt;/p&gt;
-
-&lt;p&gt;So, I rewrote the algorithm with a proper gearbox coupled with a proper FIFO.
-Moreover, in the hopes that I might be able to reuse the implementation, I
-built the gearboxes using standard interfaces: AXI stream, VALID, READY, LAST,
-etc, and I even parameterized the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;
-size so the customer could change it at a later time if they wished to.  All
-told, the new implementation took just over 1k Verilog lines of code, and at
-least half of that was either comments or formal properties.  That meant
-there was a rough 4x reduction in the number of lines of code.  Does this
-mean the design is simpler?  In this case, definitely!  It was both simpler
-to understand, easier to see what was going on within it, and therefore
-simpler to maintain.  The giant tables had been replaced.  The new design
-also used less area, so we’re good all around.&lt;/p&gt;
-
-&lt;p&gt;But, how to debug this?&lt;/p&gt;
-
-&lt;p&gt;To give you an idea, then general test setup I was given looked something like
-Fig. 3 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 3. Test bench setup&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/dbgpath.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;A test bench script would drive the entire test.  This script would generate
-commands to write pseudorandom data to the memory device.  Then, once all the
-data had been written, the script would command an error generator to
-insert errors into the read path, and then generate commands to read from
-the memory device.  The results would be compared against the data written to
-the device.  If (and &lt;em&gt;only&lt;/em&gt; if) the number of errors inserted was beyond the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;’s
-correction ability, then the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;
-failure flag was to be set.  In all other cases, the data returned from the
-device was required to match the data sent to it.&lt;/p&gt;
-
-&lt;p&gt;Now consider all the steps involved in this process, and ask yourself where
-and how would you debug all of this?&lt;/p&gt;
-
-&lt;p&gt;The (obvious) answer should be: starting with unit tests.  Each individual
-unit should be tested and verified separately, and known to work before
-being integrated into the larger whole.  For unit tests, I turn to formal
-methods.  One of the things I like about formal methods is that, any time you
-get a property (i.e. an assertion) failure, that failure will lead you directly
-to the failed assertion, which is usually nearby the logic it defends, and so
-formal methods will typically find bugs in about 5-10 steps.  In my case here,
-the gearboxes required 40 steps.  Why so many?  Because of a technical problem.
-Formal methods don’t handle division very well, and a full induction description
-would require that the formal methods implement a divide.  As a result, I
-didn’t get induction working.  Still, 40 time steps was enough to give me
-strong confidence the gearboxes worked.&lt;/p&gt;
-
-&lt;p&gt;My next step was to use a bench test with
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;.
-You can see this basic setup in Fig. 4 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 4. Verilog unit testing&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/vgolden.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;In this case, the &lt;em&gt;unit&lt;/em&gt; under test was the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-block separated from the
-rest of the design.  In particular, this unit testing approach allowed me
-to separate my test from the AXI bus interface, the device interface, and the
-device model.  Data came into the test design via the AXI stream protocol,
-and then the same protocol was used to take data back out once encoded or
-decoded.  Still, as you can see from the figure, the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-block under test wasn’t quite the &lt;em&gt;working&lt;/em&gt; design given to me, but
-rather my modified version of it, now containing
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;
-generation and checking.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;caption&gt;Fig 5. Test vector choice&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/tbdesign.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;One key to this type of testing was the test vectors chosen.  For example,
-when building an &lt;a href=&quot;/dsp/2018/10/02/fft.html&quot;&gt;FFT&lt;/a&gt;,
-you’ll want to use both impulses and sine waves.  Since this is
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;, i.e. linear math
-over &lt;a href=&quot;https://en.wikipedia.org/wiki/GF%282%29&quot;&gt;GF2&lt;/a&gt;, I started with vectors of
-all zeros, and then vectors with a single bit set, and only then a small number
-of countable bits set.  From there I moved on to all bits set and then random
-settings.&lt;/p&gt;
-
-&lt;p&gt;What if the design fails with random data?  In that case, you just reduce the
-random data vector back to the relevant basis vectors, and try again.&lt;/p&gt;
-
-&lt;p&gt;Thankfully, it wasn’t too difficult to get this
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-based test bench working.
-In general, the trace led me straight to any bugs–well, that and the fact that
-I knew that the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-algorithm worked initially, so the only thing that could’ve
-broken would be associated with one of my changes.  That meant that this
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-test bench could then become my “golden reference” model.&lt;/p&gt;
-
-&lt;p&gt;Once things worked in this “golden” model, I could then integrate this updated
-design back into the memory controller it was originally a part of. 
-Not only that, but remember this was a maintenance task.  In other words,
-I needed to modify logic someone else had written years ago, logic that
-I wasn’t familiar with–a recipe for problems, no?&lt;/p&gt;
-
-&lt;p&gt;This brings us back to the integrated test bench design shown in Fig. 3.
-The good news is that we come into this integrated test design with something
-known to work.&lt;/p&gt;
-
-&lt;p&gt;Now, let me point out a problem with the type of integrated testing shown in
-Fig. 3: the test bench script won’t notice any data failures until late in
-the process.  This is just the nature of the perspective of a black box.
-Data will first need to be written to a staging area, then pushed through
-the device path, transferred to the external memory device model, then
-transferred back, then copied out of the controller–and only then would any
-errors be noted and flagged–all in good &lt;a href=&quot;https://en.wikipedia.org/wiki/Black-box_testing&quot;&gt;black box testing
-fashion&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;This wonderful &lt;a href=&quot;https://en.wikipedia.org/wiki/Black-box_testing&quot;&gt;black box
-testing&lt;/a&gt;
-fashion might be great for proving that a
-design does what it is supposed to, but it is horrible for telling you what
-fails when it fails.  Why?  Because the failure isn’t noticed until microseconds
-of simulation time later, and only after thousands of data transfers.  That’s
-a lot of trace you have to back through manually to find any bugs.  There’s
-another word for that: pain.&lt;/p&gt;
-
-&lt;p&gt;This is where the debugging statements came into the design.  To show you what
-I mean, the following lines have been clipped from the design.  First,
-as every word went into the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;, and now the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt;+&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-algorithm, I dumped it to the simulation log.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;	&lt;span class=&quot;k&quot;&gt;localparam&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;:&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;	&lt;span class=&quot;n&quot;&gt;OPT_ECC_DEBUG&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mb&quot;&gt;1'b1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;OPT_ECC_DEBUG&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;GEN_ECC_DEBUG&lt;/span&gt;
-		&lt;span class=&quot;kt&quot;&gt;integer&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ik&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
-
-		&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset_n&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_enabled&lt;/span&gt;
-				&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tx_data_valid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tx_data_ready&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;display&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ECC-TX: %08x&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_data_tx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We can call this test point #1.&lt;/p&gt;
-
-&lt;p&gt;Once an entire block of data had gone through the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-encoder, it would then generate parity bits.  I dumped these to the same
-log as well.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset_n&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_enabled&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tx_parity_valid&lt;/span&gt;
-				&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tx_parity_ready&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
-			&lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ECC-TX: RES&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-			&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ik&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ik&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;PARITY_BITS&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ik&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ik&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;+&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;16&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-				&lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;write&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot; %04x&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tx_parity_data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ik&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+:&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;16&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]);&lt;/span&gt;
-			&lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;display&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;(This test point doesn’t get a number, because my diagram in Fig. 3
-doesn’t really show this part of the path very well.)&lt;/p&gt;
-
-&lt;p&gt;I repeated the same process on receive.  As data came into the
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt; decoder,
-it was also dumped to the log.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset_n&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rx_data_valid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_enabled&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;begin&lt;/span&gt;
-			&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rx_data_last&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-				&lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;display&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ECC-RX: %08x -- LAST at %t&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
-							&lt;span class=&quot;n&quot;&gt;rx_data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;time&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-			&lt;span class=&quot;k&quot;&gt;else&lt;/span&gt;
-				&lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;display&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ECC-RX: %08x&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;rx_data&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We can call this test point #2.&lt;/p&gt;
-
-&lt;p&gt;Before moving on, I should point out a key feature of this test point that
-I don’t want to pass up, and that is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$time&lt;/code&gt;.  One of the challenges of
-working with both simulation logs and trace files together is synchronizing the
-two.  That’s where &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$time&lt;/code&gt; comes in handy, and I’ve gotten to using it in
-this manner often.  Because this test point outputs &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$time&lt;/code&gt;, I can now use
-the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$time&lt;/code&gt; in this log to find the associated step in the trace and to
-then see the context associated with this &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;$display()&lt;/code&gt; function call.&lt;/p&gt;
-
-&lt;p&gt;Finally, when the decoder made it’s error correction decisions, those were
-also dumped to the log.&lt;/p&gt;
-
-&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-verilog&quot; data-lang=&quot;verilog&quot;&gt;		&lt;span class=&quot;k&quot;&gt;always&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;@&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;posedge&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i_clk&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-		&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i_reset_n&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_enabled&lt;/span&gt;
-				&lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_data_valid&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_data_ready&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
-			&lt;span class=&quot;p&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;display&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;ECC-MASK: %08x&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ecc_data_mask&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
-	&lt;span class=&quot;k&quot;&gt;end&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
-
-&lt;p&gt;We can call this test point #3.&lt;/p&gt;
-
-&lt;p&gt;For reference, you can see all of these test points in Fig. 6 below.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 6. Test points&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/testpoints.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;The first step to analyzing this log file was to search for all lines
-starting with “ECC-“.  In the future, if I do this again, I’ll probably write
-to a specific
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-log file, but for now these messages were dumped together
-with the rest of the simulation log.  The good news is that the rest of the
-simulation log provides the context for what’s going on.  The bad news is that
-dumping 16kB of data for an
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-engine doesn’t make a pseudo human-readable log any more legible.  Because
-of the mess this makes of the simulation log, I’ve gated all of this logic
-with the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;OPT_ECC_DEBUG&lt;/code&gt; parameter and only turn the parameter on when I
-need to.&lt;/p&gt;
-
-&lt;p&gt;Even before building any better capabilities, this helped: it allowed me to
-see the data going into the gearboxes, and then coming out again.  I could
-then make sure that things were lined up properly.&lt;/p&gt;
-
-&lt;p&gt;It wasn’t enough.&lt;/p&gt;
-
-&lt;p&gt;One particular problem was that the TX and RX data were so far separated in
-time.  That made it difficult to tell whether any problem lied between
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt; components, such
-as in the transmitter to the device, the memory model, the test-bench error
-generator, or the receive logic on the other end.  However, it wasn’t all
-that hard to generate a simple C++ program to process this pseudo human-readable
-data, to place the TX data next to the RX data and then notice if anything had
-changed.  This one piece of software alone helped me catch nearly all of my
-bugs.  (Remember, I started with a &lt;em&gt;working&lt;/em&gt;
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-design–that means most bugs should be confined to my changes alone.
-Unfortunately, I changed a lot of stuff.)&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;caption&gt;Fig 7. Feeding the golden reference model&lt;/caption&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/binfile.svg&quot; alt=&quot;&quot; width=&quot;780&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;That software alone, however, wasn’t sufficient.  It was close, but not quite
-there, and this is where today’s particular problem comes into play: because
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-is a challenge to debug, I needed to know more of what was going on &lt;em&gt;inside&lt;/em&gt;
-the &lt;a href=&quot;https://en.wikipedia.org/wiki/Error_correction_code&quot;&gt;ECC&lt;/a&gt;
-algorithm.  This is where the third debugging step comes
-into play: feeding the golden reference model.  That is, I adjusted my
-log reading program so that it could generate a binary file that could then
-be ingested into my golden reference model, as shown in Fig. 7 above.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;padding: 25px; float: left&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/feedref.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;At one point, it was only by comparing the trace coming out of the golden
-reference model with the one from my larger integrated test environment that
-I found the bug.  One of the bugs I found was even in
-the &lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-translation of my Verilog, and so I thank the
-&lt;a href=&quot;/blog/2017/06/21/looking-at-verilator.html&quot;&gt;Verilator&lt;/a&gt;
-team, and in this case Mr. Snyder in particular, for fixing it quickly.&lt;/p&gt;
-
-&lt;h2 id=&quot;customers&quot;&gt;Customers&lt;/h2&gt;
-
-&lt;p&gt;I wish I could say this was the end of the story: the design worked, and should
-now be shipped.  Sadly, it wasn’t.  Three further problems then turned the
-simple update listed above into a nightmare for both my team and our customer.&lt;/p&gt;
-
-&lt;p&gt;First, as a simple background, let me set the stage: I offered to make this
-maintenance upgrade for a simple two weeks of work.  The updates were simple
-enough, they should’ve only taken two weeks.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: right&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/eccdbg/requirements.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;It was only once those two weeks were over that the challenges began.&lt;/p&gt;
-
-&lt;ol&gt;
-  &lt;li&gt;
-    &lt;p&gt;Once I was ready to turn in the work, the customer started demanding
-other changes.  (Changes that they had no intention of paying for …)
-Worse, they were asking for fundamental changes which would force me
-back to the drawing board for this design.&lt;/p&gt;
-
-    &lt;p&gt;The laughable part of these demands?  In the same breath they asked for
-a fundamental redesign, they also asked for the current design to be
-shipped in order to support their RTL freeze date in less than two more
-weeks.  Then they were upset when we didn’t deliver according to their
-schedule, when they were the ones who changed the requirements mid-task.
-Seriously.  You just can’t make this stuff up.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;One problem I wasn’t expecting was that the memory device model implemented
-address regions not present in the actual memory device.  Adding a four byte
-&lt;a href=&quot;https://en.wikipedia.org/wiki/Cyclic_redundancy_check&quot;&gt;CRC&lt;/a&gt; required all
-of the addresses within to be updated to make room for these extra four
-bytes.  How many places did these addresses need to be updated in?  Let’s
-just say that I really dislike &lt;a href=&quot;https://en.wikipedia.org/wiki/Magic_number_(programming)&quot;&gt;magic
-numbers&lt;/a&gt;, since
-their usage in this project by the prior developer made this part of the
-update all the more painful.&lt;/p&gt;
-
-    &lt;p&gt;You can read some more of &lt;a href=&quot;/blog/2022/09/21/vlog-wait.html&quot;&gt;my thoughts on test bench design
-here&lt;/a&gt;.&lt;/p&gt;
-  &lt;/li&gt;
-  &lt;li&gt;
-    &lt;p&gt;The last problem was a repository merge nightmare.  Sadly, I had made my
-changes to a design that wasn’t the “latest” design–the customer had
-submitted changes to the design that I was unaware of.  I didn’t discover
-this until after I had turned my changes in.  Then I discovered I was
-about two versions behind the official latest version.  Bugs discovered
-here were …  anything but what I was expecting.&lt;/p&gt;
-
-    &lt;p&gt;For example, one of the test scripts depended upon a 1000 clock cycle
-reset.  This script would wait 100 cycles, then set a “fixed” value that
-needed to be referenced when the design came out of reset.  The test bench
-script then then waited for the signal that this (optional) startup process
-had taken place.  Not knowing this, I had come along and tried to speed
-up the simulation by switching to a 3-cycle reset and … all kinds of
-regression hell broke lose when the two “working” designs needed to be
-merged.  Was there any documentation discussing why a 1000 clock cycle
-reset was necessary, or why a key reset input wouldn’t get set until 100
-clock cycles into the simulation?  Well, one might hope.&lt;/p&gt;
-  &lt;/li&gt;
-&lt;/ol&gt;
-
-&lt;p&gt;The end result was that I spent another 2-3 months, beyond the 2-week update
-task, working on the test bench, rebuilding the model, fixing &lt;a href=&quot;https://en.wikipedia.org/wiki/Magic_number_(programming)&quot;&gt;magic
-numbers&lt;/a&gt;,
-fixing &lt;a href=&quot;https://en.wikipedia.org/wiki/Rule_of_three_(computer_programming)&quot;&gt;the many places the same task was
-accomplished&lt;/a&gt; in error, and more.&lt;/p&gt;
-
-&lt;p&gt;My simple two week task?  Sure, it took two weeks to do.  It then took another
-two months arguing with the customer over what the requirements needed to be.
-Another month was then spent chasing down bugs associated with merging
-the repository, and then another two were spent dealing with further
-consequences of the original merge as they continued to ripple through the
-&lt;a href=&quot;/blog/2022/09/21/vlog-wait.html&quot;&gt;test model and test script
-library&lt;/a&gt;.&lt;/p&gt;
-
-&lt;p&gt;And the customer?  The customer wanted to know why the design couldn’t be
-delivered the same afternoon that I submitted my changes to the official
-repository.  Worse, they are now convinced that the problems associated with
-these updates are due to the unreliability of the IP they purchased, rather
-than rippling consequences of the changes they made working their way
-through the design.&lt;/p&gt;
-
-&lt;h2 id=&quot;conclusions&quot;&gt;Conclusions&lt;/h2&gt;
-
-&lt;p&gt;When faced with a really &lt;em&gt;hard&lt;/em&gt; HDL problem, consider using a golden
-reference model and comparing your design against that reference.  Any
-differences between the two should lead you directly to any bugs.&lt;/p&gt;
-
-&lt;table align=&quot;center&quot; style=&quot;float: none&quot;&gt;&lt;tr&gt;&lt;td&gt;&lt;img src=&quot;/img/tweets/bible/diligence.svg&quot; alt=&quot;&quot; width=&quot;420&quot; /&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
-
-&lt;p&gt;As for difficult customers?  Be honest.  Smile, and do your best.  There will
-be other customers.&lt;/p&gt;
-
-&lt;p&gt;Oh, and the end of this tale?  I’m now working to port those same changes to
-another controller, which means I get to reuse both my golden reference model,
-as well as the software I used to reformat the data into something that could
-be ingested into it.  Once I post this article, I’ll go back to looking for
-the differences between the two.  The good Lord only knows what I’ll find
-at this point.&lt;/p&gt;
-
-&lt;hr /&gt;&lt;p&gt;&lt;em&gt;Be careful for nothing; but in every thing by prayer and supplication with thanksgiving let your requests be made known unto God.&lt;/em&gt;</description>
-        <pubDate>Mon, 13 Feb 2023 00:00:00 -0500</pubDate>
-        <link>https://zipcpu.com/blog/2023/02/13/eccdbg.html</link>
-        <guid isPermaLink="true">https://zipcpu.com/blog/2023/02/13/eccdbg.html</guid>
-        
-        
-        <category>blog</category>
         
       </item>
     
