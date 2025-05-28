@@ -1,0 +1,1961 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Comparing the Xilinx MIG with an open source DDR3 controller</title>
+  <meta name="description" content="Last year, I had the wonderful opportunity of mentoring Angelo as he built anopen source DDR3 SDRAM controller.">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/zipcpu/2025/05/28/memtest.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-4ZK7HKHSVW"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-4ZK7HKHSVW');
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Comparing the Xilinx MIG with an open source DDR3 controller</h1>
+    <p class="post-meta"><time datetime="2025-05-28T00:00:00-04:00" itemprop="datePublished">May 28, 2025</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>Last year, I had the wonderful opportunity of mentoring Angelo as he built an
+open source <a href="https://github.com/AngeloJacobo/UberDDR3">DDR3 SDRAM controller</a>.</p>
+
+<p>Today, I have the opportunity to compare <a href="https://github.com/AngeloJacobo/UberDDR3">this
+controller</a> with <a href="https://docs.amd.com/v/u/en-US/ug086">AMD (Xilinx)’s
+Memory Interface Generator (MIG) solution</a>
+to the same problem.  Let’s take a look to see which one is faster, better,
+and/or cheaper.</p>
+
+<h2 id="design-differences">Design differences</h2>
+
+<p>Before diving into the comparison, it’s worth understanding a bit about
+DDR3–both how it works, and how that impacts its performance.  From there,
+I’d like to briefly discuss some of the major design differences between
+<a href="https://docs.amd.com/v/u/en-US/ug086">Xilinx’s MIG</a>
+and the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>.</p>
+
+<p>We’ll start with the requirements of an SDRAM controller in general.</p>
+
+<h3 id="sdram-in-general">SDRAM in general</h3>
+
+<p>SDRAM stands for <a href="https://en.wikipedia.org/wiki/Synchronous_dynamic_random-access_memory">Synchronous Dynamic Random Access
+Memory</a>.
+“Synchronous” in this context simply means the interface requires a clock, and
+that all interactions are synchronized to that clock.  “Random Access” means
+that you should be able to access the memory in any order you wish.  The key
+word in this acronymn, though, is the “D” for Dynamic.</p>
+
+<p>“Dynamic” RAM is made from capacitors, rather than flip flops.  Why?
+Capacitors can be made much smaller than flip flops.  They also use
+much less energy than flip flops.  When the capacitor is charged, the “bit”
+of memory it represents contains a “1”.  When it isn’t, the bit is a zero.
+There’s just one critical problem: Capacitors lose their charge over time.
+This means that every capacitor in memory must be read and recharged
+periodically or it will lose its contents.  The memory controller is
+responsible for making sure this happens by issuing “refresh” commands to the
+memory.</p>
+
+<p>That’s only the first challenge.  Let’s now go back to that “synchronous” part.</p>
+
+<p>The original (non-DDR) SDRAM standard had a single clock to it.  The controller
+would generate that clock and send it to the memory to control all interactions.</p>
+
+<p>This was soon not fast enough.  Why not send memory values on both edges of
+the clock, instead of just one?  You might then push twice as much data across
+the interface for the same I/O bandwidth.  Sadly, as you increase the speed,
+pretty soon the data from the memory doesn’t come back synchronous to the
+clock you send.  Both the traces on your circuit board, as well as the time
+to complete the operation within the memory chip will delay the return signals
+so much that the returned data no longer arrives in time to be sampled at the
+source by the source’s clock before the next clock edge.  Worse, these
+variabilities are somewhat unpredictable.  Therefore, memories were modified
+so that they return a clock together with the data–keeping the data
+synchronous with the clock it is traveling with.</p>
+
+<p>Sampling data on a returned clock can be a challenge for an FPGA.  Worse, the
+returned clock is discontinuous: it is only active when the memory has data
+to return.  This will haunt us later, so we’ll come back to it in a moment.</p>
+
+<p>For now, let’s go back to the “dynamic” part of an SDRAM.</p>
+
+<p>SDRAMs are organized into banks, with each bank of memory being organized into
+rows of capacitors.  To read from an SDRAM, a “row” of data from a particular
+memory bank must first be “activated.”  That is, it needs to be copied from
+its row of capacitors into a row of flip flops.  From here, “columns” within
+this row can be read or written as desired.  However, only one row of memory
+per bank can be active at any given time.  Therefore, in order to access a
+second row of memory, the row in use must first be copied back to its
+capacitors.  This is called “precharging” the row.  Only then can the desired
+row or memory be copied to the active row of flip-flops for access.</p>
+
+<p>I mentioned SDRAM’s are organized in “banks”.
+Each of these “bank”s can controlled independently.
+They each have their own row of active flip-flops.
+With few exceptions, such as the “precharge all rows” command, or the “refresh”
+cycle command, most of the commands given to the memory will be bank specific.</p>
+
+<p>Hence, to read a byte of memory, the controller must first identify which bank
+the byte of memory belongs to, and from there it must identify which row
+is to be read.  The controller must then check which row is currently in the
+flip-flop buffer for that bank (i.e. which row is active).  If a different
+row is active, that row must first be precharged.  If no row is active, or
+alternatively once a formerly active row is precharged, the controller may
+then activate the desired row.  Only once the desired row is active can the
+controller issue a command to actually read the desired byte from the row.
+Oh, and … all of this is contingent on not needing to refresh the memory.
+If a refresh interrupt takes place, you have to precharge all banks, refresh
+the memory, and then start over.</p>
+
+<p>Well, almost.  There’s another important detail: Because of the high speeds
+we are talking about, the memory will return data in bursts of eight bytes.
+Hence, you can’t read just a single byte.  The minimum read quantity is eight
+bytes in a single “byte lane”.</p>
+
+<p>What if eight bytes at a time isn’t enough throughput for you?  Well, you could
+strap multiple memory chips together in parallel.  In this case, every command
+issued by the controller would be sent to all of the memory chips.  All of them
+would activate rows together, all of them would refresh their memory together,
+and all of them could read eight bytes at a time.  Each of these chips, then,
+would control a single “byte lane”.  In our case today, we’ll be using a memory
+having eight “byte lanes”.</p>
+
+<p>So, when it comes to the performance of a memory controller, what do we want
+to know?  We want to know how long it will take us from when the controller
+receives a read (or write) request until the data can be returned from the
+memory chip.  This includes waiting for any (potential) refresh cycles,
+waiting for prior active rows to be recharged, new rows to be activated,
+and the data to finally be returned.  The data path is complex enough that
+we’ll need to be looking at these times statistically.</p>
+
+<p>Specifically, we’re going to model transaction time as some amount of
+per-transaction latency, followed by a per-amount throughput.</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/migbench/eqn-transaction-time.png" alt="" width="524" /></td></tr></table>
+
+<p>Our goal will be to determine these two unknown quantities: <em>latency</em> and
+<em>throughput</em>.  If we do our job well, these two numbers will then help us
+predict answers to such questions as: how long will a particular algorithm
+take, and how much memory bandwidth is available to an application.</p>
+
+<h3 id="mig">MIG</h3>
+
+<p>Let’s now discuss some of <a href="https://docs.amd.com/v/u/en-US/ug086">AMD (Xilinx)’s DDR3 memory
+controller</a> This is the
+controller generated by their “Memory Interface Generator” and affectionately
+known simply as the “MIG” or “MIG controller”.</p>
+
+<p><a href="https://docs.amd.com/v/u/en-US/ug086">AMD (Xilinx)’s MIG controller</a> is now
+many years old.  Judging by their change log, it was first released in 2013.
+Other than configuration adjustments, it has not been significantly modified
+since 2016.  This is considered one of their more “stable” IPs.  It gets a
+lot of use by a wide variety of users, and I’ve certainly used it on a large
+number of projects.</p>
+
+<p>Examining the source code of the MIG reveals that it is built in two parts.
+This can be seen from Fig. 1 below, which shows how the MIG fits in the context
+of the entire test stack we’ll be using today.</p>
+<table align="center" style="float: none"><caption>Fig 1. Memory pipeline</caption><tr><td><img src="/img/migbench/mig-chain.svg" width="720" /></td></tr></table>
+
+<p>The first part of the MIG processes AXI transaction requests into its internal
+“native” interface.  AXI, however, is a complex protocol.  This translation
+is not instantaneous, and therefore takes a clock (or two) to accomplish.
+Many FPGA designers have discovered they can often improve upon the performance
+of the MIG by skipping this AXI translation layer and using the
+“native” interface instead.  I have not done so personally, since I haven’t
+found sufficient documentation of this “native” interface to satisfy my
+needs–but perhaps I just need to look harder at what’s there.</p>
+
+<p>One key feature of an AXI interface is that it permits a certain amount of
+transaction reordering.  For example, a memory controller might prioritize two
+interactions to the same bank of memory, such that the interaction using
+the currently active row might go first.  Whether or not Xilinx’s MIG does
+this I cannot say.  For today’s test measurements, we’ll only be using one
+channel–whether read or write, and we’ll only be using a single AXI ID.
+As a result, all requests must complete in order, and there will be no
+opportunity for the MIG to reorder any requests.</p>
+
+<p>DDR3 speeds also tend to be much faster than the FPGA logic the controller must
+support.  For this reason, Xilinx’s DDR3 controller runs at either 1/2 or 1/4
+the speed of the interface.  This means that, on any given FPGA clock cycle,
+either two or four commands may be issued of the DDR3 device.  For this test,
+we’ll be running at 1/4 speed, so four commands may be issued per system clock
+cycle.</p>
+
+<p>The biggest problem Xilinx needed to solve with their controller was how to
+sample return data.  Remember, the data returned by the memory contains a
+discontinuous clock.  Worse, the discontinuous clock transitions when the
+data transitions.  This means that the controller must (typically) delay the
+return clock by a quarter cycle, and only then clock the data on the edge.
+But … how do you know how far a quarter cycle delay is in order to generate
+the correct sample time for each byte lane?</p>
+
+<p>Xilinx solved this problem by using a set of IO primitives that they’ve never
+fully documented.  These include PHASORs and IO FIFOs.  Using these IO
+primitives, they can lock a PLL to the returned data clock, and then use
+that PLL to control the sample time of the return data.  This clock is
+then used to control a special purpose asynchronous FIFO.  From here,
+the data is returned to its environment.</p>
+
+<p>One unusual detail I’ve seen from the MIG is that it will often stall
+my read requests for a single cycle at a time in a periodic fashion.  Such
+stalls are much too short for any refresh cycles.  They are also more frequent
+than the (more extended) refresh cycles.  This leads me to believe that
+Xilinx’s IO PLL primitive has an additional requirement, which is that in order
+to maintain lock, the MIG must periodically read from the DDR3 SDRAM.  Hence,
+the MIG must not only take the memory offline periodically to keep the
+capacitors refreshed, it must also read from the memory to keep this IO PLL
+locked.  Worse, it cannot read from the device at the same time it does this
+station keeping.  As with the AXI to native conversion, this PLL station
+keeping requirement negatively impacts the MIG’s performance.</p>
+
+<p>Before leaving this point, let me underscore that these “special purpose”
+IO elements were never fully documented.  This adds to the challenge of building
+an open source controller, since the open source engineer must either
+reverse engineer these undocumented hardware components or build their
+data sampler in some other fashion.</p>
+
+<p>Some time ago, I tried building <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/demofull.v">a block-RAM based memory peripheral capable
+of handling AXI exclusive access
+requests</a>.
+While trying to verify that the <a href="/about/zipcpu.html">ZipCPU</a>
+could generate exclusive access requests and that it would do so properly, I
+looked into whether or not the MIG would support them.  Much
+to my surprise, the MIG has <em>no exclusive access capability</em>.  I’ve since been
+told that this isn’t a big deal, since you only need exclusive access when
+more than one CPU is running on the same bus and the MicroBlaze CPU was never
+certified for multi–core operation, but I do still find this significant.</p>
+
+<p>Finally, the MIG controller tries to maximize parallelism with various “bank
+machines”.  These “bank machines” appear to be complex structures, allocated
+dynamically upon request.  Each bank machine is responsible for handling when
+and if a row for a given memory bank must be activated, read, written, or
+precharged.  While most memories physically have eight banks, Xilinx’s MIG
+permits a user to have fewer bank machines.  Hence, the first step in
+responding to a user request is to <em>allocate</em> a bank machine to the request.
+According to Xilinx, “The [MIG] controller implements an aggressive precharge
+policy.”  As a result, once the request is complete, the controller will
+precharge the bank if no further requests are pending.  The unfortunate
+consequence of this decision is that subsequent accesses to the same memory
+will need to first activate the row again before it can be used.</p>
+
+<h3 id="uberddr3">UberDDR3</h3>
+
+<p>This leads us to the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a>.</p>
+
+<p>The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> is an open
+source (GPLv3) DDR3 controller.  It was not built with AMD (Xilinx) funding or
+help.  As such, it uses no special purpose IO features.  Instead, it uses basic
+ISERDES/OSERDES and IDELAY/ODELAY primitives.  As a result, there are no
+<code class="language-plaintext highlighter-rouge">PHASER_IN</code>s, <code class="language-plaintext highlighter-rouge">PHASER_OUT</code>s, <code class="language-plaintext highlighter-rouge">IN_FIFO</code>s <code class="language-plaintext highlighter-rouge">OUT_FIFO</code>s, or <code class="language-plaintext highlighter-rouge">BUFIO</code>s.</p>
+
+<p>This leads to the question of how to deal with the return clock sampling from
+the DDR3 device.  In the case of the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a>, we made the assumption
+that the DQS toggling would always come back after a fixed amount of time
+from the clock containing the request.  A small calibration state machine
+is used to determine this delay time and then to find the center of the “eye”.
+Once done, <code class="language-plaintext highlighter-rouge">IDELAY</code> elements, coupled with a shift register, are then used
+to get the sample point.</p>
+
+<p>Fig. 2 shows a reference to this process.</p>
+<table align="center" style="float: right"><caption>Fig 2. Incoming data sampling</caption><tr><td><img src="/img/migbench/idelay.svg" width="360" /></td></tr></table>
+
+<p>It is possible that this method will lose calibration over time.  Indeed,
+even the MIG wants to use the XADC to watch for temperature changes to know
+if it needs to adjust its calibration.  Rather than require the XADC, the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> supports a
+user input to send it back into calibration mode.  Practically, I haven’t
+needed to do this, but this may also be because my test durations weren’t long
+enough.</p>
+
+<p>Another difference between the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> and the MIG
+is that the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> only has one
+interface: <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone B4
+(Pipelined)</a>.
+This interface is robust enough to replace
+the need for the MIG’s non-standard “native” interface.  Further, because
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+has only a single channel for both reads and writes, the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> maintains a
+strict on all transactions.  There’s no opportunity for reordering accesses,
+and no associated complexity involved with it either.</p>
+
+<p>This will make our testing a touch more difficult, however, because we’ll be
+issuing <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+requests–native to the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> but not the MIG.
+A <a href="/blog/2020/03/23/wbm2axisp.html">simple bridge</a>, costing
+a single clock cycle, will convert from
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> to AXI prior
+to the MIG.  We’ll need to account for this when we get to testing.</p>
+
+<p>The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> also differs
+in how it handles memory banks.  Rather than using an “aggressive” precharging
+strategy, it uses a lazy one.  Rows are only precharged (returned back to the
+capacitors) when 1) the row has been active too long, or 2) when it is time to
+do a refresh, and so all active rows on all banks must be precharged.  This
+works great under the assumption that the next access is most likely to be in
+the vincinity of the last one.</p>
+
+<p>A second difference in how the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> handles memory banks
+is that, unlike the MIG, the bank address is drawn from the bits between the
+row and column address, as shown in Fig. 3.</p>
+
+<table align="center" style="float: none"><caption>Fig 3. Bank addressing</caption><tr><td><img src="/img/migbench/bank-addressing.svg" width="360" /></td></tr></table>
+
+<p>Although the MIG has an <em>option</em> to do this, it isn’t
+clear that the MIG takes any advantage of this arrangement.  The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a>, on the other hand, was
+designed to take explicit advantage of this arrangement.  Specifically, the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> assumes most
+accesses will be sequential through memory.  Hence, when it gets a request for
+a memory access that is most of the way through the column space of a given
+row, it then activates the next row on the next bank.  This takes place
+independent of any user requests, and therefore anticipates a future user
+request which may (or may not) take place.</p>
+
+<p>Xilinx’s documentation reveals very little about their REFRESH strategy.
+The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>’s REFRESH
+strategy is very simple: every so many clocks (827 in this case) the memory
+is taken off line for a REFRESH cycle.  This cycle lasts some number of clocks
+(46 for this test setup), and then places the memory back on line for further
+accesses.</p>
+
+<p>This refresh timing is one of those things that makes working with SDRAM in
+general so difficult: it can be very hard to predict when the memory will be
+offline for a refresh, and so predicting performance can be a challenge.
+I know I have personally suffered from testing against an approximation of
+SDRAM memory, one that has neither REFRESH nor PLL station keeping cycles,
+only to suffer later when I switch to such a memory and then get hit with a
+stall or delayed ACK at a time when I’m not expecting it.  <a href="/blog/2018/08/04/sim-mismatch.html">Logic that worked
+perfect in my (less-than matched) simulation, would then fail in
+hardware</a>.  This
+can also be a big challenge for security applications that require a
+fixed (and known) access time to memory lest they leak information across
+security domains.</p>
+
+<h2 id="the-test-setup">The test setup</h2>
+
+<p>Before diving into test results, allow me to introduce the test setup.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 4. An Enclustra Mercury+ KX2 carrier board mounted on an ST1 baseboard</caption><tr><td><img src="/img/migbench/enclustra.png" width="320" /></td></tr></table>
+
+<p>I’ll be running my memory tests using my <a href="https://github.com/ZipCPU/kimos">Kimos
+project</a>.  <a href="https://github.com/ZipCPU/kimos">This
+project</a> uses an <a href="https://www.enclustra.com/en/products/fpga-modules/mercury-kx2/">Enclustra Mercury+ KX2
+carrier board</a>
+containing a 2GB DDR3 memory and a Kintex-7 160T mounted on an <a href="https://www.enclustra.com/en/products/base-boards/mercury-st1/">Enclustra
+Mercury+ ST1
+baseboard</a>.</p>
+
+<table align="center" style="float: right"><caption>Fig 5. Test setup</caption><tr><td><img src="/img/migbench/testsetup.svg" width="360" /></td></tr></table>
+
+<p>Fig. 5 shows the relevant components of the memory chain used by this
+<a href="https://github.com/ZipCPU/kimos">Kimos project</a> together with three test
+points for observation.  The project contains a
+<a href="/about/zipcpu.html">ZipCPU</a>.  (Of course!) That
+<a href="/about/zipcpu.html">ZipCPU</a> has both instruction and data
+interfaces to memory.  Each interface contains a 4kB cache.  The <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.html">instruction
+cache</a>
+in particular is large enough to hold all of the instructions required for
+each of the code loops required by our bench, and so it becomes transparent
+to the test.  This is not true of the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.html">data cache</a>.
+The bench marks I have chosen today are specifically designed to force
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.html">data cache</a>
+misses, and then to watch how the controller responds.  In the
+<a href="/about/zipcpu.html">ZipCPU</a>, those two interfaces are then
+merged together via a
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/ex/wbdblpriarb.v">arbiter</a>,
+and again merged with a <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/ex/wbpripriarb.v">second
+arbiter</a>
+with the DMA’s <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+requests.  The result is that the
+<a href="/about/zipcpu.html">ZipCPU</a> has only a single bus interface.</p>
+
+<p>Bus requests from the <a href="/about/zipcpu.html">ZipCPU</a>,
+to include the ZipDMA, are generated at a width
+designed to match the bus.  The interface to the Enclustra’s SDRAM naturally
+maps to 512 bits, so requests are generated (and recovered) at a 512 bit wide
+bus width.</p>
+
+<p>Once requests leave the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/zipsystem.v">ZipSystem</a>, they
+enter a <a href="/blog/2019/07/17/crossbar.html">crossbar</a> <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbxbar.v">Wishbone
+interconnect</a>.
+This <a href="/blog/2019/07/17/crossbar.html">interconnect</a> allows the
+<a href="/about/zipcpu.html">ZipCPU</a>
+to interact with <a href="/blog/2019/03/27/qflexpress.html">flash
+memory</a>, block RAM
+memory, and the DDR3 SDRAM memory.  An additional port also allows interaction
+with a control bus operating at 32bits.  Other peripheral DMAs can also
+master the bus through this
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a>, to include the
+<a href="https://github.com/ZipCPU/sdspi">SD card controller</a>,
+an <a href="https://github.com/ZipCPU/wbi2c">I2C controller</a>, <a href="https://github.com/ZipCPU/kimos/blob/master/rtl/wbi2c/wbi2cdma.v">an I2C
+DMA</a>, and an
+<a href="/blog/2017/06/05/wb-bridge-overview.html">external debugging
+bus</a>.  Other than
+loading program memory via <a href="/blog/2017/06/05/wb-bridge-overview.html">the debugging
+bus</a>
+to begin the test, these other bus masters will be idle during our testing.</p>
+
+<p>After leaving the <a href="/blog/2019/07/17/crossbar.html">crossbar</a>,
+the <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+request goes in one of two directions.  It can either go to a <a href="/blog/2020/03/23/wbm2axisp.html">Wishbone to AXI
+converter</a>
+and then to the MIG, or it can go straight to the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>.  (Only one
+of these controllers will ever be part of the design at a given time.)</p>
+
+<p>A legitimate question is whether or not the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbm2axisp.v">Wishbone to AXI
+converter</a>
+will impact this test, or to what extent it will impact it.  From a timing
+standpoint, <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbm2axisp.v">this
+converter</a>
+costs one clock cycle from the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+strobe to the AXI AxVALID signal.
+This will add one clock of latency to any MIG request.  We’ll have to adjust
+any results we calculate by this one clock cycle.  The
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbm2axisp.v">converter</a>
+also requires 625 logic elements (LUTs).</p>
+
+<p>What about AXI?  The
+<a href="/blog/2020/03/23/wbm2axisp.html">converter</a>
+doesn’t produce full AXI.  All requests, coming out of the converter, are
+for burst lengths of <code class="language-plaintext highlighter-rouge">AxLEN=0</code> (i.e. one beat), a constant <code class="language-plaintext highlighter-rouge">AxID</code> of one bit,
+an <code class="language-plaintext highlighter-rouge">AxSIZE</code> of 512 bits, <code class="language-plaintext highlighter-rouge">AxCACHE=4'd3</code>, and so forth.</p>
+
+<ul>
+  <li>
+    <p>This will impact area.</p>
+
+    <p>A good synthesizer should be able to recognize these constants to reduce
+both the logic area and logic cost of the MIG.
+(<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3</a> is already
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+based, so this won’t change anything.)</p>
+  </li>
+  <li>
+    <p>What about AXI bursts?</p>
+
+    <p>Frankly, bursts tend to slow down AXI traffic, rather than speed it up.
+As <a href="/blog/2019/05/29/demoaxi.html">we’ve already discovered on this
+blog</a>, the first thing an
+AXI slave needs to do with a burst request is to unwind the burst.  This
+takes extra logic, and often costs a clock cycle (or two).  As a result,
+Xilinx’s block RAM controller (not the MIG) suffers an extra clock lost on
+any burst request.  The MIG, on the other hand, doesn’t seem affected by
+burst requests (or lack thereof)–although they may contribute a clock or
+two to latency.</p>
+  </li>
+  <li>
+    <p>What about AXI pipelining?</p>
+
+    <p>Both AXI and the <a href="/zipcpu/2017/11/07/wb-formal.html">pipelined
+Wishbone</a>
+specification I use are <em>pipelined</em> bus implementations.  This means that
+multiple requests may be in flight at a time.  I don’t foresee any
+differences, therefore, between the two controllers due to AXI’s pipelined
+nature.</p>
+
+    <p>Had we been using Wishbone <em>Classic</em>, then our memory performance would’ve
+taken a significant hit.  (This is <a href="https://github.com/ZipCPU/zipcpu/blob/master/doc/orconf.pdf">one of the reasons why I <em>don’t</em> use
+Wishbone
+Classic</a>.)</p>
+  </li>
+  <li>
+    <p>What about Read/Write reordering?</p>
+
+    <p>The MIG may be able to reorder requests to its advantage.  In our test, we
+will only ever give it a single burst of read or write requests (all with
+<code class="language-plaintext highlighter-rouge">AxLEN=0</code>), and we will wait for all responses to come back from the
+controller before switching directions.  It is possible that the MIG might
+have a speed advantage over the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3</a> controller in a
+direction swapping environment.  If so, then today’s test is not likely
+to reveal those differences.</p>
+  </li>
+</ul>
+
+<p>Now that you know something about the various test setups, let’s look at some
+benchmarks.</p>
+
+<h2 id="the-lutsize-benchmark">The LUT/Size benchmark</h2>
+
+<p>When I first started out working with FPGAs, I remember my sorrow at seeing
+how much of my precious <a href="http://store.digilentinc.com/arty-artix-7-fpga-development-board-for-makers-and-hobbyists">Arty</a>’s
+LUTs were used by Xilinx’s MIG controller.
+At the time, I was struggling for funds, and didn’t really have the kind of
+cash required to purchase a <em>big</em> FPGA with lots of area.  An Artix 35T was
+(roughly) all I could afford, and the MIG used a large percentage of its area.</p>
+
+<p>Since area is proportional to dollars, let’s take a look at how much area
+each of the controllers uses in today’s test.</p>
+
+<p>On a Kintex-7 160T, mounted on an <a href="https://www.enclustra.com/en/products/fpga-modules/mercury-kx2/">Enclustra Mercury+ KX2 carrier
+board</a>,
+the MIG controller uses 24,833 LUTs out of 101,400 LUTs.  This is a full
+24.5% of the FPGA’s total logic resources.  Fig. 6 shows a Vivado generated
+hierarchy diagram, showing how much of the design this component requires.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 6. Area usage hierarchy with the MIG</caption><tr><td><a href="/img/migbench/mig-usage.png"><img src="/img/migbench/mig-usage.png" width="500" /></a></td></tr></table>
+
+<p>The diagram reveals a lot about area.  Thankfully, the MIG only uses a quarter
+of it.  The majority of the area used in this design is used by the components
+that have to touch the 512bit bus.  These include the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a>, the CPU’s DMA,
+the <a href="https://github.com/ZipCPU/sdspi">SDIO controller</a>’s DMA, the various
+Ethernet bus components, and so on.  The most obvious conclusion is that, if
+you want memory bandwidth, you will have to pay for it.  This should come as
+no surprise to those who have worked in digital design for some time.</p>
+
+<p>On the same board, the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> uses 13,105
+LUTs, or 12.9% of chip’s total logic resources.  A similar hierarchy
+diagram of the design containing the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> can be found in Fig. 7.</p>
+
+<table align="center" style="float: right; padding: 25px"><caption>Fig 7. Area usage hierarchy with the UberDDR3 Controller</caption><tr><td><a href="/img/migbench/uber-usage.png" width="500"><img src="/img/migbench/uber-usage.png" width="500" /></a></td></tr></table>
+
+<p>To be fair, the Xilinx controller must also decode AXI–a rather complex
+protocol.  However, <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axim2wbsp.v">AXI may be converted to
+Wishbone</a> for
+only 1,762 LUTs, suggesting this conversion alone isn’t sufficient to explain
+the difference in logic cost.  Further, the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbm2axisp.v">Wishbone to AXI
+converter</a>
+used to feed the MIG uses only a restricted subset of the AXI protocol.  As
+a result, it’s reasonable to believe that the synthesizer’s number, 24,833 LUTs,
+is smaller than what a more complex AXI handler might require.</p>
+
+<p>On size alone, therefore, the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> comes out as the clear
+winner.</p>
+
+<p>That makes the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> cheaper.  What about
+faster?</p>
+
+<!--
+## Time to First Access
+
+Enough background, let's start testing.
+
+From power up to first access, how long does it take?
+
+`LDI _sdram, R0`
+`LDI _rtc, R1`
+`LW (R0),R2`
+`LW (R1),R3`
+`HALT`
+-->
+
+<h2 id="the-raw-dma-bench-mark">The raw DMA bench mark</h2>
+
+<p>We’ve <a href="/blog/2021/08/14/axiperf.html">previously discussed bus benchmarking for
+AXI</a>.  In <a href="/blog/2021/08/14/axiperf.html">that
+article</a>,
+we identified every type of clock cycle associated with an AXI transaction,
+and then counted how often each type of cycle took place.  Since <a href="/blog/2021/08/14/axiperf.html">that
+article</a>, I’ve built
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbperf.v">something very similar for
+Wishbone</a>.
+In hindsight, however, all of these measures tend to be way too complicated.
+What I really want is the ability to summarize transactions simply in terms of
+1) latency, and 2) throughput.  Therefore, I’ve chosen to model all DDR3
+transaction times by the equation:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/migbench/eqn-transaction-time.png" alt="" width="524" /></td></tr></table>
+
+<p>In this model, “Latency” is the time from the first request to the first
+response, and “Throughput” is the fraction of time you can get one beat
+returned per clock cycle.  Calculating these coefficients requires a basic
+linear fit, and hence transfers with a varying number of beats used by the
+DMA–but we’ll get to that in a moment.</p>
+
+<p>The biggest challenge here is that the CPU can very much get in the way of
+these measures, so we’ll begin our measurements using the DMA alone where
+accesses are quite simple.</p>
+
+<p>Here’s how the test will work: The CPU will first program the
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbperf.v">Wishbone bus measurement
+peripheral</a>.
+It will then program the DMA to do a memory copy, from DDR3 SDRAM to DDR3
+SDRAM.  The <a href="/about/zipcpu.html">ZipCPU</a>’s DMA will break
+this copy into parts: It will first read <code class="language-plaintext highlighter-rouge">N</code> words into a buffer, and then
+(as a second step) write those <code class="language-plaintext highlighter-rouge">N</code> words to somewhere else on the memory.
+During this operation, the CPU will not interact with the DDR3 memory at
+all–to keep from corrupting any potential measures.  Instead, it will run all
+instructions from an on-board block RAM.  Once the operation completes, the
+CPU will issue a stop collection command to the <a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/wbperf.v">Wishbone bus measurement
+peripheral</a>.
+From there, the CPU can read back 1) how many requests were made, 2) how
+many clock cycles it took to either read or write each block.  From the DMA
+configuration, we’ll know how many blocks were read and/or written.  From this,
+we can create a simple regression to get the latency and throughput numbers we
+are looking for.</p>
+
+<p>To see how this might work, let’s start with what a DMA trace might nominally
+look like.  Ideally, we’d want to see something like Fig. 8.</p>
+
+<table align="center" style="float: none"><caption>Fig 8. Ideal DMA</caption><tr><td><a href="/img/migbench/ideal-dma.svg"><img src="/img/migbench/ideal-dma.svg" width="720" /></a></td></tr></table>
+
+<p>In this “ideal” DMA, the DMA maintains two buffers.  If either of the two
+buffers is empty, it issues a read command.  Once the buffer fills, it issues
+a write command.  Fig. 8 shows these read and write requests in the “DMA-STB”
+line, with “DMA-WE” (write-enable) showing wich direction the requests are
+being for.  These requests then go through a
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a>
+and hit the DDR3 controller as
+“SDRAM-STB” and “SDRAM-WE”.  (This simplified picture assumes no stalls, but
+we’ll get to those.)  The SDRAM controller might turn around write requests
+immediately, as soon as they are committed into its queue, whereas read
+requests will take sometime longer until REFRESH cycles, bank precharging
+and activation cycles are complete and the data finally returned.  Then,
+as soon as a full block of read data is returned, the DMA can immediately turn
+around and request to write that data.  Once a full block of write data has
+been sent, the DMA then has the ability to reuse that buffer for the next block
+of read data.</p>
+
+<p>AXI promises to be able to use memory in this fashion, and indeed my
+<a href="https://github.com/ZipCPU/wb2axip/blob/master/rtl/axidma.v">AXI DMA</a>
+attempts to do exactly that.</p>
+
+<p>When interacting with a real memory, things aren’t quite so simple.  Requests
+will get delayed (I didn’t draw the stall signal in Fig. 8), responses have
+delays, etc.  Further, there is a delay associated with turning the memory
+bus around from read to write or back again.  Still, this is as simple as
+we can make a bus transaction look.</p>
+
+<p>In <a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>,
+unlike AXI, requests get grouped using the cycle line (<code class="language-plaintext highlighter-rouge">CYC</code>).
+You can see a notional
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> DMA cycle in
+Fig. 9.</p>
+
+<table align="center" style="float: none"><caption>Fig 9. Wishbone DMA</caption><tr><td><img src="/img/migbench/cpb-dma.svg" width="720" /></td></tr></table>
+
+<p>Unlike the AXI promise, the
+<a href="/about/zipcpu.html">ZipCPU</a>’s
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> implementation
+uses only a single buffer, and it doesn’t switch bus direction mid-bus cycle.</p>
+
+<p>Let’s look at this cycle line for a moment through.  This is a “feature” not
+found in AXI.  The originating master raises this cycle line on the first
+request, and drops it after the last acknowledgment.  The
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a>
+uses this signal
+to know when it can drop arbitration for a given master, to allow a second
+master to use the same memory.  The cycle line can also be used to tell
+down stream slaves that the originating master is no longer interested in any
+acknowledgments from its prior requests–effectively acting as a “bus abort”
+signal.  This makes
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+more robust than AXI in the presence of hardware
+failures, but it can also make
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+slower than AXI because bursts from
+different masters cannot be interleaved while the master owning the bus holds
+its cycle line high.</p>
+
+<p>Arguably, this
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+DMA approach will limit our ability to fully test
+the MIG controller.  As a result, we may need to come back to this controller
+and test again at a later time using an AXI DMA interface alone to see to what
+extent that might impact our results.</p>
+
+<p>To make our math easier, we’ll add one more requirement: Our transactions will
+either be to read or write 16, 8, 4, or 2 beats at a time.  On a 512bit bus,
+this corresponds to reading or writing 1024, 512, 256, or 128 bytes at a
+time–with 1024 bytes being the size of the
+<a href="/about/zipcpu.html">ZipCPU</a>’s
+DMA buffer, and therefore the maximum transfer size available.</p>
+
+<p>With all that said, it’s now time to look at some measurement data.</p>
+
+<p>First up is the MIG DDR3 controller.  Fig. 10 shows a trace of the
+DMA waveform when transferring 16 beats of data at a time.</p>
+
+<table align="center" style="float: none"><caption>Fig 10. MIG DMA</caption><tr><td><img src="/img/migbench/mig-cpb.png" width="720" /></td></tr></table>
+
+<p>This image shows two
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a>
+bus interfaces.  The top one is the view the
+DMA has of the bus.  The bottom interface is the view coming out of the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a> and going into
+the memory controller.</p>
+
+<p>In this image, it takes a (rough) 79 clock cycles to go from the beginning of
+one read request, through a write request, to the beginning of the next read
+request–as measured between the two vertical markers.</p>
+
+<p>Some things to notice include:</p>
+<ol>
+  <li>It takes 4 clock cycles for the request to go from the DMA through the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a>
+to the controller.</li>
+  <li>While not shown here, it takes one more clock cycle following
+<code class="language-plaintext highlighter-rouge">sdram_stb &amp;&amp; !sdram_stall</code> for the conversion to AXI.</li>
+  <li>Curiously, the SDRAM STALL line is not universally low during a burst
+of requests.  In this picture, it often rises for a cycle at a time.  I have
+conjectured above that this is due to the MIG’s need for PLL station keeping.</li>
+  <li>During writes, it takes 3 clocks to go from request to acknowledgment.</li>
+  <li>During reads, it can take 26 clocks from request to acknowledgment–or more.</li>
+  <li>Once the MIG starts acknowledging (returning) requests, the ACK line can
+still drop mid response.  (This has cost me no end of heartache!)</li>
+</ol>
+
+<p>If we repeat the same measurement with the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a>, we get the trace shown
+in Fig. 11.</p>
+
+<table align="center" style="float: none"><caption>Fig 11. Uber DMA</caption><tr><td><img src="/img/migbench/uber2-cpb.png" width="720" /></td></tr></table>
+
+<p>In this case, the full 1024 Byte transfer cycle now takes 66 clock cycles
+instead of 79.</p>
+
+<ul>
+  <li>
+    <p>It takes 11 cycles from read request to read acknowledgment.</p>
+  </li>
+  <li>
+    <p>It takes 7 cycles from write request to acknowledgment.</p>
+  </li>
+  <li>
+    <p>Unlike the MIG, there’s no periodic loss of acknowledgment.  In general,
+once the acknowledgments start, they continue.  This won’t be universally
+true, but the difference is still significant.</p>
+  </li>
+</ul>
+
+<p>Of course, one transaction never tells the whole story, a full transaction
+count is required.  However, when we look at all transactions, we find on
+average:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/migbench/membench.png" width="800" /></td></tr></table>
+
+<p>These are the clearest performance numbers we will get to compare these two
+controllers.  When writing to memory, the MIG is clearly faster.  This is
+likely due to its ability to turn a request around before acting upon it.
+(Don’t forget, one of these clocks of latency is due to the
+<a href="/zipcpu/2017/11/07/wb-formal.html">Wishbone</a> to AXI
+<a href="/blog/2020/03/23/wbm2axisp.html">conversion</a>, so the
+MIG is one clock faster than shown in this chart!)  Given that the MIG can
+turn a request around in 1.8 cycles, it must be doing so before examining
+any of the details of the request!</p>
+
+<p>When reading from memory, the MIG is clearly slower–and that by a massive
+amount.  One clock of this is due to the <a href="/blog/2020/03/23/wbm2axisp.html">Wishbone to AXI
+conversion</a>.  Another
+clock (or two) is likely due to the AXI to native conversion.  The MIG must
+also arbitrate between reads and writes, and must (likely) always activate
+a row before it can be used.  All of this costs time.  As a result of these
+losses and more that aren’t explained by these, the MIG is clearly <em>much</em>
+slower than the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a>.</p>
+
+<h2 id="under-load">Under Load</h2>
+
+<p>Now that we’ve seen how the DDR3 controller(s) act in isolation to a DMA,
+let’s turn our attention to how they act in response to a CPU–the
+<a href="/about/zipcpu.html">ZipCPU</a> in this case.  (Of course!)
+For our test configuration, the
+<a href="/about/zipcpu.html">ZipCPU</a> will have
+both <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.html">data</a>
+and <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.html">instruction</a>
+caches.  Because of this, our test memory loads will need to be
+extensive–to break through the cache–or else the cache will
+get in the way of any decent measurement.</p>
+
+<h3 id="how-the-cache-works">How the Cache Works</h3>
+
+<p>Let’s discuss the <a href="/about/zipcpu.html">ZipCPU</a>’s
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.html">data cache</a>
+for a moment, because it will become important when we try to understand how
+fast the CPU can operate in various memory environments.</p>
+
+<ul>
+  <li>
+    <p>First, the <a href="/about/zipcpu.html">ZipCPU</a> has only one
+interface to the bus.  This interface is shared by both the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">instruction</a>
+and <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.html">data</a>
+caches.  However, the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">instruction</a>
+cache is (generally) big enough to fit most of our program, so it shouldn’t
+impact the test much.</p>
+
+    <p>The one place where we’ll see the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">instruction</a>
+cache impact our test is whenever the
+<a href="/about/zipcpu.html">ZipCPU</a> needs to cross
+between cache lines.  As currently built, this will cost a one clock delay
+to look up whether or not the next cache line is in the instruction cache.
+Other than that, we’re not likely to see any impacts from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">instruction</a>
+cache.</p>
+  </li>
+  <li>
+    <p>The <a href="/about/zipcpu.html">ZipCPU</a>’s
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">data cache</a>
+is a write through cache.  Any attempt to write to memory will go directly
+to the bus and so to memory.  Along the way, the memory in the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">cache</a>
+will be updated–but only if the memory to be written is also currently
+kept in the cache.</p>
+  </li>
+  <li>
+    <p>The <a href="/about/zipcpu.html">ZipCPU</a> will not wait for a
+write response from memory before going on to its next instruction.  Yes, it
+will wait if the next instruction is a read instruction, but in all other
+cases the next instruction is allowed to go forward as necessary.</p>
+
+    <p>One (unfortunate) consequence of this choice is that any bus error will
+likely stop the CPU a couple of instructions <em>after</em> the fault, potentially
+confusing any engineer trying to understand which instruction, which register,
+and which memory address was associated with the fault.  Such
+faults are often called <em>asynchronous</em> or <em>imprecise</em> bus faults.</p>
+  </li>
+  <li>
+    <p>When issuing multiple consecutive write operations in a row, the
+<a href="/about/zipcpu.html">ZipCPU</a> will not wait for prior
+operations to complete.  Two of our test cases will exploit this to issue
+three write (or read) requests in a row.  In these tests, the CPU will
+write either three 32b words or three 8b bytes on consecutive instructions
+and hence clock cycles.</p>
+
+    <p>I tend to call these <em>pipelined writes</em>, and I consider them to be some of
+the better features of the <a href="/about/zipcpu.html">ZipCPU</a>.</p>
+  </li>
+  <li>
+    <p>All read operations first take a clock cycle to check the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">cache</a>.  As a
+result, the minimum read time is two cycles: one to read from the
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">cache</a>
+and check for validity, and a second cycle to shift the 512b bus value
+and return the 8, 16, or 32b result.</p>
+  </li>
+  <li>
+    <p>As with the write operations, read operations can also be issued back to back.
+Back to back read operations will have a latency of two clocks, but a
+100% throughput–assuming they both read from the same
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">cache</a> line.
+If not, there will be an additional clock cycle lost to look up whether or
+not the requested cache line validly exists within the cache.</p>
+  </li>
+  <li>
+    <p>Both
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/pfcache.v">instruction</a>
+and <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">data
+cache</a>
+sizes have been set to 4kB each.  Both caches will use a line size of eight
+bus words (512 Bytes).  Neither cache uses <a href="/zipcpu/2025/03/29/pfwrap.html">wrap
+addressing</a> (although this
+test will help demonstrate that they should …).  Instead, all cache
+reads will start from the top of the cache line, and the CPU will stall
+until the entire cache line is completely read before continuing.</p>
+  </li>
+</ul>
+
+<p>To help to understand how this <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">data
+cache</a> works,
+let’s examine three operations.  The first is a read cache miss, as shown in
+Fig. 12.</p>
+
+<table align="center" style="float: none"><caption>Fig 12. ZipCPU Read Data Cache Miss</caption><tr><td><a href="/img/migbench/dcache-miss.png" width="720"><img src="/img/migbench/dcache-miss.png" width="720" /></a></td></tr></table>
+
+<p>In this case, a load word (LW) instruction flows through the 
+<a href="/about/zipcpu.html">ZipCPU</a>’s <a href="/zipcpu/2017/08/23/cpu-pipeline.html">pipeline from prefetch (PF),
+to decode (DCD), to the read operand (OP)
+stage</a>.  It then
+leaves the read operand (OP) stage headed for the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">data
+cache</a>.  The
+<a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">data cache</a>
+requires a couple of clocks–as dictated by the block RAM it’s built from–to
+determine
+that the request is not in the cache.  Once this has been determined, the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.v">data
+cache</a> initiates
+a bus request to read a single cache line (8 bus words) from memory.  Both
+cycle and strobe lines are raised.  The strobe line stays active until eight
+cycles of <code class="language-plaintext highlighter-rouge">stb &amp;&amp; !stall</code> (stall is not shown here, but assumed low).  Once
+eight requests have been made, the CPU waits for the last of the eight
+acknowledgments.  Once the read is complete, and not before, the cache line
+is declared valid and the CPU can read from it to complete it’s instruction.
+This costs another four cycles before the LW instruction can be retired.</p>
+
+<p>While this cache line remains in our cache, further requests to read from
+memory will take only either two or three clocks: Two clocks if the request
+is for the same cache line as the prior access, or three clocks otherwise
+as shown in Fig. 13.</p>
+
+<table align="center" style="float: right; padding: 25px"><caption>Fig 13. ZipCPU Data Cache Hit</caption><tr><td><img src="/img/migbench/dcache-hit.png" width="280" /></td></tr></table>
+
+<p>Finally, on any write request, the request will go straight to the bus as
+shown in Fig. 14.</p>
+
+<table align="center" style="float: left; padding: 25px"><caption>Fig 14. ZipCPU Write to Memory (through the Data Cache)</caption><tr><td><img src="/img/migbench/dcache-write.png" width="360" /></td></tr></table>
+
+<p>The CPU may then go on to other instructions, but the pipeline will
+necessarily stall if it ever needs to interact with memory prior to this
+write operation completing (unless its a set of consecutive writes …).</p>
+
+<h3 id="sequential-lrs-word-access">Sequential LRS Word Access</h3>
+
+<p>Our first CPU-based test is that of sequential word access.  Specifically,
+we’ll work our way through memory, and write a pseudo random value to every
+word in memory–one word at a time.  We’ll then come back through memory
+and read and verify that all of the memory values were written as desired.</p>
+
+<p>From C, the write loop is simple enough:</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c"><span class="cp">#define	STEP(F,T)  asm volatile("LSR 1,%0\n\tXOR.C %1,%0" : "+r"(F) : "r"(T))
+</span>	<span class="c1">// ...</span>
+	<span class="k">while</span><span class="p">(</span><span class="n">mptr</span> <span class="o">&lt;</span> <span class="n">end</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="c1">// fill = (fill&amp;1)?((fill&gt;&gt;1)^TAPS):(fill&gt;&gt;1);</span>
+		<span class="o">*</span><span class="n">mptr</span><span class="o">++</span> <span class="o">=</span> <span class="n">fill</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>The “STEP” macro exploits the fact that the
+<a href="/about/zipcpu.html">ZipCPU</a>’s LSR (logical shift right)
+instruction shifts the least significant bit into the carry flag, so that an
+linear feedback shift register (LFSR) may be stepped with only two instructions.
+The second instruction is a conditionally executed exclusive OR operation,
+only executed if the carry flag was set–indicating that a one was shifted out
+of the register.</p>
+
+<p>This simple loop then compiles into the following
+<a href="/about/zipcpu.html">ZipCPU</a>
+<a href="/zipcpu/2018/01/01/zipcpu-isa.html">assembly</a>:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	LSR        $1,R2	; STEP(fill, TAPS)
+	XOR.C      R3,R2
+	SW         R2,(R1)	; *mptr = fill
+	| ADD        $4,R1	;  mptr++
+	CMP        R6,R1	; if (mptr &lt; end)
+	BC         loop		;	go to top of loop</code></pre></figure>
+
+<p>Basically, we step the LFSR by shifting right by one.  If the bit shifted
+over the edge was a one, we exclusive OR the register with our taps.  (<code class="language-plaintext highlighter-rouge">XOR.C</code>
+only performs the exclusive OR if the carry bit is set.)
+We then store this word (<code class="language-plaintext highlighter-rouge">SW</code>= store word) into our memory address (<code class="language-plaintext highlighter-rouge">R1</code>),
+increment the address by adding four to it, and then compare the result with
+a pointer to the end of our memory region.  If we are still less than the
+end of memory, we go back and loop again.</p>
+
+<p>Inside the CPU’s pipeline, this loop might look like Fig. 15.</p>
+
+<table align="center" style="float: none"><caption>Fig 15. Simple write pipeline</caption><tr><td><a href="/img/migbench/cp1.svg"><img src="/img/migbench/cp1.svg" width="720" /></a></td></tr></table>
+
+<p>Let’s work our way through the details of this diagram.</p>
+
+<ul>
+  <li>
+    <p>There are <a href="/zipcpu/2017/08/23/cpu-pipeline.html">four pipeline stages: prefetch (PF), decode (DCD), read operands
+(OP), and write-back
+(WB)</a></p>
+  </li>
+  <li>
+    <p>The <a href="/about/zipcpu.html">ZipCPU</a> allows some pairs of
+instructions to be packed together.  In this case, I’ve used the vertical
+bar to indicate instruction pairing.  Hence the <code class="language-plaintext highlighter-rouge">S|A</code> instruction coming
+from the prefetch is one of these combined instructions.  The instruction
+decoder turns this into two instructions, forcing the prefetch to stall
+for a cycle until the second instruction can advance.</p>
+  </li>
+  <li>
+    <p>In general and when things are working well, all instructions take one clock
+cycle.  Common exceptions are to this rule are made for memory, divide, and
+multiply instructions.  For this exercise, only memory operations will take
+longer.</p>
+  </li>
+  <li>
+    <p>The store word instruction must stall and wait if the memory unit is busy.
+For the example in Fig. 15, I’ve chosen to begin the example with a busy
+memory, so you can see what this might look like.</p>
+  </li>
+  <li>
+    <p>Once the store word request has been issued to the memory controller, a bus
+request starts and the CPU continues with its next instruction.</p>
+  </li>
+  <li>
+    <p>The bus request must go through the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a>
+to get to the SDRAM.  As shown here, this takes three cycles.</p>
+  </li>
+  <li>
+    <p>The memory then accepts the request, and acknowledges it.</p>
+
+    <p>In the case of the MIG, this request is acknowledged almost immediately.
+The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> takes
+several more clock cycles before acknowledging this request.</p>
+  </li>
+  <li>
+    <p>It takes another clock for this acknowledgment to return back through the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a> to the CPU.</p>
+  </li>
+  <li>
+    <p>By this time, the CPU has already gone ahead without waiting for the bus
+return.  However, once returned, the CPU can accept a new memory instruction
+request.</p>
+  </li>
+  <li>
+    <p>When the <a href="/about/zipcpu.html">ZipCPU</a> hits the branch
+instruction (<code class="language-plaintext highlighter-rouge">BC</code> = Branch if carry is set), the CPU must clear its pipeline
+to take the branch.  This forces the pipeline to be flushed.  The colorless
+instructions in Fig. 15 are voided, and so never executed.  The jump flag is
+sent to the prefetch and so the CPU must wait for the next instruction to be
+valid.  (No, the <a href="/about/zipcpu.html">ZipCPU</a> does not
+have any branch prediction logic.  A branch predictor might have saved us
+from these stalls.)  If, as shown here, the branch remains in the same
+instruction cache line, a new instruction may be returned immediately.
+Otherwise it may take another cycle to complete the cache lookup for an
+arbitrary cache line.</p>
+  </li>
+</ul>
+
+<p>If you look closely, you’ll notice that the performance of this tight loop
+is heavily dependent upon the memory performance.  If the memory write cannot
+complete by the time the next write needs to take place, the CPU must then stall
+and wait.</p>
+
+<p>Using our two test points, we can see how the two controllers handle this test.
+Of the two, the MIG controller is clearly the fastest, although the speed
+difference is (in this case) irrelevant.</p>
+
+<table align="center" style="float: none"><caption>Fig 16. MIG Write pipeline</caption><tr><td><img src="/img/migbench/mig-cp1.png" width="720" /></td></tr></table>
+
+<p>Indeed, as we’ve discussed, the MIG’s return comes back so fast that it is
+clear the MIG has not completed sending this request to the DDR3.  Instead,
+it’s just committed the request to its queue, and then returns its
+acknowledgment.  This acknowledgment also comes back fast enough that the
+CPU memory controller is idle for two cycles per loop.  As a result, the
+memory write time is faster than the loop, and the loop time (10 clock cycles,
+from marker to marker) is dominated by the time to execute each of the
+instructions.</p>
+
+<p>Let’s now look at the trace from the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> shown in Fig. 17.</p>
+
+<table align="center" style="float: none"><caption>Fig 17. Uber Write pipeline</caption><tr><td><img src="/img/migbench/uber2-cp1.png" width="720" /></td></tr></table>
+
+<p>The big thing to notice here is that the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> takes one more clock
+cycle to return a busy status.  Although this is slower than the MIG, it isn’t
+enough to slow down the CPU, so the loop continues to take 10 cycles per loop.</p>
+
+<p>If you dig just a bit deeper, you’ll find that every 22us or so, the MIG
+takes longer to acknowledge a write request.</p>
+
+<table align="center" style="float: none"><caption>Fig 18. MIG Write pipeline with stall</caption><tr><td><img src="/img/migbench/mig-cp1-stall.png" width="720" /></td></tr></table>
+
+<p>In this case, the loop requires 22 clock cycles to complete.</p>
+
+<p>In a similar fashion, every 827 clocks (8.27 us), the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> does a memory refresh.
+During this time, the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> will also take longer to
+acknowledge a write request.</p>
+
+<table align="center" style="float: none"><caption>Fig 19. Uber Write pipeline with stall</caption><tr><td><img src="/img/migbench/uber2-cp1-stall.png" width="720" /></td></tr></table>
+
+<p>In this case, it takes the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> 57 clocks to complete a
+single loop.</p>
+
+<p>Let’s now turn our attention to the read half of this test, where we go back
+through memory in roughly the same fashion to verify the memory writes
+completed as desired.  In particular, we’ll want to look at cache misses.
+Such misses don’t happen often, but they are the only time the design
+interacts with its memory.</p>
+
+<p>From C, our read loop is similarly simple:</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c"><span class="cp">#define	FAIL		asm("TRAP")
+</span>	<span class="c1">// ...</span>
+	<span class="k">while</span><span class="p">(</span><span class="n">mptr</span> <span class="o">&lt;</span> <span class="n">end</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">*</span><span class="n">mptr</span> <span class="o">!=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">fill</span><span class="p">)</span>
+			<span class="n">FAIL</span><span class="p">;</span>
+		<span class="n">mptr</span><span class="o">++</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>The big difference here is that, if the memory every fails to match the
+pseudorandom sequence, we’ll issue a TRAP instruction which will cause the
+CPU to halt.  This forces a branch into the middle of our loop.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	LSR        $1,R0	; STEP(fill, TAPS)
+	XOR.C      R2,R0
+	LW         (R1),R3	; *mptr
+	| CMP      R0,R3
+	BZ         no_trap	; if (*mptr == (int)fill) ... skip
+	TRAP			;   break into supervisor mode--never happens
+no_trap:
+	ADD        $4,R1	; mptr++
+	| CMP      R6,R1	; if (mptr &lt; end)
+	BC         loop		;   loop some more</code></pre></figure>
+
+<p>Inside the CPU’s pipeline, this loop might look like Fig. 20.</p>
+
+<table align="center" style="float: none"><caption>Fig 20. Read pipeline</caption><tr><td><a href="/img/migbench/cp2.svg"><img src="/img/migbench/cp2.svg" width="720" /></a></td></tr></table>
+
+<p>This figure shows two times through the loop–one with a cache miss, and
+one where the data fits entirely within the cache.  In this case, the time
+through the loop upon a cache miss is entirely dependent upon how long the
+memory controller takes to read.  <em>EVERY</em> clock cycle associated with reading
+from memory (on a cache miss) costs us.</p>
+
+<p>Fig. 21 shows a trace captured from the MIG during this operation.</p>
+
+<table align="center" style="float: none"><caption>Fig 21. MIG Data read, cache miss</caption><tr><td><img src="/img/migbench/mig-cp2.png" width="720" /></td></tr></table>
+
+<p>Here we can see that it takes 35 cycles to read from memory on a cache miss.
+These 35 cycles directly impact that time it takes to complete our loop.</p>
+
+<p>Since the memory is being read into the data cache, we are reading eight 512 bit
+words at a time, which we will then process 32 bits per loop.  Hence, one might
+expect a cache miss one of every 128 loops.</p>
+
+<p>Accepting that it takes us 17 clocks to execute this loop without a cache
+miss, we can calculate the loop time with cache misses as:</p>
+
+<table align="center" style="float: none"><tr><td><img src="/img/migbench/eqn-cp2-readloop.png" alt="" width="524" /></td></tr></table>
+
+<p>In this case, the probability of a cache miss is once every 128 times through.
+The other latency is 4 clocks for the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a>,
+and another 5 clocks in the <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.html">cache
+controller</a>.
+Hence, our loop time for a 35 cycle read, one every 128
+times, is about 17.5 cycles.  This is pretty close to the measured time of
+17.35 cycles.</p>
+
+<p>How about the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>?
+Fig. 22 shows us an example waveform.</p>
+
+<table align="center" style="float: none"><caption>Fig 22. UberDDR3 Data read, cache miss</caption><tr><td><img src="/img/migbench/uber2-cp2.png" width="720" /></td></tr></table>
+
+<p>In this case, it takes 17 clock cycles to access the DDR3 SDRAM.  From this
+one might expect 17.07 clocks per loop.  In reality, we only get about 17.23,
+likely due to the times when our reads land on REFRESH cycles, as shown in
+Fig. 23 below, where the read takes 27 clocks instead of 17.</p>
+
+<table align="center" style="float: none"><caption>Fig 23. UberDDR3 Data read, cache miss, colliding with a REFRESH cycle</caption><tr><td><img src="/img/migbench/uber2-cp2-refresh.png" width="720" /></td></tr></table>
+
+<p>Our conclusion?  In this test case, the differences between the MIG and
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>s
+are nearly irrelevant.  The MIG is faster for singleton writes, but we aren’t
+writing often enough to notice.  The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a>
+is much faster when reading, but the cache helps to hide the difference.</p>
+
+<h3 id="sequential-lrs-triplet-word-access">Sequential LRS Triplet Word Access</h3>
+
+<p>Let’s try a different test.  In this case, let’s write three words at a time,
+per loop, and then read them back again.  As before, we’ll move sequentially
+through memory from one end to the next.  Our goal will be to exploit the
+<a href="/about/zipcpu.html">ZipCPU</a>’s pipelined memory access
+capability, to see to what extent that might make a difference.</p>
+
+<p>Why are we writing three values to memory?  For a couple reasons.  First,
+it can be a challenge to find enough spare registers to write much more.
+Technically we might be able to write eight at a time, but we still need to
+keep track of the various pointers and so forth for the rest of the function
+we’re using.  Second, three is an odd prime number.  This will force us to
+have memory steps that cross cache lines, making for some unusual accesses.</p>
+
+<p>Here’s the C code for writing three pseudorandom words to memory.</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c">	<span class="k">while</span><span class="p">(</span><span class="n">mptr</span><span class="o">+</span><span class="mi">3</span> <span class="o">&lt;</span> <span class="n">end</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">register</span> <span class="kt">unsigned</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">;</span>
+
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>	<span class="n">a</span> <span class="o">=</span> <span class="n">fill</span><span class="p">;</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>	<span class="n">b</span> <span class="o">=</span> <span class="n">fill</span><span class="p">;</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>	<span class="n">c</span> <span class="o">=</span> <span class="n">fill</span><span class="p">;</span>
+
+		<span class="n">mptr</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">a</span><span class="p">;</span>
+		<span class="n">mptr</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">b</span><span class="p">;</span>
+		<span class="n">mptr</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="n">c</span><span class="p">;</span>
+
+		<span class="n">mptr</span> <span class="o">+=</span> <span class="mi">3</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>As before, we’re using the <code class="language-plaintext highlighter-rouge">STEP</code> macro (defined above) to step a linear
+feedback shift register, used as a pseudorandom number generator, and then
+writing these pseudorandom numbers to memory.  As before, the <em>pseudo</em> in
+<em>pseudorandom</em> will be very important when we try to verify that our memory
+was written correctly as intended.</p>
+
+<p>GCC converts this C into the following assembly.  (Note, I’ve renamed the
+Loop labels and added comments, etc., to help keep this readable.)</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	MOV        R3,R2	; STEP(fill, TAPS); a = fill;
+	LSR        $1,R2
+ 	XOR.C      R8,R2
+	MOV        R2,R4	; STEP(fill, TAPS); b = fill;
+	LSR        $1,R4
+	XOR.C      R8,R4
+	MOV        R4,R3	; STEP(fill, TAPS); c = fill;
+	LSR        $1,R3
+	XOR.C      R8,R3
+	SW         R2,$-12(R0)	; mptr[0] = a;
+	SW         R4,$-8(R0)	; mptr[1] = b;
+	SW         R3,$-4(R0)	; mptr[2] = c;
+	| ADD      $12,R0	; mptr += 3;
+	CMP        R6,R0	; if (mptr+3 &lt; end)
+	BC         loop</code></pre></figure>
+
+<p>Even though we’re operating on three words at a time, the loop remains quite
+similar.  <code class="language-plaintext highlighter-rouge">LSR/XOR.C</code> steps the LRS.  Once we have three values, we use
+three consecutive <code class="language-plaintext highlighter-rouge">SW</code> (store word) instructions to write these values to
+memory.  We then adjust our pointer, compare, and loop if we’re not done yet.</p>
+
+<p>Fig. 24 shows what the CPU pipeline might look like for this loop.</p>
+
+<table align="center" style="float: none"><caption>Fig 24. Triplet Write pipeline</caption><tr><td><a href="/img/migbench/cp3.svg"><img src="/img/migbench/cp3.svg" width="720" /></a></td></tr></table>
+
+<p>Unlike our first test, we’re now crossing between instruction cache lines.
+This means that there’s a dead cycle between the <code class="language-plaintext highlighter-rouge">LSR</code> and <code class="language-plaintext highlighter-rouge">XOR</code> instructions,
+and another one following the <code class="language-plaintext highlighter-rouge">BC</code> (branch if carry) loop instruction before
+the prefetch is able to return the first instruction.</p>
+
+<p>Unlike the last test, our memory operation takes three consecutive cycles.</p>
+
+<p>Here’s a trace showing this write from the perspective of the MIG controller.</p>
+
+<table align="center" style="float: none"><caption>Fig 25. Triplet writes using the MIG</caption><tr><td><img src="/img/migbench/mig-cp3.png" width="720" /></td></tr></table>
+
+<p>In this case, it takes 6 clocks (as shown) for the MIG to acknowledge all
+three writes.  You’ll also note that the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a> stalls the
+requests, but that you don’t see any evidence of that at the SDRAM controller.
+This is simply due to the fact that it takes the
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a> a clock to
+arbitrate, and it has a two pipeline stage buffer before arbitration is
+required.  As a result, the third request through this
+<a href="/blog/2019/07/17/crossbar.html">crossbar</a> routinely stalls.
+Put together, this entire loop requires 21 cycles from one request to the next.</p>
+
+<p>Now let’s look at a trace from the 
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 26. Triplet writes using the Uber3 controller</caption><tr><td><img src="/img/migbench/uber2-cp3.png" width="720" /></td></tr></table>
+
+<p>In this case, it takes 8 clocks for 3 writes.  The 
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> is two clocks
+slower than the MIG.  However, it still takes 21 cycles from one request to the
+next, suggesting that we are still managing to hide the memory access cost
+by running other instructions in the loop.  Indeed, if you dig just a touch
+deeper, you’ll see that the CPU has 9 spare clock cycles.  Hence, this write
+could take as long as 17 cycles before it would impact the loop time.</p>
+
+<p>Let’s now turn our attention to reading these values back.  As before, we’re
+going to read three values, and then step and compare against our three
+pseudorandom values.</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c">	<span class="k">while</span><span class="p">(</span><span class="n">mptr</span><span class="o">+</span><span class="mi">3</span> <span class="o">&lt;</span> <span class="n">end</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">register</span> <span class="kt">unsigned</span> <span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">,</span> <span class="n">c</span><span class="p">;</span>
+
+		<span class="n">a</span> <span class="o">=</span> <span class="n">mptr</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
+		<span class="n">b</span> <span class="o">=</span> <span class="n">mptr</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
+		<span class="n">c</span> <span class="o">=</span> <span class="n">mptr</span><span class="p">[</span><span class="mi">2</span><span class="p">];</span>
+
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">a</span> <span class="o">!=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">fill</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">FAIL</span><span class="p">;</span> <span class="k">break</span><span class="p">;</span>
+		<span class="p">}</span>
+
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">b</span> <span class="o">!=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">fill</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">FAIL</span><span class="p">;</span> <span class="k">break</span><span class="p">;</span>
+		<span class="p">}</span>
+
+		<span class="n">STEP</span><span class="p">(</span><span class="n">fill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">c</span> <span class="o">!=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">fill</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">FAIL</span><span class="p">;</span> <span class="k">break</span><span class="p">;</span>
+		<span class="p">}</span>
+
+		<span class="n">mptr</span><span class="o">+=</span><span class="mi">3</span><span class="p">;</span>
+	<span class="p">}</span></code></pre></figure>
+
+<p>Curiously, GCC broke our three requests up into a set of two, followed by a
+separate third request.  This will break the 
+<a href="/about/zipcpu.html">ZipCPU</a>’s pipelined memory access
+into two accesses, although this is still within what “acceptable” assembly
+might look like.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	ADD        $12,R2       ; mptr += 3
+	| CMP      R6,R2	; while(mptr+3 &lt; end)
+	BNC        end_of_loop
+	LW         -8(R2),R4	; b = mptr[1]
+	LW         -4(R2),R0	; c = mptr[2]
+	LSR        $1,R1	; STEP(fill, TAPS);
+	XOR.C      R3,R1
+	LW         -12(R2),R11	; a = mptr[0]
+	CMP        R1,R11	; if (a != (int)fill)
+	BNZ        trap
+	LSR        $1,R1	; STEP(fill, TAPS);
+	XOR.C      R3,R1
+	CMP        R1,R4	; if (b != (int)fill)
+	BNZ        trap
+	LSR        $1,R1	; STEP(fill, TAPS);
+	XOR.C      R3,R1
+	CMP        R1,R0	; if (c == (int)fill)
+	BZ         loop		;	go back and loop again
+trap:</code></pre></figure>
+
+<p>One lesson learned is that the if statements should include not only the
+TRAP/FAIL instruction, but also a break instruction.  If you include the break,
+then GCC will place the TRAP outside of the loop and so we’ll no longer
+have to worry about multiple branches clearing our pipeline per loop.  If you
+don’t, then the CPU will have to deal with multiple pipeline stalls.
+Instead, we’ll have only one stall when we go around the loop.</p>
+
+<p>From a pipeline standpoint, the pipeline will look like Fig. 27.</p>
+
+<table align="center" style="float: none"><caption>Fig 27. Triplet read pipeline</caption><tr><td><a href="/img/migbench/cp4.svg"><img src="/img/migbench/cp4.svg" width="720" /></a></td></tr></table>
+
+<p>In this figure, we show two passes through the loop.  The first pass shows
+a complete cache miss and subsequent memory access, whereas the second one
+can exploit the fact that the data is in the cache.</p>
+
+<p>As before, in the case of a cache miss, the loop time will be dominated by
+the memory read time.  Any delay in memory reading will slow our loop down
+directly and immediately, but only once per cache miss.  The difference here
+is that our probability of a cache miss has now gone from one in 128 to
+three in 128.</p>
+
+<p>On a good day, the MIG’s access time looks like Fig. 28 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 28. Triplet word access, data cache miss, MIG controller</caption><tr><td><img src="/img/migbench/mig-cp4.png" width="720" /></td></tr></table>
+
+<p>In this case, it costs us 35 clocks to read from the SDRAM in the case of a
+cache miss, and 24 clocks with no miss.  Were this always the case, we might
+expect 25 clocks per loop.  Instead, we see an average of 27 clocks per loop,
+suggesting that the refresh and other cycles are slowing us down further.</p>
+
+<p>Likewise, a cache miss when using the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> looks like
+Fig. 29.</p>
+
+<table align="center" style="float: none"><caption>Fig 29. Triplet word access, data cache miss, UberDDR3 controller</caption><tr><td><img src="/img/migbench/uber2-cp4.png" width="720" /></td></tr></table>
+
+<p>In this case, it typically costs 17 clocks on a cache miss.  On a rare occasion,
+the read might hit a REFRESH cycle, where it might cost 36 clocks or so.
+Hence we might expect 24.6 cycles through the loop, which is very close to the
+24.7 cycles measured.</p>
+
+<h3 id="sequential-lrs-triplet-character-access">Sequential LRS Triplet Character Access</h3>
+
+<p>The third CPU test I designed is a repeat of the last one, save that the
+CPU made <em>character</em> (i.e. 8-bit octet) accesses instead of 32-bit <em>word</em>
+accesses.</p>
+
+<p>In hind sight, this test isn’t very revealing.  The statistics are roughly the
+same as the triplet word access: memory accesses to a given row aren’t faster
+(or slower) when accessing 8-bits at a time instead of 32.  Instead, three
+8-bit accesses takes just as much time as three 32-bit access.  The only real
+difference here is that the probability of a read cache miss is now 3 bytes in
+a 512 cache line, rather than the previous 3 in 128.</p>
+
+<h3 id="random-word-access">Random word access</h3>
+
+<p>A more interesting test is the random word access test.  In this case,
+we’re going to generate both (pseudo)random data and a (pseudo)random address.
+We’ll then store our random data at the random address, and only stop once
+the random address sequence repeats.</p>
+
+<p>I’m expecting a couple differences here.  First, I’m expecting that almost all
+of the data cache accesses will go directly to memory.  There should be no
+(or at least very few) cache hits.  Second, I’m going to expect that almost
+all of the memory requests should require loading a new row.  In this case,
+the MIG controller should have a bit of an advantage, since it will
+automatically precharge a row as soon as it recognizes its not being used.</p>
+
+<p>Writing to memory from C will look simple enough:</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c">	<span class="n">afill</span> <span class="o">=</span> <span class="n">initial_afill</span><span class="p">;</span>
+	<span class="k">do</span> <span class="p">{</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">afill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">dfill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">((</span><span class="n">afill</span><span class="o">&amp;</span><span class="p">(</span><span class="o">~</span><span class="n">amsk</span><span class="p">))</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+			<span class="n">mptr</span><span class="p">[</span><span class="n">afill</span><span class="o">&amp;</span><span class="n">amsk</span><span class="p">]</span> <span class="o">=</span> <span class="n">dfill</span><span class="p">;</span>
+	<span class="p">}</span> <span class="k">while</span><span class="p">(</span><span class="n">afill</span> <span class="o">!=</span> <span class="n">initial_afill</span><span class="p">);</span></code></pre></figure>
+
+<p>GCC then turns this into the following assembly.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	LSR        $1,R1	; STEP(afill, TAPS)
+	XOR.C      R8,R1
+	LSR        $1,R2	; STEP(dfill, TAPS)
+	XOR.C      R8,R2
+	MOV        R1,R3        ; if (afill &amp; (~amsk)) == 0
+	| AND      R12,R3
+	BNZ        checkloop
+	; Calculate the memory address
+	MOV        R11,R3        | AND        R1,R3
+	LSL        $2,R3
+	MOV        R5,R9         | ADD        R3,R9
+	SW         R2,(R9)	; mptr[afill &amp; amsk] = dfill
+checkloop:
+	CMP        R1,R4
+	BNZ        loop</code></pre></figure>
+
+<p>There’s a couple of issues here in this test.  First, we have a mid-loop
+branch that we will sometimes take, and sometimes not.  Second, we now have
+to calculate an address.  This requires multiplying the pseudorandom
+values by four (<code class="language-plaintext highlighter-rouge">LSL 2,R3</code>), and adding it to the base memory address.</p>
+
+<p>I’ve drawn out a notional pipeline for what this might look like in Fig. 30.</p>
+
+<table align="center" style="float: none"><caption>Fig 30. Random write access</caption><tr><td><a href="/img/migbench/cp7.svg"><img src="/img/migbench/cp7.svg" width="720" /></a></td></tr></table>
+
+<p>Notice that this notional pipeline includes a stall for crossing instruction
+cache line boundaries between the <code class="language-plaintext highlighter-rouge">XOR</code> and <code class="language-plaintext highlighter-rouge">LSR</code> instructions.</p>
+
+<p>From the MIG’s standpoint, a typical random write capture looks like Fig. 31
+below.</p>
+
+<table align="center" style="float: none"><caption>Fig 31. Random write access, MIG controller</caption><tr><td><img src="/img/migbench/mig-cp7.png" width="720" /></td></tr></table>
+
+<p>As before, this is a 4 clock access.  The MIG is simply returning it’s results
+before actually performing the write.</p>
+
+<p>A similar trace, drawn from the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> can be seen in Fig. 32.</p>
+
+<table align="center" style="float: none"><caption>Fig 32. Random write access, UberDDR3 controller</caption><tr><td><img src="/img/migbench/uber2-cp7.png" width="720" /></td></tr></table>
+
+<p>In this case, it takes 8 clocks to access memory and perform the write.</p>
+
+<p>However, neither write time is sufficient to significantly impact our time
+through the loop.  Instead, it’s the rare REFRESH cycles that impact the write,
+but again these impacts are only fractions of a clock per loop.  Still, that
+means that the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> takes seven
+tenths of a cycle longer per loop than the MIG controller.</p>
+
+<p>Reads, on the other hand, are more interesting.  Why?  Because read instructions
+must wait for their result before executing the next instruction, and the
+cache will have a negative effect if we’re always suffering from cache misses.</p>
+
+<p>Here’s the C code for a read.  Note that we now have two branches, mid loop.</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c">	<span class="k">do</span> <span class="p">{</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">afill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="n">STEP</span><span class="p">(</span><span class="n">dfill</span><span class="p">,</span> <span class="n">TAPS</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">((</span><span class="n">afill</span> <span class="o">&amp;</span> <span class="p">(</span><span class="o">~</span><span class="n">amsk</span><span class="p">))</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">mptr</span><span class="p">[</span><span class="n">afill</span><span class="o">&amp;</span><span class="n">amsk</span><span class="p">]</span> <span class="o">!=</span> <span class="p">(</span><span class="kt">int</span><span class="p">)</span><span class="n">dfill</span><span class="p">)</span> <span class="p">{</span>
+				<span class="n">FAIL</span><span class="p">;</span>
+				<span class="k">break</span><span class="p">;</span>
+			<span class="p">}</span>
+		<span class="p">}</span>
+	<span class="p">}</span> <span class="k">while</span><span class="p">(</span><span class="n">afill</span> <span class="o">!=</span> <span class="n">initial_afill</span><span class="p">);</span></code></pre></figure>
+
+<p>GCC produces the following assembly for us.</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	LSR        $1,R2	; STEP(afill, TAPS)
+	XOR.C      R4,R2
+	LSR        $1,R0	; STEP(dfill, TAPS)
+	XOR.C      R4,R0
+	MOV        R2,R3
+	| AND      R12,R3
+	BNZ        skip_data_check
+	MOV        R11,R3	; Calculate afill &amp; amsk
+	| AND      R2,R3
+	LSL        $2,R3	; Turn this into an address offset
+	MOV        R5,R1
+	| ADD      R3,R1	; ... and add that to mptr
+	LW         (R1),R3	; Read mptr[afill&amp;amsk]
+	| CMP      R0,R3	; Compare with dfill, the expected data
+	BNZ        trap		; Jump to the FAIL/break if nonzero
+skip_data_check:
+	LW         12(SP),R1	; Load (from the stack) the initial address
+	| CMP      R2,R1	; Check our loop condition
+	BNZ        loop
+	// ...
+trap:</code></pre></figure>
+
+<p>There’s a couple of things to note here.  First, there’s not one but <em>two</em>
+memory operations here.  Why?  GCC couldn’t find enough registers to hold
+all of our values, and so it spilled the initial address onto the stack.
+Nominally, this wouldn’t be an issue.  However, it becomes an issue when
+you have a data cache <em>collision</em>, where both the stack and the SDRAM memory
+require access to the same cache line.  These cases then require two cache
+lookups per loop.  One lookup will be of SDRAM, the other  (<code class="language-plaintext highlighter-rouge">LW 12(SP),R1</code>)
+of block RAM where the stack is being kept.  (A 2-way or higher data cache
+may well have mitigated this effect, allowing the stack to stay in the cache
+longer.)</p>
+
+<p>Second, notice how we now have a <code class="language-plaintext highlighter-rouge">BNZ</code> (branch if not zero, or if not equal).
+This is what we get for adding the <code class="language-plaintext highlighter-rouge">break</code> instruction to our failure part of
+the loop–letting GCC know that this if condition isn’t really part of our
+loop.  As a result, we only have one branch–and that only if our pseudorandom
+address goes out of bounds.</p>
+
+<p>This leaves us with a pipeline looking like Fig. 33.</p>
+
+<table align="center" style="float: none"><caption>Fig 33. Random read access pipeline</caption><tr><td><a href="/img/migbench/cp8.svg"><img src="/img/migbench/cp8.svg" width="720" /></a></td></tr></table>
+
+<p>A capture of these random reads, when using the MIG controller, looks like
+Fig. 34 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 34. Random read access, MIG controller</caption><tr><td><img src="/img/migbench/mig-cp8.png" width="720" /></td></tr></table>
+
+<p>As before, we’re looking at 35 clocks to read 8 words.  Nominally, we might
+argue this to be a latency of 27 cycles plus overhead, but … it’s not.
+One cycle, after the MIG starts returning data, is empty.  This means we have a
+latency of 26 cycles, and a single clock loss of throughput on every
+transaction.</p>
+
+<p>Judging from the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>
+trace in Fig. 35, the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> doesn’t have this problem.</p>
+
+<table align="center" style="float: none"><caption>Fig 35. Random read access, UberDDR3 controller</caption><tr><td><img src="/img/migbench/uber2-cp8.png" width="720" /></td></tr></table>
+
+<p>Instead, it takes 17 clocks to access 8 words, and there’s no unexpected losses
+in the return.</p>
+
+<p>As a result, the MIG controller requires 72 clocks per loop, whereas the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> requires
+55 clocks per loop.</p>
+
+<p>My conclusion from this test is that the MIG remains faster when writing, but
+the difference is fairly irrelevant because the CPU continues executing
+instructions concurrently.  In the case of reads, on the other hand, the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> is much
+faster.  This is the conclusion one might expect given that the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3
+controller</a> has much less
+latency than the MIG.</p>
+
+<h3 id="memcpy"><a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">MEMCPY</a></h3>
+
+<p>Let’s now leave our contrived tests, and look at some C library functions.
+For reference, the <a href="/about/zipcpu.html">ZipCPU</a> uses the
+<a href="https://sourceware.org/newlib/">NewLib</a> C library.</p>
+
+<p>Our first test will be a
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">memcpy()</a> test.
+Specifically, we’ll copy the first half of our memory to the second half.
+This will maximize the size of the memory copied.</p>
+
+<p>In addition, our
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">memcpy()</a> requests
+will be <em>aligned</em>.  This will allow the library routine to use 32b word
+copies instead of byte copies.  It’s faster and simpler, but there is
+some required magic taking place in the library to get to this point.</p>
+
+<p>Our test choice also has an unexpected consequence.  Specifically, the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3</a>’s sequential memory
+optimizations will all break at the bank level, since we’ll be reading from
+one bank, and writing to another address <em>on the same bank</em>.  This will force
+the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> to
+precharge a row and activate another on every bank read access.  (It’s not
+quite every access, since we do have the data cache.)</p>
+
+<p>With a little digging, the relevant loop within the
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">memcpy()</a> compiles into
+the following <a href="/zipcpu/2018/01/01/zipcpu-isa.html">assembly</a>:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	LW         (R5),R8	; Load two words from memory
+	LW         4(R5),R9
+	SW         R8,(R4)	; Store them
+	SW         R9,$4(R4)
+	LW         8(R5),R8	; Load the next two words
+	LW         12(R5),R9
+	SW         R8,$8(R4)	; Store those as well
+	SW         R9,$12(R4)
+	LW         16(R5),R8	; Load a third set of words
+	LW         20(R5),R9
+	SW         R8,$16(R4)	; Store the third set
+	SW         R9,$20(R4)
+	ADD        $32,R5        | ADD        $32,R4
+	LW         -8(R5),R8	; Load a final 4th set of words
+	LW         -4(R5),R9
+	SW         R8,$-8(R4)	; ... and store them to memory
+	SW         R9,$-4(R4)    | CMP        R4,R6
+	BNZ        loop</code></pre></figure>
+
+<p>Note that all of the memory accesses are for two sequential words at a time.
+This is due to the fact that both GCC and
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">memcpy()</a> believe the
+<a href="/about/zipcpu.html">ZipCPU</a> has native 64-bit instructions.
+It doesn’t, but this is still a decent optimization.</p>
+
+<p>Second, note that GCC and
+<a href="https://sourceware.org/newlib/">NewLib</a> have succeeded in unrolling this loop,
+so that four 64b words are read and written per loop.  (I’m not sure which of
+GCC or <a href="https://sourceware.org/newlib/">NewLib</a> is responsible for this
+optimization, but it shouldn’t be too hard to look it up.)</p>
+
+<p>Third, note that the load-word instructions cannot start until the store-word
+instructions prior complete.  This is to keep the CPU from hitting certain
+memory access collisions.</p>
+
+<!--
+Can we predict how long this will take?
+
+The load word instructions will miss the cache once every sixteen times through
+this loop, costing `LATENCY+2/THROUGHPUT` clock cycles loss per miss, and three
+cycles per hit.  The first and second store word instruction pairs will cost
+`LATENCY+2/THROUGHPUT` each, since they cannot run concurrently with the memory
+loads.  However, the third pair will require two fewer clocks, and the fourth
+will require six fewer clocks (5 for the branch) because they can run
+concurrently.
+
+MIG: (1/16)(27.7+9+8/0.96)+1+(15/16)(4) + 4(5 + 2.8 + 2/0.9)-6
+	= 56.7 clocks/loop
+	// 35 cycle access
+	// 99,125, when not in the cache
+	// 55 cycles in cache
+Uber2: (1/16)(10.8+9+8/0.9)+1+(15/16)(4) + 4(5 + 8.2 + 2/0.92)-6
+	= 77.1 clock/loop
+	// 57 cycles?
+ACTUAL-MIG:  0x00ed081c clocks / 
+ACTUAL-Uber: 0x0110e8e9 clocks / 
+-->
+
+<p>Fig. 36 shows an example of how the MIG deals with this memory copy.</p>
+
+<table align="center" style="float: none"><caption>Fig 36. MEMCPY, MIG Controller</caption><tr><td><img src="/img/migbench/mig-cp9.png" width="720" /></td></tr></table>
+
+<p>Highlighted in the trace is the 35 cycle read.</p>
+
+<p>However, you’ll also note that this trace is primarily dominated by write
+requests.  This is due to the fact that the
+<a href="/about/zipcpu.html">ZipCPU</a>
+has a <em>write-through</em> cache, so all writes go to the data bus–two words
+at a time.  Because of the latency difference we’ve seen, these writes
+can complete in 5 cycles total, or 14 cycles from one write to the next.</p>
+
+<p>Remember, the read requests cannot be issued until the write requests
+can complete.  Hence, for any pair of <code class="language-plaintext highlighter-rouge">SW</code> (store word) instructions followed
+by <code class="language-plaintext highlighter-rouge">LW</code> (load word) instructions, the <code class="language-plaintext highlighter-rouge">LW</code> instructions must wait for the
+<code class="language-plaintext highlighter-rouge">SW</code> instructions to complete.  This write latency directly impacts that
+wait time.  Hence, it takes 14 cycles from one write to the next.</p>
+
+<p>Also shown in Fig. 36 is a write when the SDRAM was busy.  These happen
+periodically, when the MIG takes the SDRAM offline–most likely to refresh
+some of its capacitors.  These cycles, while rare, tend to cost 71 clock
+cycles to write two words.</p>
+
+<p>In the end, it took 55 cycles to read and write 8 words (32 bytes) when the
+read data was in the cache, or 87 cycles otherwise.</p>
+
+<p>Fig. 37, on the other hand, shows a trace of the same only this time using
+the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 37. MEMCPY, UberDDR3 Controller</caption><tr><td><img src="/img/migbench/uber2-cp9.png" width="720" /></td></tr></table>
+
+<p>As before, reads are faster.
+The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>
+can fill a cache line in 17 cycles, vs 35 for the MIG controller.</p>
+
+<p>However, what kills the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> in this test
+is its write performance.  Because of the higher latency requirement of the
+write controller, it typically takes 7 cycles for a two word write to complete.
+This pushes the two word time from 14 cycles to 16 cycles.  As a result,
+the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>
+is 15% <em>slower</em> than the MIG in this test.</p>
+
+<h3 id="memcmp"><a href="https://en.cppreference.com/w/cpp/string/byte/memcmp">MEMCMP</a></h3>
+
+<p>Our final benchmark will be a memory comparison, using
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcmp">memcmp()</a>.  Since we
+just copied the lower half of our memory to the upper half using
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">memcpy()</a> in our last
+test, we’re now set up for a second test where we verify that the memory
+was properly copied.</p>
+
+<p>Our C code is very simple.</p>
+
+<figure class="highlight"><pre><code class="language-c" data-lang="c">	<span class="k">if</span> <span class="p">(</span><span class="mi">0</span> <span class="o">!=</span> <span class="n">memcmp</span><span class="p">(</span><span class="n">mem</span><span class="o">+</span><span class="n">lnw</span><span class="o">/</span><span class="mi">2</span><span class="p">,</span> <span class="n">mem</span><span class="p">,</span> <span class="n">lnw</span><span class="o">/</span><span class="mi">2</span><span class="p">))</span>
+		<span class="n">FAIL</span><span class="p">;</span></code></pre></figure>
+
+<p>Everything taking place, however, lands within the
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcmp">memcmp()</a> library call.</p>
+
+<p>Internally, we spend our time operating on the following loop over and over
+again:</p>
+
+<figure class="highlight"><pre><code class="language-text" data-lang="text">loop:
+	LW         (R1),R4	; Read two words from the left hand side
+	LW         4(R1),R5
+	LW         (R2),R6	; Read two words from the right hand side
+	LW         4(R2),R7
+	CMP        R6,R4	; Compare left and right hand words
+	CMP.Z      R7,R5
+	BNZ        found_difference
+	ADD        $8,R1         | ADD        $8,R2	; Increment PTRs
+	ADD        $-8,R3        | CMP        $8,R3	; End-of-Loop chk
+	BNC        loop</code></pre></figure>
+
+<p>As with
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">memcpy()</a>, the
+library is try to exploit the 64b values that the
+<a href="/about/zipcpu.html">ZipCPU</a> supports–albeit not natively.
+Hence, each 64b read is turned into two adjacent reads, and the comparison
+is likewise turned into a pair of comparisons, where the second comparison
+is only accomplished if the first comparison is zero.  On any difference,
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcmp">memcmp()</a> breaks out
+of the loop and traps.  Things are working well, however, so there are
+no differences, and so the CPU stays within the loop until it finishes.</p>
+
+<p>Also, like the
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcpy">memcpy()</a> test, jumping
+across a large power of two divide will likely break the bank machine
+optimizations used by the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>.</p>
+
+<p>Enough predictions, let’s see some results.</p>
+
+<p>Fig. 38 shows an example loop through the MIG Controller.</p>
+
+<table align="center" style="float: none"><caption>Fig 38. MEMCMP, MIG Controller</caption><tr><td><img src="/img/migbench/mig-cpa.png" width="720" /></td></tr></table>
+
+<p>One loop, measured between the markers, takes 106 clocks.</p>
+
+<p>Much to my surprise, when I dug into this test I discovered that <em>every</em> memory
+access resulted in a cache miss.  The reason is simple: the two memories
+are separated by a power of two amount, yet greater than the cache line
+size.  This means that the two pieces of memory, the “left hand” and “right
+hand” sides, both use the same cache tags.  Therefore, they are both competing
+for the same cache line.  (A 2-way cache may have mitigated this reality, but
+the <a href="/about/zipcpu.html">ZipCPU</a> currently has only one-way
+caches.)</p>
+
+<p>Fig. 39 shows the comparable loop when using the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>.</p>
+
+<table align="center" style="float: none"><caption>Fig 39. MEMCMP, UberDDR3 Controller</caption><tr><td><img src="/img/migbench/uber2-cpa.png" width="720" /></td></tr></table>
+
+<p>In this case, the
+<a href="https://en.cppreference.com/w/cpp/string/byte/memcmp">memcmp()</a>
+uses only 74 clocks per loop–much less than the 106 used by the MIG..</p>
+
+<p>Something else to note is that if you zoom out from the trace in Fig. 38, you
+can see the MIG’s refresh cycles.  Specifically, every 51.8us, there’s a
+noticable hiccup in the reads, as shown in Fig. 40.</p>
+
+<table align="center" style="float: none"><caption>Fig 40. MEMCMP, MIG Controller Refresh timing</caption><tr><td><img src="/img/migbench/mig-cpa-refresh.png" width="720" /></td></tr></table>
+
+<p>The same refresh cycles are just as easy to see, if not easier, in the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>’s trace
+if you zoom out, as shown in Fig. 41.</p>
+
+<table align="center" style="float: none"><caption>Fig 41. MEMCMP, UberDDR3 Controller Refresh timing</caption><tr><td><img src="/img/migbench/uber2-cpa-refresh.png" width="720" /></td></tr></table>
+
+<p>This might explain why the MIG gets 96% throughput, whereas the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> only gets
+a rough 90% throughput: the MIG doesn’t refresh nearly as often.</p>
+
+<p>Still, when you put these numbers together, overall the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>
+is 30% <em>faster</em> than the MIG when running the MEMCMP test.</p>
+
+<h2 id="conclusions">Conclusions</h2>
+
+<p>So what conclusion can we draw?  Is the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>
+faster, better, and cheaper than the MIG controller?  Or would it make more
+sense to stick with the MIG?</p>
+
+<p>As with almost all engineering, the answer is: it depends.</p>
+
+<ol>
+  <li>
+    <p>The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> is
+clearly <em>cheaper</em> than the MIG controller, since it uses 48% lower area.</p>
+  </li>
+  <li>
+    <p>Reading is much faster when using the
+<a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>,
+primarily due to its lower latency of 10.8 clocks vice the MIGs 27.7 clocks
+(on avererage).  This lower latency is only partially explained by the
+MIG’s need to process and decompose AXI bursts.  It’s not clear what the
+rest of latency is caused by, or why it ends up so slow.</p>
+
+    <p>At the same time, this read performance improvement can often be hidden by
+a good cache implementation.  This only works, though, when accessing
+memory from a CPU.  Other types of memory access, such as DMA reading or
+video framebuffer reading won’t likely have the luxury of hiding the
+memory performance, since they tend to read large consecutive areas of
+memory at once, rather than accessing random memory locations.</p>
+  </li>
+  <li>
+    <p>Writing is faster when using the MIG, primarily due to the fact that it
+acknowledges any write request (nearly) immediately.</p>
+
+    <p>This should be an easy issue to fix.</p>
+  </li>
+  <li>
+    <p>The <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a> might
+increase its throughput to match the MIG, were it to use a different
+refresh schedule.</p>
+
+    <p>I would certainly recommend Angelo look into this.</p>
+  </li>
+  <li>
+    <p>I really need to implement <a href="/zipcpu/2025/03/29/pfwrap.html">WRAP
+addressing</a> for my <a href="https://github.com/ZipCPU/zipcpu/blob/master/rtl/core/dcache.html">data
+cache</a>.
+I might’ve done so for this article, once I realized how valuable it would
+be, but then I realized I’d need to go and re-collect all of the data
+samples I had, and re-draw all of the pipeline diagrams.  Instead, I’ll
+just push this article out first and then take another look at it.</p>
+  </li>
+  <li>
+    <p>The <a href="https://en.cppreference.com/w/cpp/string/byte/memcmp">memcmp()</a> test
+also makes a strong argument for having at least a 2-way cache
+implementation.</p>
+  </li>
+</ol>
+
+<p>Given that the <a href="https://github.com/AngeloJacobo/UberDDR3">UberDDR3 controller</a>
+is still somewhat new, I think we can all expect more and better things from
+it as it matures.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>For he looketh to the ends of the earth, and seeth under the whole heaven; to make the weight for the winds; and he weigheth the waters by measure.  Job 28:24-25</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
