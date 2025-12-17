@@ -1,0 +1,66 @@
+It's formally verified, and ... it crashes the simulation.
+
+What did I do wrong?
+
+-------------
+The test is long and painful.  When it fails, the sim just hangs--still writing
+to the trace.
+
+GTKWave has a maximum size around 120GB.  4TB was too much.
+
+-------------
+Worse, when I finally kill the simulator, the console log isn't fully written.
+I don't know what the last failing step is/was, although I can get close.
+
+-------------
+In other projects, I've generated simulation watchdogs to look for stuff like
+this.  If tripped, the simulation will exit to keep it from hanging.
+
+-------------
+Step #1: Trim the test down to just that portion that fails: Byte wise
+transfers, to a fixed address
+
+-------------
+Step #2: Run the test (a simulation), head to lunch, come back and the trace is
+1TB.  Still too much.  Second try, trace is 200GB.  I use dd to trim it down,
+and try to take a look.
+
+-------------
+Success!  The simulation hangs mid trace.  It only took 5 days to get here ...
+
+Let's zoom in and see what happened.
+
+-------------
+The first thing that stands out is that AWLEN should never be larger
+than 8'h0f for a fixed address transfer.  How could formal miss this?
+
+-------------
+Yes, I tested for that using formal methods.  However, I artificially limited
+*all* bursts to 16 beats to simplify processing.  This masked an issue, where
+fixed bursts got accidentally treated as normal, incrementing address bursts.
+I removed this burst length limit when running in simulation.
+
+-------------
+What happens?
+1. The design happily transfers data until there's not enough data for a full
+   256 beat burst.  This is the wrong comparison for a fixed length burst, which
+   should max out at 16 beats.
+
+2. It then assumes this burst must be the last burst in the entire transfer.
+   It assigns it the transfer length of the last burst, which should've been
+   zero for this transfer, minus one (for AXI AWLEN).
+
+3. The AW* state machine then gets out of synch with the W* state machine.
+   The AW* state machine has now (accidentally) committed to more than all of
+   the data in the FIFO, in one big final burst.
+
+   The W* state machine isn't done, and continues issuing WLAST at the end of
+   each 16-beat burst.
+
+   WLAST and AWLEN now no longer match.
+
+4. The crossbar, having seen one WLAST for every AWVALID, shuts down the
+   channel.  This could lock up any slave that was trying to process AWLEN
+   beats rather than looking for WLAST.
+
+5. The AXI bus is now locked.  Only a reset can rescue the design at this point.

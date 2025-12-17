@@ -1,0 +1,2137 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+  <meta charset="utf-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Device Clock Generation</title>
+  <meta name="description" content="After building a CPU, utilities forhandling bus interconnects, several DMAsand memory controllers, I often find my time focused on building interfacesbetween...">
+
+  <link rel="shortcut icon" type="image/x-icon" href="/img/GT.ico">
+  <link rel="stylesheet" href="/css/main.css">
+  <link rel="canonical" href="https://zipcpu.com/blog/2025/12/17/devclk.html">
+  <link rel="alternate" type="application/rss+xml" title="The ZipCPU by Gisselquist Technology" href="https://zipcpu.com/feed.xml">
+</head>
+
+
+  <body>
+
+    <!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-4ZK7HKHSVW"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-4ZK7HKHSVW');
+</script>
+
+    <header class="site-header">
+  <div id="banner">
+  <a href="/"><picture>
+    <img height=120 id="site-logo" src="/img/fullgqtech.png" alt="Gisselquist Technology, LLC">
+  </picture></A>
+  </div>
+
+  <div class="site-nav">
+<ul>
+
+<li><a HREF="/">Main/Blog</a>
+
+
+<li><a HREF="/about/">About Us</a>
+
+
+<li><a HREF="/fpga-hell.html">FPGA Hell</a>
+
+
+<li><a HREF="/tutorial/">Tutorial</a>
+<li><a HREF="/tutorial/formal.html">Formal training</a>
+
+
+<li><a HREF="/quiz/quizzes.html">Quizzes</a>
+
+
+<li><a HREF="/projects.html">Projects</a>
+
+
+<li><a HREF="/topics.html">Site Index</a>
+
+<HR>
+
+<li><a href="https://twitter.com/zipcpu"><span class="icon--twitter"><svg viewBox="0 0 400 400"><path fill="#1da1f2" d="M153.62,301.59c94.34,0,145.94-78.16,145.94-145.94,0-2.22,0-4.43-.15-6.63A104.36,104.36,0,0,0,325,122.47a102.38,102.38,0,0,1-29.46,8.07,51.47,51.47,0,0,0,22.55-28.37,102.79,102.79,0,0,1-32.57,12.45,51.34,51.34,0,0,0-87.41,46.78A145.62,145.62,0,0,1,92.4,107.81a51.33,51.33,0,0,0,15.88,68.47A50.91,50.91,0,0,1,85,169.86c0,.21,0,.43,0,.65a51.31,51.31,0,0,0,41.15,50.28,51.21,51.21,0,0,1-23.16.88,51.35,51.35,0,0,0,47.92,35.62,102.92,102.92,0,0,1-63.7,22A104.41,104.41,0,0,1,75,278.55a145.21,145.21,0,0,0,78.62,23"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+<li><a href="https://www.reddit.com/r/ZipCPU"><span class="username">Reddit</a>
+<li><a HREF="https://www.patreon.com/ZipCPU"><IMG SRC="/img/patreon_logomark_color_on_white.png" WIDTH="25"> Support</a>
+</ul>
+</div>
+
+
+</header>
+
+
+    <div class="page-content">
+      <div class="wrapper">
+        <article class="post" itemscope itemtype="https://schema.org/BlogPosting">
+
+  <header class="post-header">
+    <h1 class="post-title" itemprop="name headline">Device Clock Generation</h1>
+    <p class="post-meta"><time datetime="2025-12-17T00:00:00-05:00" itemprop="datePublished">Dec 17, 2025</time></p>
+  </header>
+
+  <div class="post-content" itemprop="articleBody">
+    <p>After building a <a href="/about/zipcpu.html">CPU</a>, <a href="https://github.com/ZipCPU/wb2axip">utilities for
+handling bus interconnects</a>, several DMAs
+and memory controllers, I often find my time focused on building interfaces
+between designs and external peripherals.  This seems to be where most of the
+business has landed for me.  Often, these peripherals require a clock output,
+coming from the design, and so I’d like to spend some time describing how to
+generate such a “device” clock.</p>
+
+<table align="center" style="float: right; padding: 25px"><caption>Fig 1.  A Basic SOC with Peripherals</caption><tr><td><img src="/img/devclk/soc.svg" width="320" /></td></tr></table>
+
+<p>There’s actually two topics that need to be discussed when working with modern
+high speed peripheral design.  One of them is <em>generating</em> the clock to be sent
+to the peripheral, such as Fig. 1 above illustrates.  The second one involves
+<em>processing</em> a clock returned from the peripheral, as shown in Fig. 2 below.
+This is a key component of high speed designs such as DDR memories, eMMC,
+HyperRAM, or even NAND flash protocols.  This second topic is one we shall
+need to come back to at a later date.</p>
+
+<table align="center" style="float: left"><caption>Fig 2.  Data returned with a clock</caption><tr><td><img src="/img/devclk/bidir-clk.svg" width="320" /></td></tr></table>
+
+<p>Today, I’d like to discuss how to go about <em>generating</em> a clock to control
+device interaction.</p>
+
+<p>I first came across this problem when building a
+<a href="/blog/2019/03/27/qflexpress.html">NOR flash controller</a>,
+based on first a <a href="/blog/2018/08/16/spiflash.html">SPI
+interface</a> and later a
+<a href="/blog/2019/03/27/qflexpress.html">Quad SPI interface</a>.
+<a href="https://github.com/ZipCPU/qspiflash">My controller</a> was designed for FPGAs,
+and so the clock could be built with a single frequency.
+This design had the added complication that the clock needed to be paused from
+time to time.  Specifically, the clock needed to be turned off when nothing
+was going on.  Likewise, the clock needed to be turned off for one cycle after
+dropping (i.e. activating) the chip select pin, and for a couple cycles after
+the transaction was complete but before raising (deactivating) the chip select.</p>
+
+<p>I had to deal with a similar problem when controlling a HyperRAM, but …
+<a href="https://github.com/ZipCPU/wbhyperram">that design</a> failed when I wasn’t (yet)
+prepared to handle the return clock properly.  I did say this deserved an
+article in its own right, did I not?  Processing data on a return clock properly
+can be a challenge.</p>
+
+<p>I then built <a href="https://www.arasan.com/product/xspi-psram-master/">a similar design for ASIC
+platforms</a>.  Unlike the
+FPGA, the final clock speed wouldn’t be known until run time.  It might be
+that the design started at a slower clock speed, only to later speed up to
+the full rate at run time.  Unlike an FPGA which can be fixed later, there’s
+really no room for failure in <a href="/blog/2017/10/13/fpga-v-asic.html">ASIC
+work</a>.  At least
+with an FPGA, if my board didn’t support a particular frequency, I could just
+rebuild the design for the clock frequency it did support.  This doesn’t work,
+though, for an ASIC–since it tends to be cost prohibitive to rebuild the
+design at a later time when you decide to connect it to a slower part than
+the one you designed it for.</p>
+
+<p>The next design I worked with was a <a href="https://www.arasan.com/product/onfi-4-2-controller-phy/">NAND flash
+design</a>.  NAND flash
+can be a challenge, since the protocol requires you to start at a slow
+frequency and only after you bring up the connection are you allowed to change
+to a faster frequency.  <a href="https://www.arasan.com/product/onfi-4-2-controller-phy/">This particular
+design</a> was built for
+ASIC environments, and so it depended upon an analog component generating all
+the clocks I needed.  This worked great, up until someone wanted to purchase
+the design to work on an FPGA, then another wanted it to work on an FPGA, and
+another and so on.</p>
+
+<!-- TWO TRACES: SDR timing vs DDR timing -->
+<table align="center" style="float: left; padding: 25px"><caption>Fig 3. Single Data Rate (SDR) vs Dual Data Rate (DDR)</caption><tr><th>SDR</th></tr><tr><td><img src="/img/devclk/sdr.svg" width="320" /></td></tr><tr><th>DDR</th></tr><tr><td><img src="/img/devclk/ddr.svg" width="320" /></td></tr></table>
+
+<p>Just to add another twist to the problem, many protocols require data
+transitions on both edges of the clock, a protocol often known as
+“Dual Data Rate” (DDR).  Unlike the other designs above, these often require a
+clock that is 90 degrees offset from the data–so that each clock transition
+takes place in the middle of each data valid window, rather than on the edges
+of the window.  This sort of “offset” clock is necessary to guarantee setup and
+hold times within the slave peripheral.  An example of the clock and data
+relationship required by DDR as opposed to a traditional “single data rate”
+(SDR) clock is shown in Fig. 3.</p>
+
+<p>By the time I got to my <a href="https://github.com/ZipCPU/sdspi">SDIO/eMMC controller</a>,
+I think I finally had the clock division problem handled.  An
+<a href="https://github.com/ZipCPU/sdspi">SDIO controller</a> needs bring up the SD card
+at 400kHz, and then depending upon the card, the PCB, and the controller, the
+speed may then be raised to 25MHz, 50MHz, 100MHz, or even 200MHz.  The clock
+may also be stopped whenever either there’s nothing to send or receive, or
+when the SOC can’t load or unload the data to the controller.  For example, you
+might ask an SD card to read and thus produce many blocks of data, then read
+the first two of these blocks into your internal buffers only to find that the
+CPU is slow in draining those buffers.  In that case, you would need to stop
+the interface clock before the external card tries to send you a third block
+of data that would have nowhere to go.</p>
+
+<p>Other devices require user programmable device clock controllers, such as:</p>
+
+<ul>
+  <li>
+    <p><a href="https://github.com/ZipCPU/videozip/tree/master/rtl/ethernet">10M/100M/1Gb Ethernet controllers</a></p>
+
+    <p>While each of these speeds might use a single clock, building a truly
+trimode controller requires some extra work.</p>
+  </li>
+  <li>
+    <p><a href="/zipcpu2025/05/28/memtest.html">(DDR) SDRAM controllers</a></p>
+
+    <p>SDRAM controllers from an FPGA standpoint tend to be simple: just produce a
+clock.  However, you can turn the clock off for better power performance.
+Yes, there are rules … but we won’t get into those here today.</p>
+  </li>
+  <li>
+    <p>I2S</p>
+
+    <p><a href="/blog/2019/06/28/genclk.html">We discussed generating an I2S clock at a totally arbitrary
+frequency</a> some time ago.</p>
+  </li>
+  <li>
+    <p><a href="/blog/2021/11/15/ultimate-i2c.html">I2C</a></p>
+
+    <p>In general, I2C is too slow to be the focus of this article.  There is
+an I3C protocol that is built on top of I2C.  The techniques we discuss today
+might work well for I3C masters, but I’m not nearly as familiar with those.</p>
+  </li>
+  <li>
+    <p><a href="https://github.com/ZipCPU/wbspi">SPI – not just NOR flash</a></p>
+
+    <p>While SPI <em>slaves</em> have a device clock as well, handling these clocks is
+fundamentally different from what I’m describing today.  My focus today
+will be on <em>generating</em> clock signals for the purpose of controlling
+external devices–such as an SPI master might need to do.</p>
+  </li>
+</ul>
+
+<p>Specifically, today I want to look at and discuss generating a clock with one
+or more of the following characteristics:</p>
+
+<ul>
+  <li>
+    <p><strong>Output Signal:</strong> We’re talking about interface clocks–those generated by
+the “master” of the interface.  These are <em>digital</em> signals, output from
+either an FPGA (or ASIC) device.</p>
+
+    <p>The output may be accomplished via a component like an
+<a href="/blog/2020/08/22/oddr.html">ODDR</a> or an OSERDES,
+with or without an additional analog delay following.</p>
+  </li>
+  <li>
+    <p><strong>Discontinuous:</strong> The clock may be discontinuous.  Many protocols
+(<a href="/blog/2019/03/27/qflexpress.html">flash</a>,
+<a href="https://github.com/ZipCPU/sdspi">SDIO/eMMC</a>, etc) allow or even require,
+the clock to be stopped, or otherwise only toggled when there’s something to
+send or receive.  As mentioned above, stopping the clock may also be useful
+for pausing a transmission in progress before a source buffer runs dry, or an
+incoming buffer overflows.</p>
+  </li>
+  <li>
+    <p><strong>Dynamic Frequency:</strong> Often, the outgoing clock needs to change frequency
+during operation as part of the protocol.  For example, the SDIO protocol
+needs to start at 400kHz, and then increase to 25MHz (or more).  Therefore,
+a good clock generator will need to be able to naturally generate multiple
+clock frequencies as the protocol requires.</p>
+  </li>
+  <li>
+    <p><strong>Minimum pulse width:</strong> Switching between frequencies must be done by rule:
+clock glitches must be fully disallowed and guaranteed against.  Too-short
+clock pulses cannot be allowed.  Clock high and low durations must always be
+at least a half period of the fastest allowable clock.</p>
+  </li>
+  <li>
+    <p><strong>90 Degree Offset for DDR Signaling:</strong> As shown in Fig 3, many modern
+protocols require both positive and negative edge signaling (DDR).  This
+drops the required clock frequency by 2x, reducing the bandwidth that must
+be carried over the PCB for the same data rate.  However, the clock signal
+required to support such DDR signaling often needs to be delayed 90 degrees
+from the data, so that it transitions in the middle of the data valid period.</p>
+  </li>
+  <li>
+    <p><strong>Faster than the controller’s clock:</strong> Just to make matters worse, in <a href="https://github.com/ZipCPU/sdspi">my
+eMMC design</a>, I needed to generate a 200MHz
+DDR device clock from a 100MHz system clock.</p>
+  </li>
+</ul>
+
+<p>All this is to say that our goal today will be to create a divided clock using
+digital, rather than analog, logic.  (Yes, I can hear my analog engineering
+friends jump in here with the comment that “Everything is analog!”  God bless
+you, my friends.)</p>
+
+<h2 id="the-problem">The Problem</h2>
+
+<p>The first approach I often see to this problem is the straight forward
+integer clock division approach.  Generally, it looks something like the
+following:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">src_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">reset</span><span class="p">)</span>
+	<span class="n">counter</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">active_clock</span><span class="p">)</span>
+	<span class="n">counter</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">else</span> <span class="c1">// if (active_clock)</span>
+	<span class="n">counter</span> <span class="o">&lt;=</span> <span class="n">counter</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span>
+
+<span class="k">assign</span>	<span class="n">dev_clk</span> <span class="o">=</span> <span class="p">(</span><span class="n">high_speed</span><span class="p">)</span> <span class="o">?</span> <span class="p">(</span><span class="n">src_clk</span> <span class="o">&amp;&amp;</span> <span class="n">active_clock</span><span class="p">)</span>
+			<span class="o">:</span> <span class="n">counter</span><span class="p">[</span><span class="n">user_selected_bit</span><span class="p">];</span></code></pre></figure>
+
+<p>In this case, <code class="language-plaintext highlighter-rouge">active_clock</code> controls whether or not the clock is stepping,
+and <code class="language-plaintext highlighter-rouge">user_selected_bit</code> controls to what level of clock division we are
+interested in.  As for the <code class="language-plaintext highlighter-rouge">src_clk</code>, that can be either the system clock or
+alternatively whatever is required to generate the fastest clock frequency
+required by the protocol.</p>
+
+<p>Note that we’ve done nothing to guarantee this clock won’t glitch between
+speed selections, nor can we necessarily guarantee the minimum of two clock
+rates.  We’ll come back to these requirements later, albeit with a different
+(better) implementation.</p>
+
+<p>The user logic required to use this clock this looks very simple at first:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">dev_clk</span> <span class="kt">or</span> <span class="kt">posedge</span> <span class="n">reset</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">reset</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="c1">// Reset logic</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+	<span class="n">pedge_data</span> <span class="o">&lt;=</span> <span class="c1">// Logic controlling any flops based on the dev_clk</span>
+<span class="k">end</span></code></pre></figure>
+
+<p>When a protocol requires data on both edges of the clock, getting the data
+right for the second edge of the clock is also important.  But, how shall we
+output data on the negative edge of a clock we’ve just created out of thin
+air?  We’ll need to transition on the negative edge to do this.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">negedge</span> <span class="n">dev_clk</span> <span class="kt">or</span> <span class="kt">posedge</span> <span class="n">reset</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">reset</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="c1">// Reset logic</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+	<span class="n">nedge_data</span> <span class="o">&lt;=</span> <span class="c1">// Logic controlling the negative clock's data</span>
+<span class="k">end</span>
+
+<span class="k">assign</span>	<span class="n">output_data</span> <span class="o">=</span> <span class="p">(</span><span class="n">dev_clk</span> <span class="o">||</span> <span class="o">!</span><span class="n">ddr_mode</span><span class="p">)</span> <span class="o">?</span> <span class="n">pedge_data</span> <span class="o">:</span> <span class="n">nedge_data</span><span class="p">;</span></code></pre></figure>
+
+<p>This approach leaves us with two problems.  The first is that we’re using our
+clock as a logic signal when we assign <code class="language-plaintext highlighter-rouge">dev_clk</code> to possible be the same as
+our source clock.  The second problem is that we are transitioning user logic
+on this clock.  Worse, though, we’re now transitioning our user logic on both
+edges of the clock.  This violates <a href="/blog/2017/08/21/rules-for-newbies.html"><em>the
+rules</em></a> of good
+digital logic design.</p>
+
+<p>These aren’t necessarily issues when building ASIC designs.  However, in FPGA
+design, this clock will need to get onto the clocking network’s backbone
+somehow, and that’s not automatic.  Worse, this new clock is <em>not</em> the same
+as the original <code class="language-plaintext highlighter-rouge">src_clk</code>–even when they are at the same frequency.  There
+will always be a delay between the two clocks–a delay that may not be
+captured by pre-synthesis simulation, and so it can be a dangerous delay the
+engineer isn’t expecting when building this logic.</p>
+
+<p>This leads to two commercial ASIC design challenges.  First, when designing an
+ASIC IP, you want to be able to test as much of the IP on an FPGA as possible.
+Non FPGA compatible logic needs to be moved to the periphery of the design and
+carefully controlled.  Second, from a business point of view, it helps to be
+able to sell the ASIC design to FPGA customers in addition to ASIC customers.
+So, even though you <em>can</em> do something like this on an ASIC, that doesn’t mean
+you <em>should</em>.</p>
+
+<p>There are other problems.</p>
+
+<ul>
+  <li>
+    <p><a href="/blog/2017/10/20/cdc.html">Clock domain crossings (CDCs)</a></p>
+
+    <p>Since the <code class="language-plaintext highlighter-rouge">src_clk</code> and <code class="language-plaintext highlighter-rouge">dev_clk</code> are now two separate and distinct clock
+domains, you’ll need to properly manage every <a href="/blog/2017/10/20/cdc.html">clock domain
+crossing</a> between these two
+clock domains.  This can create additional delays through what otherwise
+might be high speed logic.</p>
+
+    <p>Likewise, the positive and negative edges of the same clock are also
+(technically) separate clock domains.  Moving between them is “possible, but
+not recommended.”</p>
+  </li>
+  <li>
+    <p>Gating</p>
+
+    <p>You may have noticed we haven’t properly gated our clock above.  Sure, we
+used an <code class="language-plaintext highlighter-rouge">active_clock</code> signal to provide gating, but this signal does not
+guarantee the maximum frequency of the output clock.  This, however, is a
+minor problem that most engineers reading this blog would be able to easily
+fix with a little bit of additional logic.</p>
+  </li>
+</ul>
+
+<!--
+  STORY TIME:
+  ... need a more relevant story
+-->
+
+<p>Two problems in particular, though, become deal breakers when it comes to this
+type of design.  The first is that DDR interfaces often require a clock delayed
+by 90 degrees from the data, as shown in Fig. 3 above.  The simple approach
+will not generate such a 90 degree delay.  While one might use an analog delay
+element, such as a Xilinx ODELAY element, to delay the clock signal by an
+appropriate amount, this will only work for high speed clocks and not for
+clocks less than 50MHz or so.  The second problem is, what do you do when you
+need a device clock that’s faster than your <code class="language-plaintext highlighter-rouge">src_clk</code>, like I did in my
+<a href="https://github.com/ZipCPU/sdspi">SDIO/eMMC controller</a> design?</p>
+
+<p>As a result, we really need another approach.</p>
+
+<h2 id="the-solution">The Solution</h2>
+
+<p>The basic solution is to return to <a href="/blog/2017/08/21/rules-for-newbies.html">the
+rules</a>, and so
+avoid all transitions on the device clock edge at all.  Instead, we’ll continue
+to transition on our source clock and then use either an
+<a href="/blog/2020/08/22/oddr.html">ODDR</a> or an OSERDES to generate
+the final outgoing clock.  In the meantime, we’ll treat the newly generated
+device clock as a traditional logic signal–rather than a “clock” within our
+design.  That is, we’ll let it be and remain <em>logic</em>.</p>
+
+<p>Let’s start by looking at Fig. 3 above, and dividing the clock period into
+sections, as shown in Fig. 4 below.</p>
+
+<table align="center" style="float: none"><caption>Fig 4. Dividing the clock period</caption><tr><td><img src="/img/devclk/ddrbyfour.svg" width="480" /></td></tr></table>
+
+<p>Nominally, we’d want at least two sections per clock–one for each piece of
+data in a DDR transmission.  Sadly, this isn’t enough, since the clock might
+need to be offset by 90 degrees.  Hence, we’ll need to break each clock
+period into four logically distinct time periods.  We can label these time
+periods 3:0, from left-most or most-significant being 3 down to the right most
+and least significant being 0.</p>
+
+<p>From here, we can generate what I’m going to call a <em>wide</em> clock, four bits at
+a time.  This wide clock will then be output via a 4:1 OSERDES–if it is to keep
+pace with the source clock within our design.  At its
+fastest speed, this clock will be either <code class="language-plaintext highlighter-rouge">0011</code> (where the MSB ‘0’ is
+transmitted “first”), or <code class="language-plaintext highlighter-rouge">0110</code> if a 90 degree offset clock is required for
+DDR transmissions (as shown in Fig. 4).  At its next slowest speed, the clock
+would be <code class="language-plaintext highlighter-rouge">0000</code> followed by <code class="language-plaintext highlighter-rouge">1111</code>, or <code class="language-plaintext highlighter-rouge">0011</code> followed by <code class="language-plaintext highlighter-rouge">1100</code>.  Further
+clock divisions will use wide clocks of <code class="language-plaintext highlighter-rouge">0000</code> or <code class="language-plaintext highlighter-rouge">1111</code>.</p>
+
+<p>If you wish to use an <a href="/blog/2020/08/22/oddr.html">ODDR</a>
+instead of a 4:1 OSERDES, you can still use this approach, save that you
+would be generating 2 wide clock bits at a time instead of four.  The fastest
+clock would be a repeating <code class="language-plaintext highlighter-rouge">01</code>, but this fastest clock would be unable to
+handle the 90 degree offsets of a DDR signal.  The next fastest would be
+either <code class="language-plaintext highlighter-rouge">00</code> followed by <code class="language-plaintext highlighter-rouge">11</code>, or the 90 degree offset version of the same at
+<code class="language-plaintext highlighter-rouge">01</code> followed by <code class="language-plaintext highlighter-rouge">10</code>.</p>
+
+<p>If you want a clock running at twice your system frequency, you could use
+an eight-bit wide clock signal, designed to feed an 8:1 SERDES.  Your fastest
+clock would become <code class="language-plaintext highlighter-rouge">00110011</code> (non–DDR) or <code class="language-plaintext highlighter-rouge">01100110</code> when working with DDR
+signals.</p>
+
+<p>That’s the first step–the wide clock.</p>
+
+<p>The second step is to generate, together with the wide clock signal, two
+other signals.  The first signal, let’s call this <code class="language-plaintext highlighter-rouge">new_edge</code>, will indicate
+that a new clock cycle is beginning.  The second, which I shall call the
+<code class="language-plaintext highlighter-rouge">half_edge</code>, will indicate that the second half of a clock cycle is beginning.
+Both of these signals are also shown in Fig. 4 above, each indicating the
+portion of the clock cycle they represent.</p>
+
+<p>All three of these <em>logic</em> signals can be now generated by a “clock generator”
+module.</p>
+
+<p>If necessary, this clock can be stopped either at the clock generator, or
+gated further down the signal pipeline by simply zeroing out the wide clock.</p>
+
+<p>Let’s pause for a moment to illustrate what a “clock” like this might look
+like.</p>
+
+<p>We’ll start with the highest speed clock, running at the source clock rate.
+This clock will have a wide clock of <code class="language-plaintext highlighter-rouge">0011</code>, and new data on every clock edge.</p>
+
+<table align="center" style="float: right; padding: 25px"><caption>Fig 5. Highest speed SDR</caption><tr><td><a href="/img/devclk/h3.svg"><img src="/img/devclk/h3.svg" width="480" /></a></td></tr></table>
+
+<p>Fig. 5 shows all of these key signals.  First, you can see the system clock,
+which we called <code class="language-plaintext highlighter-rouge">src_clk</code> above, that everything is generated off of.  Next, you
+can see the IO clock we create, followed by the <code class="language-plaintext highlighter-rouge">wide_clock</code> used to create
+it.  This is followed by the <code class="language-plaintext highlighter-rouge">new_edge</code> control signal.  This clock might be
+the clock we would use for a data signal transitioning at once per clock (SDR).
+Therefore, to illustrate, I’ve also illustrated what a couple periods of this
+this data signal might look like.</p>
+
+<p>Were this interface to run in DDR mode, sending one word of data on each edge
+of the clock, then the <code class="language-plaintext highlighter-rouge">wide_clock</code> would need to be (repeatedly) set to
+<code class="language-plaintext highlighter-rouge">0110</code>, as shown in Fig. 6 below.</p>
+
+<table align="center" style="float: left"><caption>Fig 6. Highest speed DDR</caption><tr><td><a href="/img/devclk/h6.svg"><img src="/img/devclk/h6.svg" width="480" /></a></td></tr></table>
+
+<p>There are a couple key differences between Fig. 6 and Fig. 5 above.  The first,
+and perhaps most obvious, is that the data in Fig. 6 are output at two words
+per system clock cycle.  This is often desirable, in that twice the data rate
+may now be achieved.  The second difference is that the IO clock is now offset
+90 degrees from the data, instead of 180 degrees.  This is often necessary to
+guarantee that there is a clock transition in the middle of the data valid
+period.  To make this happen, the <code class="language-plaintext highlighter-rouge">wide_clock</code> is now set to <code class="language-plaintext highlighter-rouge">0110</code> in each
+clock period.</p>
+
+<p>Using these clock signals, we can also pause the clock–as shown in Fig. 7
+below.</p>
+
+<table align="center" style="float: right; padding: 25px"><caption>Fig 7. Pausing the clock</caption><tr><td><a href="/img/devclk/h6-pause.svg"><img src="/img/devclk/h6-pause.svg" width="480" /></a></td></tr></table>
+
+<p>Note that the key signals, such as <code class="language-plaintext highlighter-rouge">new_edge</code> and <code class="language-plaintext highlighter-rouge">half_edge</code> must also stop
+when the clock pauses (stops).  Because there is no clock signal, the data
+output signals become don’t care.  (For power reasons, I could see holding the
+output at at its previous value for short periods of time, <code class="language-plaintext highlighter-rouge">D2</code> in this case,
+but that’s another discussion.)</p>
+
+<p>This same signaling approach also works when dividing the clock speed by two.
+Fig. 8 shows an example SDR signal with a clock speed set to half the system
+clock speed.</p>
+
+<table align="center" style="float: left"><caption>Fig 8. SDR at half the system clock rate</caption><tr><td><a href="/img/devclk/h0f.svg"><img src="/img/devclk/h0f.svg" width="480" /></a></td></tr></table>
+
+<p>Fig. 9 shows the same thing, but this time for a DDR signal with the clock
+at half the system clock speed.</p>
+
+<table align="center" style="float: right; padding: 25px"><caption>Fig 9. DDR at half the system clock rate</caption><tr><td><a href="/img/devclk/h3c.svg"><img src="/img/devclk/h3c.svg" width="480" /></a></td></tr></table>
+
+<p>Before leaving this example, note how easy it was to change frequencies in
+this representation: we just adjusted the <code class="language-plaintext highlighter-rouge">wide_clock</code>, and then the new and
+half clock positions changed to match.</p>
+
+<p>We can drop the clock frequency again to a quarter of the system clock speed,
+as shown in Fig. 10.</p>
+
+<table align="center" style="float: left"><caption>Fig 10. SDR at a quarter of the system clock rate</caption><tr><td><a href="/img/devclk/h00ff.svg"><img src="/img/devclk/h00ff.svg" width="480" /></a></td></tr></table>
+
+<p>We can also offset this clock by 90 degrees, as shown in Fig. 11.</p>
+
+<table align="center" style="float: right; padding: 25px"><caption>Fig 11. DDR at a quarter of the system clock rate</caption><tr><td><a href="/img/devclk/h0ff0.svg"><img src="/img/devclk/h0ff0.svg" width="480" /></a></td></tr></table>
+
+<p>When using this type of “wide” clock, user logic becomes simplified as well.
+This “simplified” user logic is easily illustrated with an example.  For this
+example, let’s suppose we wished to control 8 data wires using this type of
+divided clock signaling.  Let’s also assume, for the purposes of this
+illustration, that the source arrives via an AXI stream interface with signals
+<code class="language-plaintext highlighter-rouge">S_VALID</code> and <code class="language-plaintext highlighter-rouge">S_DATA[15:0]</code>, and a ready signal given by <code class="language-plaintext highlighter-rouge">S_READY</code>.</p>
+
+<p>We’ll start with the <code class="language-plaintext highlighter-rouge">wide_clock</code>, <code class="language-plaintext highlighter-rouge">new_edge</code>, and <code class="language-plaintext highlighter-rouge">half_edge</code> signals from
+the clock generator.  Note that, as we propagate these signals through our
+pipeline (below), we won’t send the <code class="language-plaintext highlighter-rouge">wide_clock</code> straight to the output pad,
+but instead we’ll use it along side our data processing pipeline.  This way,
+if the pipeline must stall (and it might need to), the pipeline can also stall
+the outgoing clock at the same time.</p>
+
+<p>Hence, we’ll create a one clock delayed version of this <code class="language-plaintext highlighter-rouge">wide_clock</code> that
+we can call <code class="language-plaintext highlighter-rouge">outgoing_clock</code>.  Further, a second signal, <code class="language-plaintext highlighter-rouge">active_clock</code>,
+can be used to keep track of whether or not we’ve committed to the current
+clock cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">src_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="n">outgoing_clock</span> <span class="o">&lt;=</span> <span class="mh">4'h0</span><span class="p">;</span>
+	<span class="n">active_clock</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">S_VALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_READY</span><span class="p">)</span> <span class="o">||</span> <span class="p">(</span><span class="n">new_edge</span> <span class="o">&amp;&amp;</span> <span class="n">second_edge</span><span class="p">))</span>
+<span class="k">begin</span>
+	<span class="c1">// We commit to this clock if either</span>
+	<span class="c1">// 1. We have new data and we are ready to consume this new data, *OR*</span>
+	<span class="c1">// 2. We're in SDR (not DDR) mode, and we've already committed</span>
+	<span class="c1">//	to a byte of data that we haven't (yet) sent.</span>
+	<span class="c1">// In both cases, we need to start a clock period.</span>
+	<span class="c1">//</span>
+	<span class="c1">// Note that S_READY implies new_edge</span>
+	<span class="c1">//</span>
+	<span class="n">outgoing_clock</span> <span class="o">&lt;=</span> <span class="n">wide_clock</span><span class="p">;</span>
+
+	<span class="c1">// The "active_clock" signal is used to let us know that we've committed</span>
+	<span class="c1">// to this clock cycle.  From now until the next new_edge, we must</span>
+	<span class="c1">// forward the wide_clock signal to the output.</span>
+	<span class="n">active_clock</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">new_edge</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="c1">// The clock generator is creating an edge that ... we're not prepared</span>
+	<span class="c1">// for or ready to handle.  There's just no data available, so ...</span>
+	<span class="c1">// let's stop the clock.</span>
+	<span class="n">outgoing_clock</span> <span class="o">&lt;=</span> <span class="mh">4'h0</span><span class="p">;</span>
+
+	<span class="c1">// In this case, we're not forwarding the clock, nor will we until</span>
+	<span class="c1">// the next clock period.</span>
+	<span class="n">active_clock</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">active_clock</span><span class="p">)</span>
+	<span class="c1">// If we've already committed to this clock cycle, then we'll need to</span>
+	<span class="c1">// ontinue it to its completion.</span>
+	<span class="n">outgoing_clock</span> <span class="o">&lt;=</span> <span class="n">wide_clock</span><span class="p">;</span></code></pre></figure>
+
+<p>Before we can get to the data, we need another key signal as well.  This is
+the <code class="language-plaintext highlighter-rouge">second_edge</code> signal that we used above.  Here’s why: our data is going to
+arrive, 16b at a time via AXI stream.  If we are in DDR mode, then we’ll
+consume 8b on each edge of this clock–and possibly all 16b at once.  However,
+if we are only in SDR mode, then we’ll need to consume the second 8b on the
+next clock edge.  Hence, we’re going to need a signal that I’m calling,
+<code class="language-plaintext highlighter-rouge">second_edge</code>, to tell us that we have 8b remaining of the 16b committed to us
+that didn’t get sent on the last clock tick.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">src_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">reset</span> <span class="o">&amp;&amp;</span> <span class="n">i_care_about_resets</span><span class="p">)</span>
+	<span class="n">second_edge</span>   <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_VALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_READY</span><span class="p">)</span>
+	<span class="c1">// In SDR, we just accepted 16b and output 8b.</span>
+	<span class="c1">// We need another new_edge to send the remaining 8b.</span>
+	<span class="c1">// Note that S_READY implies new_edge</span>
+	<span class="c1">//</span>
+	<span class="c1">// Also note that we only use this signal in SDR modes</span>
+	<span class="n">second_edge</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">ddrmode</span><span class="p">;</span>
+<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">new_edge</span><span class="p">)</span>
+	<span class="c1">// On any (other) new_edge, we can clear this signal</span>
+	<span class="n">second_edge</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>That leads us to the <code class="language-plaintext highlighter-rouge">outgoing_data</code>.  This is a 16 bit data signal, consisting
+of 8b, <code class="language-plaintext highlighter-rouge">outgoing_data[15:8]</code>, which will be output on the first half of the
+clock, and another 8b, <code class="language-plaintext highlighter-rouge">outgoing_data[7:0]</code>, which will be output on the second
+half of the clock.  A third signal, <code class="language-plaintext highlighter-rouge">next_byte</code>, will be used for keeping track
+of the second byte of data in the case where we don’t output both bytes in the
+same clock period.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">src_clk</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">reset</span> <span class="o">&amp;&amp;</span> <span class="n">i_care_about_resets</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="n">outgoing_data</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">next_byte</span>   <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">S_VALID</span> <span class="o">&amp;&amp;</span> <span class="n">S_READY</span><span class="p">)</span>
+<span class="k">begin</span>
+	<span class="c1">// new_edge is implied by S_READY</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">ddrmode</span> <span class="o">&amp;&amp;</span> <span class="n">half_edge</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="c1">// Set data for both halves of the clock</span>
+		<span class="c1">//    The first half in the MSBs</span>
+		<span class="n">outgoing_data</span><span class="p">[</span><span class="mi">15</span><span class="o">:</span><span class="mi">8</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">S_DATA</span><span class="p">[</span><span class="mi">15</span><span class="o">:</span> <span class="mi">8</span><span class="p">];</span>
+		<span class="c1">//    The second half in the LSBs</span>
+		<span class="n">outgoing_data</span><span class="p">[</span> <span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="n">S_DATA</span><span class="p">[</span> <span class="mi">7</span><span class="o">:</span> <span class="mi">0</span><span class="p">];</span>
+
+	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+		<span class="c1">// Set only the first half ot the data, but set it to be</span>
+		<span class="c1">// output twice.  We'll need to come back later for the second</span>
+		<span class="c1">// outgoing byte.</span>
+		<span class="n">outgoing_data</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="n">S_DATA</span><span class="p">[</span><span class="mi">15</span><span class="o">:</span><span class="mi">8</span><span class="p">]</span><span class="o">}}</span><span class="p">;</span>
+	<span class="k">end</span>
+
+	<span class="c1">// Keep track of that second byte, so we can come back to it later.</span>
+	<span class="n">next_byte</span> <span class="o">&lt;=</span> <span class="n">S_DATA</span><span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">];</span>
+<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">new_edge</span> <span class="o">||</span><span class="p">(</span><span class="n">ddrmode</span> <span class="o">&amp;&amp;</span> <span class="n">half_edge</span><span class="p">))</span>
+<span class="k">begin</span>
+	<span class="n">outgoing_data</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="n">next_byte</span><span class="o">}}</span><span class="p">;</span>
+<span class="k">end</span></code></pre></figure>
+
+<p>The final signal we need to define is the <code class="language-plaintext highlighter-rouge">S_READY</code> signal.  In this example,
+we can accept new data on any new clock edge, <em>unless</em> we have 8b remaining
+from the last clock edge that have yet to be output.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">assign</span>	<span class="n">S_READY</span> <span class="o">=</span> <span class="n">new_edge</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">second_edge</span><span class="p">;</span></code></pre></figure>
+
+<p>This approach provides us with a couple big advantages to our user logic over
+what we had before.</p>
+
+<p>First and foremost, <a href="/blog/2017/08/21/rules-for-newbies.html">all of our user logic now takes place on the same
+<code class="language-plaintext highlighter-rouge">src_clk</code></a>.
+We didn’t need any <a href="/blog/2017/10/20/cdc.html">CDCs</a>.
+AXI slave data, generated externally on this <code class="language-plaintext highlighter-rouge">src_clk</code> can now be used within
+our design on the same clock it was generated on.</p>
+
+<p>Second, did you notice how we were able to <a href="/blog/2021/10/26/clk-gate.html">simply gate the
+clock</a> when there was no
+data available?  If not, go back up and look again at the <code class="language-plaintext highlighter-rouge">active_clock</code> signal.</p>
+
+<p>Third, unlike the previous approach, we’ve now guaranteed that this clock
+signal won’t glitch.  That is, assuming the outgoing OSERDES won’t generate
+glitches from our glitchless data signals.  The previous clock generator,
+on the other hand, could well have had glitches between the clock and the
+data enabling it.</p>
+
+<p>Also look at how easy it was to do pipelined processing.  The clock was
+generated prior to our pipeline, and simply propagated through the pipeline.
+Although this pipeline only contains a single clock cycle, we could’ve easily
+extended the pipeline for multiple clock cycles if necessary by simply passing
+the <code class="language-plaintext highlighter-rouge">wide_clock</code>, <code class="language-plaintext highlighter-rouge">new_edge</code>, and <code class="language-plaintext highlighter-rouge">half_edge</code> signals through the
+pipeline–adjusting them if and where necessary along the way.</p>
+
+<p>As a result of this example, all IO pins can now be driven using a 4:1
+OSERDES.  (You could also use
+<a href="/blog/2020/08/22/oddr.html">ODDR</a>s for the data, if you
+trusted them to have the same timing relationship as the OSERDES.)</p>
+
+<p>What about frequency changes, or adjusting between the unshifted clock and
+the clock shifted by 90 degrees?  What about when the clock is off, and needs
+to be turned on?  All of these challenges and more now reside within the clock
+generator.</p>
+
+<h2 id="the-clock-generator">The Clock Generator</h2>
+
+<p>For discussion purposes, let’s take a look at the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+I used for <a href="https://github.com/ZipCPU/sdspi">my SDIO/eMMC controller</a>.  As
+mentioned above, this
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+has the particular requirement of being able to generate two outgoing clock
+periods per system clock cycle, but otherwise it’s a fairly straight forward
+example of the discussion above.</p>
+
+<p>From a configuration standpoint, there are a couple of configuration options.
+For example, I wasn’t certain that I’d always have an 8:1 SERDES available
+to me, nor do all digital environments necessarily offer 2:1
+<a href="/blog/2020/08/22/oddr.html">ODDR</a>
+components.  Therefore, we allow those to be adjusted.  Second, I want to know
+the maximum number of bits required in my clock divider.</p>
+
+<p>Still, these configuration parameters are fairly straightforward.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span>	<span class="n">sdckgen</span> <span class="p">#(</span>
+		<span class="c1">// OPT_SERDES is required for generating an 8:1 output.</span>
+		<span class="k">parameter</span> <span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">OPT_SERDES</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+
+		<span class="c1">// If no 8:1 SERDES are available, we can still create a clock</span>
+		<span class="c1">// using a 2:1 ODDR via OPT_DDR</span>
+		<span class="k">parameter</span> <span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">OPT_DDR</span> <span class="o">=</span> <span class="mi">0</span><span class="p">,</span>
+
+		<span class="c1">// To hit 100kHz from a 100MHz system clock, we'll need to</span>
+		<span class="c1">// divide our 100MHz clock by 4, and then by another 250.</span>
+		<span class="c1">// Hence, we'll need Lg(256)-2 bits.  (The first three speed</span>
+		<span class="c1">// options are special)</span>
+		<span class="k">localparam</span>	<span class="n">LGMAXDIV</span> <span class="o">=</span> <span class="mi">8</span>
+	<span class="p">)</span> <span class="p">(</span></code></pre></figure>
+
+<p>The <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+is primarily controlled via three signals.  The first tells us whether we want
+our clock offset by 90 degrees for DDR outputs or not.  The second controls
+the speed of the outgoing clock.  The final signal tells us we can shut the
+clock down.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="kt">input</span>	<span class="kt">wire</span>			<span class="n">i_cfg_clk90</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="n">LGMAXDIV</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_cfg_ckspd</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>			<span class="n">i_cfg_shutdown</span><span class="p">,</span></code></pre></figure>
+
+<p>When shut down, the wide clock output will be fixed at zero, as will both the
+<code class="language-plaintext highlighter-rouge">new_edge</code> and <code class="language-plaintext highlighter-rouge">half_edge</code> control signals.</p>
+
+<p>The shutdown signal is actually really useful at slow clock speeds.  Sure you
+could shut the clock down, as we did above, by just not forwarding it through
+the pipeline.  On the other hand, once the clock has been shut down, you’d like
+to be able to restart it on a dime.  The shutdown control signal to our
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+allows us to do that.  Once set, the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+takes the remainder of a clock cycle to shut down, and then stays ready to
+restart the clock at a moments notice.</p>
+
+<p>The outputs from this module are just about what you would expect.  You
+have the three signals we’ve already discussed.  In this case, <code class="language-plaintext highlighter-rouge">o_ckstb</code>
+is the <code class="language-plaintext highlighter-rouge">new_edge</code> signal we’ve mentioned, <code class="language-plaintext highlighter-rouge">o_hlfclk</code> is the
+<code class="language-plaintext highlighter-rouge">half_edge</code> signal, and <code class="language-plaintext highlighter-rouge">o_ckwide</code> is the <code class="language-plaintext highlighter-rouge">wide_clock</code> signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">//</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>			<span class="n">o_ckstb</span><span class="p">,</span>	<span class="c1">// new_edge</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>			<span class="n">o_hlfck</span><span class="p">,</span>	<span class="c1">// half_edge</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>	<span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>		<span class="n">o_ckwide</span><span class="p">,</span>	<span class="c1">// wide_clock</span>
+		<span class="kt">output</span>	<span class="kt">wire</span>			<span class="n">o_clk90</span><span class="p">,</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>	<span class="p">[</span><span class="n">LGMAXDIV</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">o_ckspd</span>
+	<span class="p">);</span></code></pre></figure>
+
+<p>The two new signals are <code class="language-plaintext highlighter-rouge">o_clk90</code> and <code class="language-plaintext highlighter-rouge">o_ckspd</code>.  These are feedback signals
+returned to the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdaxil.v">control module</a>,
+used to tell us when any frequency shift or phase shift operations are complete.</p>
+
+<p>These feedback signals solve an issue I was having in my <a href="https://github.com/ZipCPU/sdspi">eMMC
+controller</a>, where the clock would
+be at some crazy low frequency (100kHz or so), and I’d want to speed it up.
+Just setting the new clock speed wasn’t enough, since it might take a thousand
+clocks to finish a single cycle at the 100kHz clock speed.  However, <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/sw/emmcdrv.c#L1591-L1593">by
+checking these return signals via the register set, the software driver
+could then tell if any clock frequency change had fully taken
+effect</a>
+before going on to any next operation.</p>
+
+<p>The next logic block is part of a two process finite state machine.  The first
+process, shown below, is the combinatorial process.  The second will be
+the clocked logic.</p>
+
+<p>Personally, I’m not a big fan of two process state machines.  I’m just not.
+They often seem to me to be adding extra work and complexity.  However,
+two process state machines allow me to reference logic results even before
+the full logic path is complete.  They also allow me an ability to describe
+more complicated logic than the simple single process state machine, so
+a two process state machine it is.</p>
+
+<p>In this case, we are going to generate the next signal for the strobe,
+<code class="language-plaintext highlighter-rouge">nxt_stb</code>, the clock, <code class="language-plaintext highlighter-rouge">nxt_clk</code>, and the counter, <code class="language-plaintext highlighter-rouge">nxt_counter</code>.</p>
+
+<p>Of these signals, <code class="language-plaintext highlighter-rouge">nxt_clk</code> is the simplest to explain.  This signal indicates
+that we’re about to start a new clock cyle.  In many ways, this is the
+combinatorial version of what is to become the <code class="language-plaintext highlighter-rouge">new_edge</code> once latched.</p>
+
+<p>Clock cycles themselves come in four phases, just like the four bits of the
+wide clock we discussed before.  You can think of these phases as the <code class="language-plaintext highlighter-rouge">0110</code>
+of the fastest clock before.  The first bit, 0, is the first phase of the
+clock.  Our <code class="language-plaintext highlighter-rouge">new_edge</code> bit, <code class="language-plaintext highlighter-rouge">o_ckstb</code>, will only ever be true on this phase.
+The second bit, 1, is where the clock rises.  The third bit, 1 again, is
+the only phase where the <code class="language-plaintext highlighter-rouge">half_edge</code>, <code class="language-plaintext highlighter-rouge">o_hlfck</code>, will be set.  Finally, the
+clock will return to zero in the last phase.  If the clock is ever idle,
+it will idle in this first phase prior to delivering a <code class="language-plaintext highlighter-rouge">new_edge</code> signal.</p>
+
+<p>This background will help explain how I’ve divided up the counter.  There are
+<code class="language-plaintext highlighter-rouge">NCTR</code> bits to the counter.  Of those bits, the top two control the phase
+bits we just described, whereas the others are the clock divider.  The
+<code class="language-plaintext highlighter-rouge">nxt_stb</code> signal, mentioned above and below, is simply a signal that these top
+two phase-control bits are about to change.</p>
+
+<p>With that as background, let’s take a look at how this works.</p>
+
+<p>In general, the first step of any combinatorial block is to set all the
+values that will be determined within the block.  This is a good practice
+to get into to avoid accidentally generating any latches.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">nxt_stb</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">;</span>
+		<span class="n">nxt_clk</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">;</span>
+		<span class="n">nxt_counter</span> <span class="o">=</span> <span class="n">counter</span><span class="p">;</span></code></pre></figure>
+
+<p>From here, we subtract one from the bottom (non-phase) bits of our counter
+on every cycle.  When these bits are zero, subtracting one will cause the
+counter to overflow and set our <code class="language-plaintext highlighter-rouge">nxt_stb</code> signal, so we can know when to
+adjust the phase bits.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="o">{</span> <span class="n">nxt_stb</span><span class="p">,</span> <span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">}</span> <span class="o">=</span> <span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">;</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="n">nxt_stb</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// Advance the top two bits</span>
+			<span class="o">{</span> <span class="n">nxt_clk</span><span class="p">,</span> <span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">}</span>
+						<span class="o">=</span> <span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">+</span><span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>If our clock speed is set to 0 (wide clock of either <code class="language-plaintext highlighter-rouge">01100110</code> or <code class="language-plaintext highlighter-rouge">00110011</code>)
+or 1 (wide clock of <code class="language-plaintext highlighter-rouge">00111100</code> or <code class="language-plaintext highlighter-rouge">00001111</code>), then we are always generating
+a new clock cycle.  In this case, we’ll hold the counter at zero and (roughly)
+ignore the phase.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">if</span> <span class="p">((</span><span class="n">OPT_DDR</span> <span class="o">||</span> <span class="n">OPT_SERDES</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">ckspd</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="n">nxt_clk</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+				<span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Likewise, if the clock speed is equal to two, the wide clock will either
+alternate between <code class="language-plaintext highlighter-rouge">0000_0000</code> and <code class="language-plaintext highlighter-rouge">1111_1111</code>, or <code class="language-plaintext highlighter-rouge">0000_1111</code> and <code class="language-plaintext highlighter-rouge">1111_0000</code>,
+and so our phase will alternate, but otherwise everything else can be kept
+to zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">ckspd</span> <span class="o">&lt;=</span> <span class="mi">2</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="n">nxt_clk</span> <span class="o">=</span> <span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">];</span>
+				<span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Finally, in the more general case, we’ll just set the bottom bits to count
+down from <code class="language-plaintext highlighter-rouge">ckspd-3</code> to zero.  Yes, this is “just” a counter, but the maximum
+value is offset by three for the three special speeds we just discussed above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">end</span> <span class="k">else</span>
+				<span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="n">ckspd</span><span class="o">-</span><span class="mi">3</span><span class="p">;</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>You may have noticed that we’ve only adjusted the bottom bits of this
+counter–the bits that count down.  We’ve done nothing to update the phase
+bits at the top of this “counter”, so let’s handle those next.  (Spoiler alert:
+these MSBs don’t act like counter bits in this implementation.)</p>
+
+<p>Of course, for the highest frequencies, the counter will never change.  It
+sits at zero, with a permanent next phase of 3.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">nxt_clk</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">if</span> <span class="p">((</span><span class="n">OPT_DDR</span> <span class="o">||</span> <span class="n">OPT_SERDES</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">new_ckspd</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span>
+				<span class="n">nxt_counter</span> <span class="o">=</span> <span class="o">{</span><span class="mb">2'b11</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">;</span></code></pre></figure>
+
+<p>When the speed setting is 2, we allow the top two bits to toggle back and
+forth.  If <code class="language-plaintext highlighter-rouge">nxt_clk</code> is set, we need to reset these bits only.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">new_ckspd</span> <span class="o">&lt;=</span> <span class="mi">2</span><span class="p">)</span>
+				<span class="n">nxt_counter</span> <span class="o">=</span> <span class="o">{</span> <span class="mb">2'b01</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">;</span></code></pre></figure>
+
+<p>Finally, for the general case, we return the phase to zero and reset the
+clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">			<span class="k">else</span> <span class="k">begin</span>
+				<span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+			<span class="k">end</span>
+		<span class="k">end</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This is only the first half of this “two process” FSM.  The second half,
+with respect to the counter, is just about as simple.  Perhaps it is even more
+so, given that we’ve done all of the hard work above.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">)</span>
+			<span class="n">counter</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_DDR</span><span class="p">)</span>
+			<span class="n">counter</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">2'b11</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">;</span>
+		<span class="k">else</span>
+			<span class="n">counter</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">2'b01</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">;</span>
+	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">nxt_clk</span> <span class="o">&amp;&amp;</span> <span class="n">i_cfg_shutdown</span><span class="p">)</span>
+		<span class="n">counter</span> <span class="o">&lt;=</span> <span class="o">{</span> <span class="mb">2'b11</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">;</span>
+	<span class="k">else</span>
+		<span class="n">counter</span> <span class="o">&lt;=</span> <span class="n">nxt_counter</span><span class="p">;</span></code></pre></figure>
+
+<p>The big thing to notice here is the <code class="language-plaintext highlighter-rouge">nxt_clk &amp;&amp; i_cfg_shutdown</code>.  Remember, if
+the user ever asserts <code class="language-plaintext highlighter-rouge">i_cfg_shutdown</code>, we need to wait for clock cycle to
+complete before shutting it down.  Hence, we wait for the <code class="language-plaintext highlighter-rouge">nxt_clk</code> signal
+before acting.  Then, once set, we leave the <code class="language-plaintext highlighter-rouge">counter</code> in a state where it
+will perpetually set <code class="language-plaintext highlighter-rouge">nxt_clk</code>.  This way, the moment <code class="language-plaintext highlighter-rouge">i_cfg_shutdown</code> is
+released, we’ll be back to generating a clock again.</p>
+
+<p>To explain this a bit better, imagine the clock generator is producing
+an output clock from ten periods of the source/system clock: five system clocks
+of <code class="language-plaintext highlighter-rouge">0000_000</code>, followed by five more clocks of <code class="language-plaintext highlighter-rouge">1111_1111</code>.  Imagine
+again that we’ve had several periods of these 10 clock cycles before the
+user asserts the clock shutdown signal.  We then wait another 10 cycles for the
+clock to fully shut down.  Now, if the user drops the shutdown signal after a
+further 3 cycles, we could either wait another 7 cycles (to complete the 10),
+or start immediately.  Here, we try to arrange to start a stopped clock
+immediately without violating any of our clocking rules.</p>
+
+<p>The next signal, <code class="language-plaintext highlighter-rouge">clk90</code>, controls whether or not we’re generating an
+clock offset from <code class="language-plaintext highlighter-rouge">new_edge</code>, <code class="language-plaintext highlighter-rouge">o_ckstb</code>, by 90 degrees or not.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">clk90</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span>
+		<span class="n">clk90</span> <span class="o">&lt;=</span> <span class="n">w_clk90</span><span class="p">;</span>
+
+	<span class="k">assign</span>	<span class="n">o_clk90</span> <span class="o">=</span> <span class="n">clk90</span><span class="p">;</span></code></pre></figure>
+
+<p>This logic isn’t very interesting yet, since we’ve basically split a two
+process FSM.  It will become more so when we get to <code class="language-plaintext highlighter-rouge">w_clk90</code>, and the first
+process of the FSM, below.  The key is, this logic must determine what the
+current 90 degree offset setting is.  Hence, when you look at the outgoing
+wide clock, this signal must match it.</p>
+
+<p>How about the clock speed?  In this case, we go through some error checking.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">ckspd</span> <span class="o">=</span> <span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">)</span> <span class="o">?</span> <span class="mi">8'd0</span> <span class="o">:</span> <span class="p">(</span><span class="n">OPT_DDR</span><span class="p">)</span> <span class="o">?</span> <span class="mi">8'd1</span> <span class="o">:</span> <span class="mi">8'd2</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">ckspd</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">)</span> <span class="o">?</span> <span class="mi">8'd0</span> <span class="o">:</span> <span class="p">(</span><span class="n">OPT_DDR</span><span class="p">)</span> <span class="o">?</span> <span class="mi">8'd1</span> <span class="o">:</span> <span class="mi">8'd2</span><span class="p">;</span>
+	<span class="k">else</span>
+		<span class="n">ckspd</span> <span class="o">&lt;=</span> <span class="n">w_ckspd</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">)</span>
+		<span class="n">new_ckspd</span> <span class="o">=</span> <span class="n">i_cfg_ckspd</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_DDR</span> <span class="o">&amp;&amp;</span> <span class="n">i_cfg_ckspd</span> <span class="o">&lt;=</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_cfg_clk90</span><span class="p">)</span>
+		<span class="n">new_ckspd</span> <span class="o">=</span> <span class="mi">1</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_cfg_ckspd</span> <span class="o">&lt;=</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">OPT_DDR</span> <span class="o">||</span> <span class="o">!</span><span class="n">i_cfg_clk90</span><span class="p">))</span>
+		<span class="n">new_ckspd</span> <span class="o">=</span> <span class="mi">2</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_cfg_ckspd</span> <span class="o">&lt;=</span> <span class="mi">3</span><span class="p">)</span>
+		<span class="n">new_ckspd</span> <span class="o">=</span> <span class="mi">3</span><span class="p">;</span>
+	<span class="k">else</span>
+		<span class="n">new_ckspd</span> <span class="o">=</span> <span class="n">i_cfg_ckspd</span><span class="p">;</span>
+
+	<span class="k">assign</span>	<span class="n">w_clk90</span> <span class="o">=</span> <span class="p">(</span><span class="n">nxt_clk</span><span class="p">)</span> <span class="o">?</span> <span class="n">i_cfg_clk90</span> <span class="o">:</span> <span class="n">clk90</span><span class="p">;</span>
+	<span class="k">assign</span>	<span class="n">w_ckspd</span> <span class="o">=</span> <span class="p">(</span><span class="n">nxt_clk</span><span class="p">)</span> <span class="o">?</span> <span class="n">new_ckspd</span>   <span class="o">:</span> <span class="n">ckspd</span><span class="p">;</span></code></pre></figure>
+
+<p>The error checking is here to guarantee that a clock speed of 0 is only used
+when <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> is set.  Likewise, a clock speed of 1 may be used in
+<a href="/blog/2020/08/22/oddr.html">ODDR</a>
+mode (wide clock of <code class="language-plaintext highlighter-rouge">00001111</code>), but not when the <code class="language-plaintext highlighter-rouge">clk90</code> configuration
+is set (calling for a wide clock of <code class="language-plaintext highlighter-rouge">0011_1100</code> which is too complex for an
+<a href="/blog/2020/08/22/oddr.html">ODDR</a> output module to produce).
+This continues for a clock speed of two which is fine for a non-offset clock
+(wide clock of <code class="language-plaintext highlighter-rouge">0000_0000</code> followed by <code class="language-plaintext highlighter-rouge">1111_1111</code>), but not for an offset
+clock (wide clock of <code class="language-plaintext highlighter-rouge">0000_1111</code> followed by <code class="language-plaintext highlighter-rouge">1111_0000</code> unless the <code class="language-plaintext highlighter-rouge">OPT_DDR</code>
+option is set.</p>
+
+<p>Finally, the two values <code class="language-plaintext highlighter-rouge">w_clk90</code> and <code class="language-plaintext highlighter-rouge">w_clkspd</code> are used to tell us what
+values our registered logic should use when generating a clock.  As such,
+they are either the registered values, or (when we’re about to start a new
+cycle) the new values.</p>
+
+<p>With all this as background, we can now dig into the core of this
+logic–generating the three key signals we will be outputting.</p>
+
+<p>On reset, these signals will simply be set to indicate a clock of the
+fastest rate, ready to go, but otherewise one that is idle (<code class="language-plaintext highlighter-rouge">o_ckwide=0</code>).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">o_ckstb</span>  <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">o_hlfck</span>  <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">initial</span>	<span class="n">o_ckwide</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_ckstb</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">o_hlfck</span>  <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span></code></pre></figure>
+
+<p>Next, if we want to shutdown the clock, we can only do so on <code class="language-plaintext highlighter-rouge">nxt_clk</code>.
+When shutdown, the wide clock will be zero and the new edge signals willl
+all be suppressed.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">nxt_clk</span> <span class="o">&amp;&amp;</span> <span class="n">i_cfg_shutdown</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_ckstb</span>  <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+		<span class="n">o_hlfck</span>  <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+		<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="mh">8'h0</span><span class="p">;</span></code></pre></figure>
+
+<p>As mentioned above, the key here is that the clock can suddenly start if
+the <code class="language-plaintext highlighter-rouge">i_cfg_shutdown</code> signal is released.  Using this logic, it does not need
+to remain phase coherent with whatever phase the clock had prior to being
+shutdown.</p>
+
+<p>Moving on to our highest speed clock, we simply set that according to
+the 90 degree clock configuration.  In general, this speed will only
+ever generate one of two values: <code class="language-plaintext highlighter-rouge">01100110</code> or <code class="language-plaintext highlighter-rouge">00110011</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SERDES</span> <span class="o">&amp;&amp;</span> <span class="n">w_ckspd</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_ckstb</span>  <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">o_hlfck</span>  <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span>
+		<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">i_cfg_clk90</span><span class="p">)</span> <span class="o">?</span> <span class="mh">8'h66</span> <span class="o">:</span> <span class="mh">8'h33</span><span class="p">;</span></code></pre></figure>
+
+<p>When running from a 100MHz system (<code class="language-plaintext highlighter-rouge">src_clk</code>) clock, this plus the OSERDES
+will generates a 200MHz clock signal to the external device.</p>
+
+<p>One might argue that the <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> here is really redundant.  There should
+be enough logic elsewhere to keep <code class="language-plaintext highlighter-rouge">w_ckspd</code> at a non-zero value if <code class="language-plaintext highlighter-rouge">OPT_SERDES</code>
+is not set.  Why use it?</p>
+
+<p>It’s here specifically to provide a strong hint to the synthesis tool
+regarding logic that can be cleaned up if <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> is not set.  This block
+is complicated enough as it is, so adding it in should simplify our logic.</p>
+
+<p>The problem with putting this value here, and generating a clock module based
+upon parameters such as <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> and <code class="language-plaintext highlighter-rouge">OPT_DDR</code>, is that I now need to
+formally verify the IP under several conditions before I can know if it works.
+This applies to simulation as well.  It is now no longer sufficient to run
+the simulation tool once when you do something like this.  It must now be run
+many times under different conditions.  As an engineer, I need to be aware
+of costs like this whenever I invoke logic like this.</p>
+
+<p>In this case, I wanted to support multiple types of FPGAs (and/or ASICs), and
+so this was the logic I chose.</p>
+
+<p>Our next speed, <code class="language-plaintext highlighter-rouge">ckspd=1</code>, has almost the same logic.  As before, <code class="language-plaintext highlighter-rouge">o_ckstb</code>
+and <code class="language-plaintext highlighter-rouge">o_hlfck</code> are both set continually in this mode.  In this case, our wide
+clock output will either be <code class="language-plaintext highlighter-rouge">0011_1100</code> or <code class="language-plaintext highlighter-rouge">0000_1111</code> depending on whether
+or not we need a 90 degree offset clock for DDR.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">((</span><span class="n">OPT_SERDES</span> <span class="o">||</span> <span class="n">OPT_DDR</span><span class="p">)</span> <span class="o">&amp;&amp;</span> <span class="n">w_ckspd</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">o_ckstb</span>  <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="n">o_hlfck</span>  <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">OPT_SERDES</span> <span class="o">&amp;&amp;</span> <span class="n">w_clk90</span><span class="p">)</span> <span class="o">?</span> <span class="mh">8'h3c</span> <span class="o">:</span> <span class="mh">8'h0f</span><span class="p">;</span></code></pre></figure>
+
+<p>When running from a 100MHz system (<code class="language-plaintext highlighter-rouge">src_clk</code>) clock, this generates a 100MHz
+clock as well.</p>
+
+<p>You may note that there’s no real two-cycle output signal.  The signaling,
+with <code class="language-plaintext highlighter-rouge">o_ckstb</code> and <code class="language-plaintext highlighter-rouge">o_hlfck</code>, allows us to describe a new clock together
+with or separate from the second half of that clock period, but offers nothing
+for describing two clock cycles in the same source clock period.  This is
+just a limitation in our chosen signaling.</p>
+
+<p>The solution to this problem is specific to the <a href="https://github.com/ZipCPU/sdspi">eMMC
+controller</a> that we’ve drawn <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">our
+example</a>
+from.  In this case, I look at both the DDR setting and the
+clock speed before generating any transmit data.  From this, I determine if
+I should be sending one byte, two bytes, or four bytes of data per clock.
+The actual logic is more complex, due to the fact that the eMMC interface
+may run in 1b, 4b, or 8b modes, but that’s the story of <a href="https://github.com/ZipCPU/sdspi/blob/master/rtl/sdtxframe.v">another piece of logic,
+found outside of the clock controller</a>.</p>
+
+<p>As with clock speeds of either 0 (200MHz) or 1 (100MHz), the clock speed of 2
+(50MHz) is also handled specially.  This is the speed that alternates between
+two outputs, generating either <code class="language-plaintext highlighter-rouge">00001111</code> followed by <code class="language-plaintext highlighter-rouge">11110000</code> in the offset
+mode (<code class="language-plaintext highlighter-rouge">o_clk90=1</code>), or simply <code class="language-plaintext highlighter-rouge">00000000</code> followed by <code class="language-plaintext highlighter-rouge">11111111</code> in the normal
+mode.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">w_ckspd</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="o">{</span> <span class="n">o_ckstb</span><span class="p">,</span> <span class="n">o_hlfck</span> <span class="o">}</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="o">!</span><span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span> <span class="o">?</span> <span class="mb">2'b10</span> <span class="o">:</span> <span class="mb">2'b01</span><span class="p">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">w_clk90</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">OPT_SERDES</span> <span class="o">||</span> <span class="n">OPT_DDR</span><span class="p">))</span>
+			<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="o">!</span><span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span> <span class="o">?</span> <span class="mh">8'h0f</span> <span class="o">:</span> <span class="mh">8'hf0</span><span class="p">;</span>
+		<span class="k">else</span>
+			<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="o">!</span><span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span> <span class="o">?</span> <span class="mh">8'h00</span> <span class="o">:</span> <span class="mh">8'hff</span><span class="p">;</span></code></pre></figure>
+
+<p>When running from a 100MHz system clock (<code class="language-plaintext highlighter-rouge">src_clk</code> above), this generates
+a 50MHz output clock signal.  This might be the “fastest” speed you would
+normally think of for an integer clock “divider”.  As you can see, though,
+we’ve already generated outgoing 200MHz and 100MHz clocks above.</p>
+
+<p>This brings us to the general case–a divided clock running at less than half
+our source clock rate.  Here, we’ve already done all of the hard work for
+<code class="language-plaintext highlighter-rouge">nxt_clk</code>, so the outgoing next edge signal <code class="language-plaintext highlighter-rouge">o_ckstb</code> is done.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+		<span class="n">o_ckstb</span> <span class="o">&lt;=</span> <span class="n">nxt_clk</span><span class="p">;</span></code></pre></figure>
+
+<p>The half edge signal is determined by the counter.  The lower bits must be zero,
+indicating a new phase, and the top two bits indicate the new phase will be
+the third of four–so just entering halfway.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="n">o_hlfck</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">counter</span> <span class="o">==</span> <span class="o">{</span><span class="mb">2'b01</span><span class="p">,</span> <span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">);</span></code></pre></figure>
+
+<p>The wide clock is determined by the top two phase bits of the next counter.
+It’s either equal to the most significant bit, when there’s no clock offset,
+or the exclusive OR of the top two bits when there is.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">w_clk90</span><span class="p">)</span>
+			<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span><span class="o">{</span><span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+						<span class="o">^</span> <span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span><span class="o">}}</span><span class="p">;</span>
+		<span class="k">else</span>
+			<span class="n">o_ckwide</span> <span class="o">&lt;=</span> <span class="o">{</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span><span class="o">{</span><span class="n">nxt_counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">}}</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>This leaves us with only one final signal: the current clock speed.  In this
+case, all the work has been done above, and nothing more need be done with it.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">o_ckspd</span> <span class="o">&lt;=</span> <span class="n">w_ckspd</span><span class="p">;</span></code></pre></figure>
+
+<p>That’s the basic idea.  In summary:</p>
+
+<ul>
+  <li>
+    <p>There are four phases to the outgoing clock, either <code class="language-plaintext highlighter-rouge">0011</code> or <code class="language-plaintext highlighter-rouge">0110</code>.</p>
+  </li>
+  <li>
+    <p>A counter generally helps us know when to transition from one phase to the
+next.</p>
+  </li>
+  <li>
+    <p>High speeds get special attention.</p>
+  </li>
+  <li>
+    <p>Data changes on the outgoing next edge signal, <code class="language-plaintext highlighter-rouge">o_ckstb</code>.</p>
+
+    <p>In DDR modes, data can also change on the outgoing <code class="language-plaintext highlighter-rouge">o_hlfstb</code> signal.</p>
+  </li>
+</ul>
+
+<p>Key features of this approach include:</p>
+
+<ul>
+  <li>
+    <p>There’s no need for any <a href="/blog/2017/10/20/cdc.html">clock domain
+crossings</a> in the outgoing data
+path.  All outgoing signals are handled in the source clock domain.</p>
+  </li>
+  <li>
+    <p>The clock may be gated at will, and (re)started quickly if necessary.</p>
+  </li>
+  <li>
+    <p>Frequency changes are controlled, and will take place between clock periods.</p>
+  </li>
+  <li>
+    <p>Although the clock is generated in logic, it doesn’t trigger any logic.
+That is, nowhere in the design will anything in the outgoing logic path
+depend upon either <code class="language-plaintext highlighter-rouge">@(posedge dev_clk)</code> or <code class="language-plaintext highlighter-rouge">@(negedge dev_clk)</code>.  Instead,
+all of the logic is triggered off of the <code class="language-plaintext highlighter-rouge">o_ckstb</code> or <code class="language-plaintext highlighter-rouge">o_hlfstb</code> signals
+while still running on the same <code class="language-plaintext highlighter-rouge">src_clk</code> we started from.</p>
+  </li>
+</ul>
+
+<p>But … does it work?</p>
+
+<h2 id="simulation-testing">Simulation testing</h2>
+
+<p>Just to get this clock generator off the ground, I built a <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/verilog/tb_sdckgen.v">quick simulation
+test bench</a>.  You can
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/verilog/tb_sdckgen.v">find it here</a>, and we’ll walk through it quickly.</p>
+
+<p>The first step was pretty boiler plate.  I simply started a VCD trace, placed
+the design into reset, and generated a 100MHz clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="k">begin</span>
+		<span class="p">$</span><span class="nb">dumpfile</span><span class="p">(</span><span class="s">"tb_sdckgen.vcd"</span><span class="p">);</span>
+		<span class="p">$</span><span class="nb">dumpvars</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="n">tb_sdckgen</span><span class="p">);</span>
+		<span class="n">reset</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="p">;</span>
+		<span class="n">clk</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+		<span class="k">forever</span>
+			<span class="p">#</span><span class="mi">5</span> <span class="n">clk</span> <span class="o">=</span> <span class="o">!</span><span class="n">clk</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>For the second step, I wanted to place the design in a variety of
+configurations to see how it would work in each.  I chose to leave it in each
+configuration for five clock cycles before moving to the next.  I then defined
+a simple task, <code class="language-plaintext highlighter-rouge">capture_beats</code>, that I could call to wait out five cycles of
+a given clock setting before moving on.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">task</span>	<span class="n">capture_beats</span><span class="p">;</span>
+	<span class="k">begin</span>
+		<span class="kt">repeat</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">wait</span><span class="p">(</span><span class="n">w_ckstb</span><span class="p">);</span>
+			<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">);</span>
+		<span class="k">end</span>
+	<span class="k">end</span> <span class="k">endtask</span></code></pre></figure>
+
+<p>The last step, then, was to walk through one clock setting after another
+to see what would happen.</p>
+
+<p>I started by taking the design out of reset, and configuring the inputs for
+a (rough) 100kHz clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span> <span class="k">begin</span>
+		<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h0fc</span><span class="p">;</span>
+		<span class="kt">repeat</span> <span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+			<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="n">reset</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+
+		<span class="c1">// 100kHz (10us)</span>
+		<span class="n">capture_beats</span><span class="p">;</span></code></pre></figure>
+
+<p>You can pretty well read the comments below to see the configurations I checked.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="c1">// 200 kHz (5us)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h07f</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">// 400 kHz (2.52us)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h041</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">//   1MHz (1us)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h01b</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">//   5MHz (200ns)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h007</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">//  12MHz (80ns)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h004</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">//  25MHz (40ns)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h003</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">//  50MHz (20ns)</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h002</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">// 100MHz</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h001</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">// 200MHz</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h000</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+
+		<span class="c1">//  25MHz, CLK90</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h103</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">//  25MHz, CLK90</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h102</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">// 100MHz, CLK90</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h101</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="c1">// 200MHz, CLK90</span>
+		<span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">clk</span><span class="p">)</span>
+			<span class="o">{</span> <span class="n">cfg_shutdown</span><span class="p">,</span> <span class="n">cfg_clk90</span><span class="p">,</span> <span class="n">cfg_ckspd</span> <span class="o">}</span> <span class="o">=</span> <span class="mh">10'h100</span><span class="p">;</span>
+		<span class="n">capture_beats</span><span class="p">;</span>
+
+		<span class="p">$</span><span class="nb">finish</span><span class="p">;</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>These are basically all of the configurations I wanted to use the design with.
+Using the generated trace, I can visually see all of the signals within this
+design working as intended.  Further, unlike the formal verification we’ll
+discuss next, I can actually see <em>many</em> clocks of this design.  This allows
+me to verify, for example, that the 100kHz, 200kHz, and 400kHz clock divisions
+work as designed.</p>
+
+<p>Sadly, this test is woefully inadequate for any real or professional purpose.</p>
+
+<p>The biggest problem with <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/verilog/tb_sdckgen.v">this simple test bench
+script</a>
+is that it’s not self checking.  I can run it, but the only way to know if the
+design did the right thing or not is to pull up a viewer and check the
+<a href="/blog/2017/07/31/vcd.html">VCD file</a>.
+Sure, this might get me off the ground, but it is <em>horrible</em> for maintenance.
+How should I know, for example, if a small and otherwise minor change breaks
+things?</p>
+
+<p>The second problem with <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/verilog/tb_sdckgen.v">this test
+bench</a>
+is that it does nothing to try out unreasonable input signals.  How shall I
+know, for example, that this design will never go faster than the fastest
+allowed frequency?  That is, it should only ever be able to go as fast as the
+current speed, or the newly commanded speed.</p>
+
+<p>Perhaps some of you may remember my comments on twitter about getting excited
+to try this new design as a whole (not just the clock generator) on an FPGA,
+only to be mildly (not) surprised that it didn’t work before all the formal
+proofs were finished?  (I couldn’t find them when I looked today …)  Yeah,
+there’s always a surprise you aren’t expecting that takes place when you work
+with real hardware.</p>
+
+<p>So, while <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/verilog/tb_sdckgen.v">this</a>
+looks nice, and while the resulting traces look really pretty,
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/verilog/tb_sdckgen.v">this test bench</a>
+is highly insufficient.</p>
+
+<p>Let’s move onto something more substantial.</p>
+
+<h2 id="formal-properties">Formal Properties</h2>
+
+<p>I like to think of <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">this clock
+module</a>
+as a basic clock divider.  It’s not much more than a glorified counter,
+together with a 4-state phase machine.  Yeah, sure, you can run through all 4
+states in one clock cycle, but it’s still not really all that much more.
+Formally verifying <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">this clock
+generator</a>
+should therefore be pretty simple.</p>
+
+<p>One of the big keys to this proof is <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">the interface property
+set</a>.</p>
+
+<p><a href="https://zipcpu.com/formal/2020/06/12/four-keys.html">I’ve discussed interface properties
+before</a>.  The idea born
+from the fact that one component, such as <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">this clock generator</a>,
+is going to generate signals that another component, in this case <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">the transmit
+data generator</a>,
+will use.  Further, these two proofs will be independent of each other.  Hence,
+anything the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">transmitter’s</a>
+proof needs to assume should then be asserted in the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+and vice versa.  That’s the purpose of the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">property set</a>.
+The <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">property set</a>.
+also greatly simplifies the assertions found within the design itself.</p>
+
+<p>Still, let’s look over the design assertions for now.  We’ll come back to
+the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">property set</a> in the next section.</p>
+
+<p>We’ll start with the <code class="language-plaintext highlighter-rouge">f_en</code> signal.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_en</span> <span class="o">=</span> <span class="mb">1'b1</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">f_en</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">nxt_clk</span><span class="p">)</span>
+		<span class="n">f_en</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">i_cfg_shutdown</span><span class="p">;</span></code></pre></figure>
+
+<p>This just captures whether the clock should be shut down during the current
+cycle or not.  It’s that simple.</p>
+
+<p>Many engineers just starting out with formal verification struggle to see
+past the assertions and the assumptions within the language to realize they
+can still use regular verilog when generating formal properties.  In this
+case, <code class="language-plaintext highlighter-rouge">f_en</code> is nothing more than a register which we are going to use in our
+formal proof.  Nothing prevents you from doing this.  Indeed, you are more
+than able to write <a href="https://zipcpu.com/formal/2019/02/21/txuart.html">more complicated state
+machines</a>
+when generating formal properties as well.</p>
+
+<p>Just make sure that your new logic doesn’t make the same expresesions as the
+logic you are verifying, or you might convince yourself something works when
+it doesn’t.  When teaching, I like to explain this way: the best way to
+verify that <code class="language-plaintext highlighter-rouge">A</code> divided by <code class="language-plaintext highlighter-rouge">B</code> is <code class="language-plaintext highlighter-rouge">C</code> is to multiply <code class="language-plaintext highlighter-rouge">C</code> and <code class="language-plaintext highlighter-rouge">B</code> together.
+If the result of the multiply is <code class="language-plaintext highlighter-rouge">A</code>, then you’ve verified your result.  Why
+does this work?  Because you use different logic paths in your brain for
+division than you do for multiplication.  Hence, if you make a mistake in
+dividing, you aren’t likely to make the same mistake when multiplying.</p>
+
+<p>The same is true of formal methods.  You can use logic in formal methods, just
+like you do in your design, you just don’t want to use the same logic lest
+your mind falsely convinces you its right when it isn’t.  This is sort of
+like having one witness to a murder called onto the stand twice under the
+same name.</p>
+
+<p>Anyway, let’s move on.</p>
+
+<p>The next step is to instantiate a copy of <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">the clock interface
+properties</a>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="n">fclk</span> <span class="p">#(</span>
+		<span class="p">.</span><span class="n">OPT_SERDES</span><span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">OPT_DDR</span><span class="p">(</span><span class="n">OPT_DDR</span><span class="p">)</span>
+	<span class="p">)</span> <span class="n">u_ckprop</span> <span class="p">(</span>
+		<span class="p">.</span><span class="n">i_clk</span><span class="p">(</span><span class="n">i_clk</span><span class="p">),</span> <span class="p">.</span><span class="n">i_reset</span><span class="p">(</span><span class="n">i_reset</span><span class="p">),</span>
+		<span class="c1">//</span>
+		<span class="p">.</span><span class="n">i_en</span><span class="p">(</span><span class="n">f_en</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_ckspd</span><span class="p">(</span><span class="n">o_ckspd</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_clk90</span><span class="p">(</span><span class="n">clk90</span><span class="p">),</span>
+		<span class="c1">//</span>
+		<span class="p">.</span><span class="n">i_ckstb</span><span class="p">(</span><span class="n">o_ckstb</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_hlfck</span><span class="p">(</span><span class="n">o_hlfck</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">i_ckwide</span><span class="p">(</span><span class="n">o_ckwide</span><span class="p">),</span>
+		<span class="c1">//</span>
+		<span class="p">.</span><span class="n">f_pending_reset</span><span class="p">(</span><span class="n">f_pending_reset</span><span class="p">),</span>
+		<span class="p">.</span><span class="n">f_pending_half</span><span class="p">(</span><span class="n">f_pending_half</span><span class="p">)</span>
+	<span class="p">);</span></code></pre></figure>
+
+<p>See how simply that was?</p>
+
+<p>In addition to the assertions within <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">this property
+set</a>,
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">the property set</a>
+provides two output signals that we can use to connect the state of our
+design to the internal state of <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">the property
+set</a>.
+These signals are:</p>
+
+<ul>
+  <li>
+    <p><code class="language-plaintext highlighter-rouge">f_pending_reset</code></p>
+
+    <p>This otherwise annoying signal is required for us to be able to handle
+the clock anomalies between reset and the first clock strobe.  This signal is
+set on a reset, and released once the clock gets started.</p>
+  </li>
+  <li>
+    <p><code class="language-plaintext highlighter-rouge">f_pending_half</code></p>
+
+    <p>This signal is simpler.  It simply means that we’ve seen the <code class="language-plaintext highlighter-rouge">new_edge</code>
+(<code class="language-plaintext highlighter-rouge">o_ckstb</code>) and not the <code class="language-plaintext highlighter-rouge">half_edge</code> herein called <code class="language-plaintext highlighter-rouge">o_hlfck</code>.  If
+<code class="language-plaintext highlighter-rouge">f_pending_half</code> is true, then the clock must generate <code class="language-plaintext highlighter-rouge">o_hlfck</code> before it
+can generate <code class="language-plaintext highlighter-rouge">o_ckstb</code>.</p>
+  </li>
+</ul>
+
+<p>With these signals, we can express things like this:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">o_hlfck</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">f_pending_reset</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">f_pending_half</span> <span class="o">==</span> <span class="p">(</span><span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mb">2'b10</span><span class="p">));</span></code></pre></figure>
+
+<p>This helps us through long periods of time with neither <code class="language-plaintext highlighter-rouge">o_hlfck</code> or <code class="language-plaintext highlighter-rouge">o_ckstb</code>.
+During this time, <code class="language-plaintext highlighter-rouge">f_pending_half</code> should be equivalent to the top two bits
+of our counter being either <code class="language-plaintext highlighter-rouge">2'b00</code> or <code class="language-plaintext highlighter-rouge">2'b01</code>.</p>
+
+<p>Let’s look at some other assertions.</p>
+
+<p>For example, if we shut the clock down, then we shouldn’t get any more new
+edges, <code class="language-plaintext highlighter-rouge">o_ckstb</code>:</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">($</span><span class="nb">past</span><span class="p">(</span><span class="o">!</span><span class="n">i_reset</span> <span class="o">&amp;&amp;</span> <span class="n">i_cfg_shutdown</span><span class="p">))</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">o_ckstb</span><span class="p">);</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>Now we can look at some of the specific options.  For example, the clock
+speed should only be zero (200MHz) if <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> is set.  While set to zero,
+either <code class="language-plaintext highlighter-rouge">o_ckstb</code> should be set on every clock cycle or we should’ve received
+a clock shutdown request.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">ckspd</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">);</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">o_ckstb</span> <span class="o">||</span> <span class="p">$</span><span class="nb">past</span><span class="p">(</span><span class="n">i_cfg_shutdown</span><span class="p">));</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span> <span class="o">==</span> <span class="mi">0</span>
+				<span class="o">||</span><span class="n">counter</span> <span class="o">==</span> <span class="o">{</span><span class="mb">2'b11</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">);</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>Likewise, we should only ever be in a clock speed of 1 (100MHz) if either
+<code class="language-plaintext highlighter-rouge">OPT_SERDES</code> or <code class="language-plaintext highlighter-rouge">OPT_DDR</code> are set.  Further, if <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> is not set, we
+shouldn’t ever be implementing a 90 degree clock offset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">ckspd</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">OPT_SERDES</span> <span class="o">||</span> <span class="n">OPT_DDR</span><span class="p">);</span>
+			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_SERDES</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">clk90</span><span class="p">);</span>
+			<span class="k">end</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span> <span class="o">==</span> <span class="o">{</span><span class="mb">2'b11</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">);</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>A clock speed of two (50MHz) is available to all configurations.  In this case,
+the bottom bits–the non-phase description bits–must always be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">ckspd</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span> <span class="o">==</span> <span class="mi">0</span>
+				<span class="o">||</span> <span class="n">counter</span> <span class="o">==</span> <span class="o">{</span><span class="mb">2'b01</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span>
+				<span class="o">||</span> <span class="n">counter</span> <span class="o">==</span> <span class="o">{</span><span class="mb">2'b10</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span>
+				<span class="o">||</span> <span class="n">counter</span> <span class="o">==</span> <span class="o">{</span><span class="mb">2'b11</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span><span class="p">);</span></code></pre></figure>
+
+<p>Finally, in all other clock speeds, all we insist is that the lower bits of
+the counter be less than the clock speed minus three.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">ckspd</span> <span class="o">&gt;=</span> <span class="mi">3</span><span class="p">)</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">3</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span> <span class="o">&lt;=</span> <span class="p">(</span><span class="n">ckspd</span><span class="o">-</span><span class="mi">3</span><span class="p">));</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>There are only two ways both <code class="language-plaintext highlighter-rouge">o_ckstb</code> and <code class="language-plaintext highlighter-rouge">o_hlfck</code> can be true at once.
+The first is if the speed indicates either 200MHz or 100MHz.  The second is
+if the clock is stopped, and so the wide clock output is zero and a new
+clock is expected on the next clock cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span> <span class="o">&amp;&amp;</span> <span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">o_hlfck</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="n">ckspd</span> <span class="o">&lt;=</span> <span class="mi">1</span> <span class="o">||</span> <span class="p">(</span><span class="n">o_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">nxt_clk</span><span class="p">));</span></code></pre></figure>
+
+<p>The difficult part of these assertions is that these aren’t enough to
+limit the output of the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock
+generator</a>.
+Just to make certain the outputs are properly limited, I enumerate each
+together with the conditions they may be produced.</p>
+
+<p>We’ll start with a zero output.  This can come from either a stopped clock,
+or one of two slow clock situations.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="o">*</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">case</span><span class="p">(</span><span class="n">o_ckwide</span><span class="p">)</span>
+	<span class="mh">8'h00</span><span class="o">:</span> <span class="k">if</span> <span class="p">(</span><span class="n">nxt_clk</span><span class="p">)</span>
+		<span class="k">begin</span> <span class="c1">// A stopped clock</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span> <span class="o">==</span> <span class="o">{</span><span class="mb">2'b11</span><span class="p">,</span><span class="o">{</span><span class="p">(</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">)</span><span class="o">{</span><span class="mb">1'b0</span><span class="o">}}</span> <span class="o">}</span>
+					<span class="o">||</span> <span class="n">ckspd</span> <span class="o">==</span> <span class="mi">0</span><span class="p">);</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">clk90</span><span class="p">)</span>
+		<span class="k">begin</span> <span class="c1">// In slow situations with no offset</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mb">1'b0</span><span class="p">);</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">if</span><span class="p">(</span><span class="n">clk90</span><span class="p">)</span>
+		<span class="k">begin</span> <span class="c1">// In slow (DDR) situations with a 90 degree clock offset</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="mb">2'b00</span>
+				<span class="o">||</span><span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="mb">2'b11</span><span class="p">);</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>An output of <code class="language-plaintext highlighter-rouge">8'h0f</code> means we’re either in speed one with no clock offset
+and both clock edges active, or we’re in the first half of speed two.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mh">8'h0f</span><span class="o">:</span> <span class="k">assert</span><span class="p">((</span><span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">ckspd</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">o_hlfck</span><span class="p">)</span>
+			<span class="o">||</span><span class="p">(</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">ckspd</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span> <span class="n">o_ckstb</span><span class="p">));</span></code></pre></figure>
+
+<p>An output of <code class="language-plaintext highlighter-rouge">8'hf0</code> can only mean we’re in the second half of speed two.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mh">8'hf0</span><span class="o">:</span> <span class="k">assert</span><span class="p">(</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">ckspd</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">o_hlfck</span><span class="p">);</span></code></pre></figure>
+
+<p>An output of <code class="language-plaintext highlighter-rouge">8'hff</code> is common at slow speeds, but also completely determined
+by thee two top phase bits of the counter.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mh">8'hff</span><span class="o">:</span> <span class="k">if</span><span class="p">(</span><span class="o">!</span><span class="n">clk90</span><span class="p">)</span> <span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="mb">1'b1</span><span class="p">);</span>
+		<span class="k">else</span>
+			<span class="k">assert</span><span class="p">(</span><span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="mb">2'b01</span>
+				<span class="o">||</span> <span class="n">counter</span><span class="p">[</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">1</span><span class="o">:</span><span class="n">NCTR</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="mb">2'b10</span><span class="p">);</span></code></pre></figure>
+
+<p>The last several outputs are very specific to their settings.  <code class="language-plaintext highlighter-rouge">8'h3c</code> is
+only possible in a speed of 1 with a 90 degree clock offset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mh">8'h3c</span><span class="o">:</span> <span class="k">assert</span><span class="p">(</span> <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">ckspd</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">o_hlfck</span><span class="p">);</span></code></pre></figure>
+
+<p>That leaves the two possible double-clock outputs.  First, the double clock
+with no 90 degree offset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mh">8'h33</span><span class="o">:</span> <span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">ckspd</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">o_hlfck</span><span class="p">);</span></code></pre></figure>
+
+<p>The last possibility is the double clock with the 90 degree offset.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mh">8'h66</span><span class="o">:</span> <span class="k">assert</span><span class="p">(</span> <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">ckspd</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span> <span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">o_hlfck</span><span class="p">);</span></code></pre></figure>
+
+<p>Everything else is specifically disallowed.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">default</span><span class="o">:</span> <span class="k">assert</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<h2 id="interface-file">Interface File</h2>
+
+<p>While I might like to leave things there, a full proof of this
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+requires we go over the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">formal interface
+file</a>.</p>
+
+<p>Remember, the purpose of the formal interface file is to separate two proofs.
+In this case, we want to both formally verify the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>,
+as well as the 
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">transmitter data generator</a>
+that will use the results of the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>.
+Further, unlike the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>,
+the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">transmitter data generator</a>
+doesn’t really care if the signals to and from the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a> are realistic.  It only cares that
+they follow whatever rules it requires–things like either
+1) both <code class="language-plaintext highlighter-rouge">new_edge &amp;&amp; half_edge</code> at the same time, or 2) an alternating
+<code class="language-plaintext highlighter-rouge">new_edge</code> with the <code class="language-plaintext highlighter-rouge">half_edge</code>, and so forth.</p>
+
+<p>You can find this <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">formal interface
+file</a>
+among the other files associated with the formal proofs for this design.
+Although it is written in Verilog, it’s not really something that could or
+would be synthesized.  For this reason I keep it in the <code class="language-plaintext highlighter-rouge">bench/formal</code>
+subdirectory of the project, rather than the <code class="language-plaintext highlighter-rouge">rtl/</code> subdirectory.</p>
+
+<p>Starting at the top, our 
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">property set</a>
+must operate in at least three configurations: 1) in an environment where the
+<code class="language-plaintext highlighter-rouge">wide_clock</code> commands an 8:1 OSERDES, 2) an environment where it commands an
+<a href="/blog/2020/08/22/oddr.html">ODDR</a> instead, or 3) a simpler
+environment where neither option is available to us.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="k">module</span>	<span class="n">fclk</span> <span class="p">#(</span>
+		<span class="k">parameter</span>	<span class="p">[</span><span class="mi">0</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">OPT_SERDES</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">,</span>
+					<span class="n">OPT_DDR</span>    <span class="o">=</span> <span class="mb">1'b0</span>
+	<span class="p">)</span> <span class="p">(</span></code></pre></figure>
+
+<p>Yes, we’ll need to run at least
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/sdckgen.sby#L2-L4">3 formal proofs</a>,
+one for each option, to make sure we’ve truly captured each option.  This,
+however, is just the price of doing business with configurable logic.</p>
+
+<p>Our <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">formal properties</a>
+will need the same inputs as the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>.
+The outputs of the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+also need to be listed as inputs to this <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">property set</a>.
+While the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">formal property set</a>
+will primarily consist of assertions and assumptions, it will also produce
+two outputs–as discussed above.  These are necessary for making sure the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">formal property set</a>’s
+state is consistent with the internal state of the design.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="kt">input</span>	<span class="kt">wire</span>		<span class="n">i_clk</span><span class="p">,</span> <span class="n">i_reset</span><span class="p">,</span>
+		<span class="c1">//</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>		<span class="n">i_en</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_ckspd</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>		<span class="n">i_clk90</span><span class="p">,</span>
+		<span class="c1">//</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>		<span class="n">i_ckstb</span><span class="p">,</span> <span class="n">i_hlfck</span><span class="p">,</span>
+		<span class="kt">input</span>	<span class="kt">wire</span>	<span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">i_ckwide</span><span class="p">,</span>
+		<span class="c1">//</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>		<span class="n">f_pending_reset</span><span class="p">,</span>
+		<span class="kt">output</span>	<span class="kt">reg</span>		<span class="n">f_pending_half</span>
+	<span class="p">);</span></code></pre></figure>
+
+<p>Some of you may recall the <a href="/formal/2018/12/18/skynet.html">challenges I’ve struggled through when trying to
+verify two co-dependent components</a>.
+My original approach was to <a href="/formal/2018/04/23/invariant.html">swap assumptions and
+assertions</a> between the
+two components.  This <a href="/formal/2018/12/18/skynet.html">didn’t
+work</a>,
+primarily because it was possible for the resulting <em>assumptions</em> to render
+one or more assertions to be irrelevant or vacuous.  In that example, the logic
+of a design acted as an assumption as well.</p>
+
+<p>In our case, we’re going to disconnect the two designs that will use this
+property set entirely.  The
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator (the master)</a>
+will make assertions that the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">transmitter data generator</a> will later assume, and vice versa.
+To make this work, we’ll have the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/sdckgen.sby">SymbiYosys
+script</a>
+for the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+define a <code class="language-plaintext highlighter-rouge">CKGEN</code> macro.  This will then tell us whether this property set is
+being used as part of the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>’s proof, or the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">transmitter data generator</a>’s.
+If a part of the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>’s
+proof, we’ll make assertions about our outputs.  If a part of the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">transmitter data generator</a>’s
+proof, those “outputs” will now be inputs of the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdtxframe.v">transmitter data
+generator</a>,
+and so we should be making assumptions about them instead.  To do this, we’ll
+create a macro, <code class="language-plaintext highlighter-rouge">SLAVE_ASSUME</code>, that can be used to describe properties of
+these outputs with either <code class="language-plaintext highlighter-rouge">assert</code> or <code class="language-plaintext highlighter-rouge">assume</code> statements.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog"><span class="cp">`ifdef</span>	<span class="n">CKGEN</span>
+<span class="cp">`define</span>	SLAVE_ASSUME	assert	<span class="err">//</span> Clock generator proof<span class="cp">
+`else</span>
+<span class="cp">`define</span>	SLAVE_ASSUME	assume	<span class="err">//</span> Transmit data generator proof<span class="cp">
+`endif</span></code></pre></figure>
+
+<p>The next step is boiler plate: create an <code class="language-plaintext highlighter-rouge">f_past_valid</code> register to let us
+know if we can use the <code class="language-plaintext highlighter-rouge">$past()</code> function or not.  (Remember, <code class="language-plaintext highlighter-rouge">$past()</code>s value
+is invalid on the first clock of any proof.)</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>		<span class="n">f_past_tick</span><span class="p">,</span> <span class="n">f_past_valid</span><span class="p">;</span>
+	<span class="kt">reg</span>		<span class="n">last_reset</span><span class="p">,</span> <span class="n">last_en</span><span class="p">,</span> <span class="n">last_pending</span><span class="p">;</span>
+	<span class="kt">reg</span>	<span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">last_ckspd</span><span class="p">;</span>
+
+	<span class="k">initial</span>	<span class="n">f_past_valid</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">f_past_valid</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>Likewise, <code class="language-plaintext highlighter-rouge">f_pending_reset</code>, will be true between the <code class="language-plaintext highlighter-rouge">i_reset</code> signal and the
+first clock edge.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_pending_reset</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">f_pending_reset</span> <span class="o">&lt;=</span> <span class="mb">1'b1</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_ckstb</span> <span class="o">||</span> <span class="n">i_hlfck</span><span class="p">)</span>
+		<span class="n">f_pending_reset</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span></code></pre></figure>
+
+<p>Our second output, <code class="language-plaintext highlighter-rouge">f_pending_half</code>, is true from the top of the clock to
+the second half of the clock, but <em>only</em> if the top of the clock didn’t
+include the <code class="language-plaintext highlighter-rouge">half_edge</code> signal (called <code class="language-plaintext highlighter-rouge">i_hlfck</code> herein).</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_pending_half</span> <span class="o">=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">f_pending_half</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_ckstb</span><span class="p">)</span>
+		<span class="n">f_pending_half</span> <span class="o">&lt;=</span> <span class="o">!</span><span class="n">i_hlfck</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_hlfck</span><span class="p">)</span>
+		<span class="n">f_pending_half</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span></code></pre></figure>
+
+<p>A third signal, <code class="language-plaintext highlighter-rouge">f_past_tick</code>, will allow us to reason about whether or not
+we just passed an edge.  We’ll get to this one in a bit.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">initial</span>	<span class="n">f_past_tick</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="n">f_past_tick</span> <span class="o">&lt;=</span> <span class="n">i_ckstb</span> <span class="o">||</span> <span class="n">i_hlfck</span><span class="p">;</span></code></pre></figure>
+
+<p>Now that we have these two signals, we can state with a certainty that
+we can’t start a new clock cycle while waiting for the second half of a clock
+cycle.  Likewise, if we are in second half of a clock cycle, we shouldn’t see
+the half edge again unless we’re starting a new (and high speed) clock.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">f_pending_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">f_pending_half</span><span class="p">)</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="o">!</span><span class="n">i_ckstb</span><span class="p">);</span>
+		<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_hlfck</span><span class="p">)</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckstb</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Now, with this as background, we can now make assertions about our various
+clock speeds, and the outputs that should be produced in each.  Note that in
+this <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">formal property set</a>,
+the <code class="language-plaintext highlighter-rouge">i_ckspd</code> input reflects our <em>current</em> clock speed, and not just the
+<em>requested</em> clock speed that we worked with in the <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock
+generator</a>.
+Hence, it is an <em>output</em> of the generator <a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock
+generator</a>,
+and no longer the requested clock speed.</p>
+
+<p>Let’s start with the highest speed (200MHz) clock output.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">case</span><span class="p">(</span><span class="n">i_ckspd</span><span class="p">)</span>
+	<span class="mi">0</span><span class="o">:</span> <span class="k">begin</span>
+		<span class="c1">// We can only run in this speed if OPT_SERDES is set.</span>
+		<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">);</span>
+
+		<span class="c1">// This speed has no pending half cycles.  All clock cycles</span>
+		<span class="c1">// are complete in one cycle.</span>
+		<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">f_pending_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">f_pending_half</span><span class="p">);</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// Clock is either *off*/inactive, or we're still coming</span>
+			<span class="c1">// out of a reset.</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">f_pending_reset</span> <span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">i_ckstb</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_hlfck</span><span class="p">));</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="c1">// Clock is active, both edges are active in a clock</span>
+			<span class="c1">// tick</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">i_hlfck</span><span class="p">);</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>The <code class="language-plaintext highlighter-rouge">wide_clock</code> output, herein called <code class="language-plaintext highlighter-rouge">i_ckwide</code>, can only have one of two
+values when active at this speed.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">i_clk90</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="c1">// In the case of a 90 degree offset clock, if the</span>
+			<span class="c1">// clock is active, it must be 0110_0110</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h66</span><span class="p">);</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="c1">// Otherwise, if the clock is active, it must be</span>
+			<span class="c1">// 0011_0011</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h33</span><span class="p">);</span>
+		<span class="k">end</span> <span class="k">end</span></code></pre></figure>
+
+<p>Those are just the rules for 200MHz (assuming a 100MHz system clock).</p>
+
+<p>Now let’s drop down a speed, and look at the 100MHz clock.  In this mode,
+the new edge and half edge signals must also be present on the same clock.
+Likewise, there’s no allowable means to have a pending second half–the
+first and second half must always show up on the same clock cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mi">1</span><span class="o">:</span> <span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">f_pending_reset</span> <span class="o">||</span> <span class="p">(</span><span class="o">!</span><span class="n">i_ckstb</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_hlfck</span><span class="p">));</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">i_hlfck</span><span class="p">);</span>
+		<span class="k">end</span>
+
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_pending_reset</span><span class="p">)</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="o">!</span><span class="n">f_pending_half</span><span class="p">);</span></code></pre></figure>
+
+<p>At 100MHz, the outgoing wide clock can only be <code class="language-plaintext highlighter-rouge">0011_1100</code> (90 degree offset),
+or <code class="language-plaintext highlighter-rouge">0000_ffff</code>.  The former requires <code class="language-plaintext highlighter-rouge">OPT_SERDES</code>, the latter may also be
+possible in <code class="language-plaintext highlighter-rouge">OPT_DDR</code> mode–since the first four bits equal the last four
+bits.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">if</span> <span class="p">(</span><span class="n">i_clk90</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h3c</span><span class="p">);</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">);</span>
+		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h0f</span><span class="p">);</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">OPT_SERDES</span> <span class="o">||</span> <span class="n">OPT_DDR</span><span class="p">);</span>
+		<span class="k">end</span> <span class="k">end</span></code></pre></figure>
+
+<p>Our last special clock speed is 50MHz.  For this case, we break our properties
+into two parts: the 90 degree offset, and the normal (SDR) case.</p>
+
+<p>For the 90 degree offset clock, the clock must either be <code class="language-plaintext highlighter-rouge">0000_1111</code> if
+we’re not waiting on the next half clock cycle, or <code class="language-plaintext highlighter-rouge">1111_0000</code> if we are.
+Likewise, either the new or half edge signal must be true on every cycle.
+The only exception is for if/when the clock is stopped.  Further, this
+output will require either <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> or <code class="language-plaintext highlighter-rouge">OPT_DDR</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="mi">2</span><span class="o">:</span> <span class="k">begin</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">i_clk90</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h0f</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'hf0</span><span class="p">);</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">i_en</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">);</span>
+			<span class="k">end</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">OPT_SERDES</span> <span class="o">||</span> <span class="n">OPT_DDR</span><span class="p">);</span>
+			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_pending_reset</span> <span class="o">&amp;&amp;</span> <span class="n">f_pending_half</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'hf0</span><span class="p">);</span>
+			<span class="k">end</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h00</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="o">!</span><span class="n">i_ckstb</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_hlfck</span><span class="p">);</span>
+			<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h0f</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckstb</span><span class="p">);</span>
+			<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+				<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_hlfck</span><span class="p">);</span>
+			<span class="k">end</span></code></pre></figure>
+
+<p>The normal offset is simpler.  This doesn’t require <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> or <code class="language-plaintext highlighter-rouge">OPT_DDR</code>.
+The wide clock can either be <code class="language-plaintext highlighter-rouge">0000_0000</code> or <code class="language-plaintext highlighter-rouge">1111_1111</code>.  Further, if ever
+the clock output is <code class="language-plaintext highlighter-rouge">1111_1111</code>, then we must be on the second half edge.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">		<span class="k">end</span> <span class="k">else</span> <span class="k">begin</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'hff</span><span class="p">);</span>
+			<span class="k">if</span> <span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'hff</span><span class="p">)</span>
+				<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_hlfck</span><span class="p">);</span>
+		<span class="k">end</span> <span class="k">end</span></code></pre></figure>
+
+<p>This brings us to the default clock–the very slow clock generated by
+integer division (i.e. the counter).  As before, the wide clock can either
+be <code class="language-plaintext highlighter-rouge">0000_0000</code> or <code class="language-plaintext highlighter-rouge">1111_1111</code> and hence needs no special hardware such as
+either <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> or <code class="language-plaintext highlighter-rouge">OPT_DDR</code>.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">default</span><span class="o">:</span> <span class="k">begin</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">||</span> <span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'hff</span><span class="p">);</span>
+			<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">f_pending_reset</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">i_clk90</span> <span class="o">&amp;&amp;</span> <span class="n">last_en</span> <span class="o">&amp;&amp;</span> <span class="n">i_en</span><span class="p">)</span>
+			<span class="k">begin</span>
+				<span class="k">if</span> <span class="p">(</span><span class="n">i_ckstb</span><span class="p">)</span>
+				<span class="k">begin</span>
+					<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h00</span><span class="p">);</span>
+				<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">i_hlfck</span><span class="p">)</span>
+				<span class="k">begin</span>
+					<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'hff</span><span class="p">);</span>
+				<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">f_pending_half</span><span class="p">)</span>
+				<span class="k">begin</span>
+					<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'h00</span><span class="p">);</span>
+				<span class="k">end</span> <span class="k">else</span> <span class="c1">// if (!f_pending_half)</span>
+					<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="n">i_ckwide</span> <span class="o">==</span> <span class="mh">8'hff</span><span class="p">);</span>
+			<span class="k">end</span>
+		<span class="k">end</span>
+	<span class="k">endcase</span></code></pre></figure>
+
+<p>Just as a quick sanity check, if we have no special hardware, then both
+new and half edges can never be true on the same cycle.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">OPT_SERDES</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">OPT_DDR</span><span class="p">)</span>
+		<span class="k">assert</span><span class="p">(</span><span class="o">!</span><span class="n">i_ckstb</span> <span class="o">||</span> <span class="o">!</span><span class="n">i_hlfck</span><span class="p">);</span></code></pre></figure>
+
+<p>Let’s come back and double check the high speed cases.  These are the only
+cases where both new and half edge may be allowed at the same time.  In all
+other cases, one or both signals should be zero.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">f_past_valid</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">last_reset</span> <span class="o">&amp;&amp;</span> <span class="p">(</span><span class="n">last_en</span> <span class="o">||</span> <span class="n">i_ckstb</span> <span class="o">||</span> <span class="n">i_hlfck</span><span class="p">))</span>
+	<span class="k">begin</span>
+		<span class="k">case</span><span class="p">(</span><span class="n">i_ckspd</span><span class="p">)</span>
+		<span class="mi">0</span><span class="o">:</span> <span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="o">!</span><span class="n">i_en</span> <span class="o">||</span> <span class="p">(</span><span class="n">i_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">i_hlfck</span><span class="p">));</span>
+		<span class="mi">1</span><span class="o">:</span> <span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="o">!</span><span class="n">i_en</span> <span class="o">||</span> <span class="p">(</span><span class="n">i_ckstb</span> <span class="o">&amp;&amp;</span> <span class="n">i_hlfck</span><span class="p">));</span>
+		<span class="nl">default:</span>
+			<span class="cp">`SLAVE_ASSUME</span><span class="p">(</span><span class="o">!</span><span class="n">i_ckstb</span> <span class="o">||</span> <span class="o">!</span><span class="n">i_hlfck</span><span class="p">);</span>
+		<span class="k">endcase</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>Feel free to check the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/bench/formal/fclk.v">property set</a>
+out yourself.  While there are a couple more properties to it, these
+are the most significant.</p>
+
+<h2 id="coverage-checking">Coverage Checking</h2>
+
+<p>Any good verification set should include not just a simulation, not just
+formal induction based proofs, but also a set of coverage checks.
+These are critical to making sure you haven’t (accidentally) assumed away
+some key component of the devices operation.  Were that to happen, then
+the formal proof would be irrelevant–even if it did pass.</p>
+
+<p>Hence, we add some cover properties here to the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>.</p>
+
+<p>The first step is just to check if the clock is active, and if so, what mode
+it is active in.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="kt">reg</span>		<span class="n">cvr_active</span><span class="p">,</span> <span class="n">cvr_clk90</span><span class="p">;</span>
+	<span class="kt">reg</span>	<span class="p">[</span><span class="mi">7</span><span class="o">:</span><span class="mi">0</span><span class="p">]</span>	<span class="n">cvr_spd</span><span class="p">,</span> <span class="n">cvr_count</span><span class="p">;</span>
+
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">cvr_active</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="n">cvr_spd</span> <span class="o">&lt;=</span> <span class="n">i_cfg_ckspd</span><span class="p">;</span>
+		<span class="n">cvr_clk90</span> <span class="o">&lt;=</span> <span class="n">i_cfg_clk90</span><span class="p">;</span>
+	<span class="k">end</span>
+
+	<span class="k">initial</span>	<span class="n">cvr_active</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="n">cvr_active</span> <span class="o">&lt;=</span> <span class="mb">1'b0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">cvr_spd</span> <span class="o">!=</span> <span class="n">o_ckspd</span> <span class="o">||</span> <span class="n">cvr_spd</span> <span class="o">!=</span> <span class="n">i_cfg_ckspd</span> <span class="o">||</span> <span class="o">!</span><span class="n">f_en</span>
+			<span class="o">||</span> <span class="n">cvr_clk90</span> <span class="o">!=</span> <span class="n">i_cfg_clk90</span> <span class="o">||</span> <span class="n">cvr_clk90</span> <span class="o">!=</span> <span class="n">clk90</span><span class="p">)</span>
+		<span class="c1">// We want to prove what our clock output can do over</span>
+		<span class="c1">// time, not so much what happens when/if it changes.</span>
+		<span class="n">cvr_active</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">o_ckstb</span><span class="p">)</span>
+		<span class="n">cvr_active</span> <span class="o">&lt;=</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>If the clock is active, we can then start counting every new edge that takes
+place while active.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">i_reset</span> <span class="o">||</span> <span class="o">!</span><span class="n">cvr_active</span><span class="p">)</span>
+		<span class="n">cvr_count</span> <span class="o">&lt;=</span> <span class="mb">8'b0</span><span class="p">;</span>
+	<span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">o_ckstb</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="p">(</span><span class="o">&amp;</span><span class="n">cvr_count</span><span class="p">))</span>
+		<span class="c1">// Don't allow the counter to overflow, but otherwise</span>
+		<span class="c1">// count the beginnings of each clock cycle.</span>
+		<span class="n">cvr_count</span> <span class="o">&lt;=</span> <span class="n">cvr_count</span> <span class="o">+</span> <span class="mi">1</span><span class="p">;</span></code></pre></figure>
+
+<p>With that as background, we can start looking at traces!  Let’s get
+cover traces for a variety of potential frequencies.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+	<span class="k">begin</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>	<span class="c1">// 50MHz</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">3</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>	<span class="c1">// 25MHz</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">3</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">4</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>	<span class="c1">// 12MHz</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">4</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">5</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>	<span class="c1">//  8MHz</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">5</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">6</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span> <span class="c1">//  6MHz</span>
+		<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">6</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">);</span>
+	<span class="k">end</span></code></pre></figure>
+
+<p>We’ll have to handle covering the high speed options a bit differently.  In
+this case, we <em>only</em> want to check speeds requiring <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> if
+<code class="language-plaintext highlighter-rouge">OPT_SERDES</code> is actually checked.  We can’t use an <code class="language-plaintext highlighter-rouge">if</code> for this, lest the
+formal tool decide we failed the cover check.  Hence, we’ll use a generate
+statement, so that the cover statements requiring <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> are <em>only</em>
+generated if <code class="language-plaintext highlighter-rouge">OPT_SERDES</code> is true.  Now we can check for 200MHz, 100MHz, and
+50MHz.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">generate</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_SERDES</span><span class="p">)</span>
+	<span class="k">begin</span> <span class="o">:</span> <span class="n">CVR_SERDES</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">0</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+		<span class="k">end</span></code></pre></figure>
+
+<p>We can apply the same logic to <code class="language-plaintext highlighter-rouge">OPT_DDR</code>, but we’ll have fewer clock options
+to check.  In this case, it’s only the 100MHz and 50MHz options.</p>
+
+<figure class="highlight"><pre><code class="language-verilog" data-lang="verilog">	<span class="k">end</span> <span class="k">else</span> <span class="k">if</span> <span class="p">(</span><span class="n">OPT_DDR</span><span class="p">)</span>
+	<span class="k">begin</span> <span class="o">:</span> <span class="n">CVR_DDR</span>
+
+		<span class="k">always</span> <span class="o">@</span><span class="p">(</span><span class="kt">posedge</span> <span class="n">i_clk</span><span class="p">)</span>
+		<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">i_reset</span><span class="p">)</span>
+		<span class="k">begin</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">1</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span>  <span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+			<span class="k">cover</span><span class="p">(</span><span class="n">cvr_spd</span> <span class="o">==</span> <span class="mi">2</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">clk90</span> <span class="o">&amp;&amp;</span> <span class="n">cvr_count</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">);</span>
+		<span class="k">end</span>
+
+	<span class="k">end</span> <span class="k">endgenerate</span></code></pre></figure>
+
+<p>By the time you get to this point, you should have a strong confidence that
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">this device clock generator</a>
+actually does what it needs to.  I certainly do, and it hasn’t failed me (that
+I recall) since going through this exercise.  Yes, other parts of this design
+have had problems, particularly the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdfrontend.v">front end</a>, but the
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a>
+has been quite reliable.</p>
+
+<h2 id="conclusions">Conclusions</h2>
+
+<p>This is now my go-to approach whenever I need to generate a device clock:</p>
+
+<ul>
+  <li>
+    <p>Generate the “clock” in logic.</p>
+  </li>
+  <li>
+    <p>Generate the “clock” wide, so it can be output via either OSERDES or
+<a href="/blog/2020/08/22/oddr.html">ODDR</a>.</p>
+  </li>
+  <li>
+    <p>Maintain all logic transitions on the original source clock.</p>
+  </li>
+  <li>
+    <p>Use logical signals like you would enables to handle data transitions.</p>
+  </li>
+</ul>
+
+<p>What did this gain us?  We received several advantages from this approach:</p>
+
+<ul>
+  <li>
+    <p>A glitchless outgoing clock</p>
+  </li>
+  <li>
+    <p>An outgoing clock that can …</p>
+
+    <ul>
+      <li>
+        <p>change frequency upon command,</p>
+      </li>
+      <li>
+        <p>turn on and off as necessary,</p>
+      </li>
+      <li>
+        <p>stop, and yet restart on a dime, and</p>
+      </li>
+      <li>
+        <p>switch between being data aligned and offset by 90 degrees.</p>
+      </li>
+    </ul>
+  </li>
+</ul>
+
+<p>This is everything we would want of an outgoing clock, with none of the
+challenges associated with breaking <a href="/blog/2017/08/21/rules-for-newbies.html"><em>the
+rules</em></a>.  Indeed,
+this approach works nicely in both FPGA and ASIC contexts, as I’ve now used it
+quite successfully in both for multiple projects.  No, I don’t use the same
+<a href="https://github.com/ZipCPU/sdspi/blob/a1d912367ce71389ef25ced4b83d34d23b05b391/rtl/sdckgen.v">clock generator</a> for all my projects, but that’s for both
+requirements (the 200MHz clock is unique) and <a href="/blog/2020/01/13/reuse.html">legal
+reasons</a>.</p>
+
+<p>This leaves us with the topic of the “return clock”, which we’ll need to come
+back to and discuss on another day.</p>
+
+  </div>
+
+
+<div class "verse">
+<HR align="center;" width="25%">
+<P><em>The wind goeth toward the south, and turneth about unto the north; it whirleth about continually, and the wind returneth again according to his circuits. (Eccl 1:6)</em>
+
+
+</article>
+
+      </div>
+    </div>
+
+    <footer class="site-footer">
+
+  <div class="wrapper">
+
+    <h2 class="footer-heading">The ZipCPU by Gisselquist Technology</h2>
+    <div class="footer-col-wrapper">
+      <div class="footer-col footer-col-1">
+        <ul class="contact-list">
+          <!-- <li></li> -->
+          <li><a href="mailto:zipcpu@gmail.com">zipcpu@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-2">
+        <ul class="soc-medlist">
+          
+          <li>
+            <a href="https://github.com/ZipCPU"><span class="icon icon--github"><svg viewBox="0 0 16 16"><path fill="#828282" d="M7.999,0.431c-4.285,0-7.76,3.474-7.76,7.761 c0,3.428,2.223,6.337,5.307,7.363c0.388,0.071,0.53-0.168,0.53-0.374c0-0.184-0.007-0.672-0.01-1.32 c-2.159,0.469-2.614-1.04-2.614-1.04c-0.353-0.896-0.862-1.135-0.862-1.135c-0.705-0.481,0.053-0.472,0.053-0.472 c0.779,0.055,1.189,0.8,1.189,0.8c0.692,1.186,1.816,0.843,2.258,0.645c0.071-0.502,0.271-0.843,0.493-1.037 C4.86,11.425,3.049,10.76,3.049,7.786c0-0.847,0.302-1.54,0.799-2.082C3.768,5.507,3.501,4.718,3.924,3.65 c0,0,0.652-0.209,2.134,0.796C6.677,4.273,7.34,4.187,8,4.184c0.659,0.003,1.323,0.089,1.943,0.261 c1.482-1.004,2.132-0.796,2.132-0.796c0.423,1.068,0.157,1.857,0.077,2.054c0.497,0.542,0.798,1.235,0.798,2.082 c0,2.981-1.814,3.637-3.543,3.829c0.279,0.24,0.527,0.713,0.527,1.437c0,1.037-0.01,1.874-0.01,2.129 c0,0.208,0.14,0.449,0.534,0.373c3.081-1.028,5.302-3.935,5.302-7.362C15.76,3.906,12.285,0.431,7.999,0.431z"/></svg>
+</span><span class="username">ZipCPU</span></a>
+
+          </li>
+          
+
+          
+          <li>
+            <a href="https://twitter.com/zipcpu"><span class="icon icon--twitter"><svg viewBox="0 0 16 16"><path fill="#828282" d="M15.969,3.058c-0.586,0.26-1.217,0.436-1.878,0.515c0.675-0.405,1.194-1.045,1.438-1.809c-0.632,0.375-1.332,0.647-2.076,0.793c-0.596-0.636-1.446-1.033-2.387-1.033c-1.806,0-3.27,1.464-3.27,3.27 c0,0.256,0.029,0.506,0.085,0.745C5.163,5.404,2.753,4.102,1.14,2.124C0.859,2.607,0.698,3.168,0.698,3.767 c0,1.134,0.577,2.135,1.455,2.722C1.616,6.472,1.112,6.325,0.671,6.08c0,0.014,0,0.027,0,0.041c0,1.584,1.127,2.906,2.623,3.206 C3.02,9.402,2.731,9.442,2.433,9.442c-0.211,0-0.416-0.021-0.615-0.059c0.416,1.299,1.624,2.245,3.055,2.271 c-1.119,0.877-2.529,1.4-4.061,1.4c-0.264,0-0.524-0.015-0.78-0.046c1.447,0.928,3.166,1.469,5.013,1.469 c6.015,0,9.304-4.983,9.304-9.304c0-0.142-0.003-0.283-0.009-0.423C14.976,4.29,15.531,3.714,15.969,3.058z"/></svg>
+</span><span class="username">@zipcpu</span></a>
+
+          </li>
+          
+          
+          <li><A href="https://www.patreon.com/ZipCPU"><img src="/img/become_a_patron_button.png"></a></li>
+          
+
+        </ul>
+      </div>
+
+      <div class="footer-col footer-col-3">
+        <p>The ZipCPU blog, featuring how to discussions of FPGA and soft-core CPU design.  This site will be focused on Verilog solutions, using exclusively OpenSource IP products for FPGA design.  Particular focus areas include topics often left out of more mainstream FPGA design courses such as how to debug an FPGA design.
+</p>
+      </div>
+    </div>
+
+  </div>
+
+</footer>
+
+
+  </body>
+
+</html>
